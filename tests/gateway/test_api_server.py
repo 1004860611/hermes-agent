@@ -2768,6 +2768,105 @@ class TestSendMethod:
         assert "HTTP request/response" in result.error
 
 
+class TestEnterpriseDirectHotelStream:
+    @pytest.mark.asyncio
+    async def test_direct_hotel_turn_returns_without_agent(self, auth_adapter, monkeypatch, tmp_path):
+        import gateway.enterprise_workspace as enterprise_workspace
+
+        monkeypatch.delenv("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", raising=False)
+        monkeypatch.setattr(enterprise_workspace, "get_hermes_home", lambda: tmp_path)
+        app = _create_app(auth_adapter)
+        app.router.add_post("/v1/enterprise/turn", auth_adapter._handle_enterprise_turn)
+
+        payload = {
+            "version": "enterprise-hermes-consumer-v1",
+            "requestId": "req-direct-0",
+            "user": {"id": "staff-1", "type": "user"},
+            "session": {"id": "chat-1"},
+            "message": {
+                "role": "user",
+                "content": "查上海明天入住住2晚的酒店",
+            },
+            "runtimePolicy": {"allowedCapabilityRefs": ["hotel_search"]},
+            "credentialBroker": {
+                "credentialRef": "cred-1",
+                "ttlSeconds": 300,
+                "scope": ["hotel_search"],
+            },
+        }
+
+        async with TestClient(TestServer(app)) as cli:
+            with (
+                patch.object(auth_adapter, "_run_agent", new_callable=AsyncMock) as mock_run,
+                patch(
+                    "tools.hotel_search_tool._handle_hotel_search",
+                    new_callable=AsyncMock,
+                    return_value=json.dumps({"ok": True, "hotels": [{"name": "H1"}]}),
+                ),
+            ):
+                resp = await cli.post(
+                    "/v1/enterprise/turn",
+                    json=payload,
+                    headers={"Authorization": "Bearer sk-secret"},
+                )
+                data = await resp.json()
+
+        assert resp.status == 200
+        assert data["direct"] is True
+        assert data["usage"]["input_tokens"] == 0
+        assert data["response"] == "酒店查询已完成，返回 1 条结果。"
+        mock_run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_direct_hotel_stream_emits_tool_start_without_agent(self, auth_adapter, monkeypatch, tmp_path):
+        import gateway.enterprise_workspace as enterprise_workspace
+
+        monkeypatch.delenv("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", raising=False)
+        monkeypatch.setattr(enterprise_workspace, "get_hermes_home", lambda: tmp_path)
+        app = _create_app(auth_adapter)
+        app.router.add_post("/v1/enterprise/turn/stream", auth_adapter._handle_enterprise_turn_stream)
+
+        payload = {
+            "version": "enterprise-hermes-consumer-v1",
+            "requestId": "req-direct-1",
+            "user": {"id": "staff-1", "type": "user"},
+            "session": {"id": "chat-1"},
+            "message": {
+                "role": "user",
+                "content": "查上海明天入住住2晚的酒店",
+            },
+            "runtimePolicy": {"allowedCapabilityRefs": ["hotel_search"]},
+            "credentialBroker": {
+                "credentialRef": "cred-1",
+                "ttlSeconds": 300,
+                "scope": ["hotel_search"],
+            },
+        }
+
+        async with TestClient(TestServer(app)) as cli:
+            with (
+                patch.object(auth_adapter, "_run_agent", new_callable=AsyncMock) as mock_run,
+                patch(
+                    "tools.hotel_search_tool._handle_hotel_search",
+                    new_callable=AsyncMock,
+                    return_value=json.dumps({"ok": True, "hotels": [{"name": "H1"}]}),
+                ),
+            ):
+                resp = await cli.post(
+                    "/v1/enterprise/turn/stream",
+                    json=payload,
+                    headers={"Authorization": "Bearer sk-secret"},
+                )
+                text = await resp.text()
+
+        assert resp.status == 200
+        assert "event: tool_start" in text
+        assert '"tool": "hotel_search"' in text
+        assert '"direct": true' in text
+        assert '"input_tokens": 0' in text
+        mock_run.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/responses/{response_id}
 # ---------------------------------------------------------------------------

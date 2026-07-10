@@ -176,3 +176,341 @@ class TestApiServerAdapterToolset:
             call_kwargs = mock_agent_cls.call_args
             toolsets = call_kwargs.kwargs.get("enabled_toolsets")
             assert sorted(toolsets) == ["terminal", "web"]
+
+    @patch("gateway.platforms.api_server.AIOHTTP_AVAILABLE", True)
+    def test_create_agent_toolsets_override_is_enterprise_hard_cap(self):
+        """Enterprise runtimePolicy toolsets do not inherit the full API-server surface."""
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+
+        adapter = APIServerAdapter(PlatformConfig())
+
+        with patch("gateway.run._resolve_runtime_agent_kwargs") as mock_kwargs, \
+             patch("gateway.run._resolve_gateway_model") as mock_model, \
+             patch("gateway.run._load_gateway_config") as mock_config, \
+             patch("run_agent.AIAgent") as mock_agent_cls:
+
+            mock_kwargs.return_value = {"api_key": "test-key", "base_url": None,
+                                        "provider": None, "api_mode": None,
+                                        "command": None, "args": []}
+            mock_model.return_value = "test/model"
+            mock_config.return_value = {
+                "platform_toolsets": {"api_server": ["web", "terminal"]}
+            }
+            mock_agent_cls.return_value = MagicMock()
+
+            adapter._create_agent(
+                extra_toolsets=["kanban"],
+                toolsets_override=["hotel"],
+                skip_context_files=True,
+                minimal_system_prompt=True,
+                skip_memory=True,
+                request_overrides={"tool_choice": {"type": "function", "function": {"name": "hotel_search"}}},
+            )
+
+            mock_agent_cls.assert_called_once()
+            call_kwargs = mock_agent_cls.call_args.kwargs
+            assert call_kwargs["enabled_toolsets"] == ["hotel"]
+            assert call_kwargs["skip_context_files"] is True
+            assert call_kwargs["minimal_system_prompt"] is True
+            assert call_kwargs["skip_memory"] is True
+            assert call_kwargs["request_overrides"]["tool_choice"]["function"]["name"] == "hotel_search"
+
+    def test_enterprise_hotel_tool_choice_heuristic(self, monkeypatch):
+        from gateway.platforms.api_server import APIServerAdapter
+
+        monkeypatch.delenv("HERMES_ENTERPRISE_FORCE_HOTEL_TOOL_CHOICE", raising=False)
+
+        assert APIServerAdapter._enterprise_should_force_hotel_tool_choice(
+            "帮我查一下上海明天入住的酒店报价",
+            ["hotel_search"],
+            ["hotel"],
+        )
+        assert not APIServerAdapter._enterprise_should_force_hotel_tool_choice(
+            "我之前问过哪些问题",
+            ["hotel_search"],
+            ["hotel"],
+        )
+        assert not APIServerAdapter._enterprise_should_force_hotel_tool_choice(
+            "帮我查一下上海明天入住的酒店报价",
+            ["hotel_search", "web"],
+            ["hotel", "web"],
+        )
+        assert not APIServerAdapter._enterprise_should_force_hotel_tool_choice(
+            "hotel rates for tomorrow",
+            ["hotel_search", "kanban"],
+            ["hotel", "kanban"],
+        )
+
+    def test_enterprise_direct_hotel_text_parser(self):
+        from gateway.platforms.api_server import APIServerAdapter
+
+        args = APIServerAdapter._enterprise_parse_hotel_args_from_text(
+            "帮我查一下上海明天入住住2晚的酒店报价，2人"
+        )
+
+        assert args["destination"] == "上海"
+        assert "hotelName" not in args
+        assert args["stayNights"] == 2
+        assert args["guestCount"] == 2
+        assert args["dateRangeStart"] < args["dateRangeEnd"]
+
+    def test_enterprise_direct_hotel_uses_structured_args(self, monkeypatch):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+
+        monkeypatch.delenv("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", raising=False)
+        adapter = APIServerAdapter(PlatformConfig())
+        inputs = {
+            "enterprise_toolsets": ["hotel"],
+            "allowed_capabilities": ["hotel_search"],
+            "user_message": "随便查一下",
+            "contract": {
+                "toolArgs": {
+                    "hotel_search": {
+                        "destination": "Singapore",
+                        "dateRangeStart": "2099-07-10",
+                        "dateRangeEnd": "2099-07-12",
+                    }
+                }
+            },
+        }
+
+        args = adapter._enterprise_direct_hotel_args(inputs)
+
+        assert args["destination"] == "Singapore"
+        assert args["dateRangeStart"] == "2099-07-10"
+
+    def test_enterprise_direct_hotel_disabled_for_non_hotel_toolsets(self):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+
+        adapter = APIServerAdapter(PlatformConfig())
+        inputs = {
+            "enterprise_toolsets": ["hotel", "web"],
+            "allowed_capabilities": ["hotel_search", "web"],
+            "user_message": "帮我查上海明天入住住2晚的酒店",
+            "contract": {},
+        }
+
+        assert adapter._enterprise_direct_hotel_args(inputs) is None
+
+    def test_enterprise_turn_inputs_maps_mcp_capabilities_to_toolsets(self, monkeypatch, tmp_path):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+        import gateway.enterprise_workspace as enterprise_workspace
+
+        monkeypatch.setattr(enterprise_workspace, "get_hermes_home", lambda: tmp_path)
+        adapter = APIServerAdapter(PlatformConfig())
+
+        inputs = adapter._enterprise_turn_inputs({
+            "version": "enterprise-hermes-consumer-v1",
+            "requestId": "req-mcp",
+            "user": {"id": "staff-1", "type": "staff"},
+            "session": {"id": "chat-1"},
+            "message": {"role": "user", "content": "查询订单和城市"},
+            "runtimePolicy": {
+                "allowedCapabilityRefs": [
+                    "order_search",
+                    "order_biQuery",
+                    "order_points",
+                    "order_confirmation",
+                    "points_reconcile",
+                    "order_benefits",
+                    "cancellation_eligibility",
+                    "payment_diagnosis",
+                    "change_precheck",
+                    "hotelux_hotel_policy",
+                    "charmdeer_support_playbook",
+                    "charmdeer_hotel_policy",
+                    "coupon_status",
+                    "promotion_explain",
+                    "member_entitlement",
+                    "afternoonTea_status",
+                    "points_balance",
+                    "case_precheck",
+                    "case_handoff",
+                    "activityResult_search",
+                    "activityResult_count",
+                    "resolver_city",
+                    "resolver_paymentType",
+                    "hotelux_support_playbook",
+                ]
+            },
+            "credentialBroker": {
+                "credentialRef": "cred-1",
+                "scope": [
+                    "order_search",
+                    "order_biQuery",
+                    "order_points",
+                    "order_confirmation",
+                    "points_reconcile",
+                    "order_benefits",
+                    "cancellation_eligibility",
+                    "payment_diagnosis",
+                    "change_precheck",
+                    "hotelux_hotel_policy",
+                    "charmdeer_support_playbook",
+                    "charmdeer_hotel_policy",
+                    "coupon_status",
+                    "promotion_explain",
+                    "member_entitlement",
+                    "afternoonTea_status",
+                    "points_balance",
+                    "case_precheck",
+                    "case_handoff",
+                    "activityResult_search",
+                    "activityResult_count",
+                    "resolver_city",
+                    "resolver_paymentType",
+                    "hotelux_support_playbook",
+                ],
+            },
+        })
+
+        assert inputs["enterprise_toolsets"] == [
+            "activity_result_count",
+            "activity_result_search",
+            "afternoon_tea_status",
+            "cancellation_eligibility",
+            "case_handoff",
+            "case_precheck",
+            "change_precheck",
+            "charmdeer_hotel_policy",
+            "charmdeer_support_playbook",
+            "coupon_status",
+            "hotelux_hotel_policy",
+            "hotelux_support_playbook",
+            "member_entitlement",
+            "order_benefits",
+            "order_bi_query",
+            "order_confirmation",
+            "order_points",
+            "order_search",
+            "payment_diagnosis",
+            "points_balance",
+            "points_reconcile",
+            "promotion_explain",
+            "resolver_city",
+            "resolver_payment_type",
+        ]
+
+    def test_enterprise_direct_hotel_disabled_when_profile_context_needed(self):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+
+        adapter = APIServerAdapter(PlatformConfig())
+        inputs = {
+            "enterprise_toolsets": ["hotel"],
+            "allowed_capabilities": ["hotel_search"],
+            "user_message": "按我的偏好查上海明天入住住2晚的酒店",
+            "contract": {},
+        }
+
+        assert adapter._enterprise_direct_hotel_args(inputs) is None
+
+    def test_enterprise_direct_hotel_does_not_open_session_db(self, monkeypatch):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+
+        adapter = APIServerAdapter(PlatformConfig())
+        opened = False
+
+        def _open_db(_path):
+            nonlocal opened
+            opened = True
+            return object()
+
+        monkeypatch.setattr(adapter, "_ensure_enterprise_session_db", _open_db)
+        inputs = {
+            "enterprise_toolsets": ["hotel"],
+            "allowed_capabilities": ["hotel_search"],
+            "user_message": "帮我查上海明天入住住2晚的酒店",
+            "contract": {},
+        }
+
+        args = adapter._enterprise_direct_hotel_args(inputs)
+
+        assert args is not None
+        assert opened is False
+
+    def test_enterprise_turn_inputs_keep_direct_hotel_context_minimal(self, monkeypatch, tmp_path):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+        import gateway.enterprise_workspace as enterprise_workspace
+
+        monkeypatch.delenv("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", raising=False)
+        monkeypatch.setattr(enterprise_workspace, "get_hermes_home", lambda: tmp_path)
+        adapter = APIServerAdapter(PlatformConfig())
+
+        inputs = adapter._enterprise_turn_inputs({
+            "version": "enterprise-hermes-consumer-v1",
+            "requestId": "req-1",
+            "user": {"id": "staff-1", "type": "user"},
+            "session": {"id": "chat-1"},
+            "message": {
+                "role": "user",
+                "content": "查上海明天入住住2晚的酒店",
+            },
+            "runtimePolicy": {"allowedCapabilityRefs": ["hotel_search"]},
+            "credentialBroker": {
+                "credentialRef": "cred-1",
+                "ttlSeconds": 300,
+                "scope": ["hotel_search"],
+            },
+        })
+
+        assert inputs["direct_hotel_args"] is not None
+        assert inputs["system_prompt"] == ""
+        assert inputs["skip_memory"] is False
+        assert "contract" not in inputs["enterprise_context"]
+        assert not (tmp_path / "enterprise" / "users" / "staff-1").exists()
+
+    def test_enterprise_hotel_turn_skips_history_for_standalone_forced_tool(self, monkeypatch, tmp_path):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+        import gateway.enterprise_workspace as enterprise_workspace
+
+        monkeypatch.setenv("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", "false")
+        monkeypatch.delenv("HERMES_ENTERPRISE_SKIP_HISTORY_FOR_FORCED_HOTEL_TOOL", raising=False)
+        monkeypatch.setattr(enterprise_workspace, "get_hermes_home", lambda: tmp_path)
+        adapter = APIServerAdapter(PlatformConfig())
+
+        inputs = adapter._enterprise_turn_inputs({
+            "version": "enterprise-hermes-consumer-v1",
+            "requestId": "req-2",
+            "user": {"id": "staff-1", "type": "user"},
+            "session": {"id": "chat-1"},
+            "message": {"role": "user", "content": "帮我查上海明天入住的酒店"},
+            "runtimePolicy": {"allowedCapabilityRefs": ["hotel_search"]},
+            "credentialBroker": {"credentialRef": "cred-1", "scope": ["hotel_search"]},
+        })
+
+        assert inputs["direct_hotel_args"] is None
+        assert inputs["request_overrides"]["tool_choice"]["function"]["name"] == "hotel_search"
+        assert inputs["skip_history"] is True
+        assert inputs["skip_memory"] is False
+
+    def test_enterprise_hotel_turn_keeps_history_when_message_refers_to_previous_context(self, monkeypatch, tmp_path):
+        from gateway.platforms.api_server import APIServerAdapter
+        from gateway.config import PlatformConfig
+        import gateway.enterprise_workspace as enterprise_workspace
+
+        monkeypatch.setenv("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", "false")
+        monkeypatch.delenv("HERMES_ENTERPRISE_SKIP_HISTORY_FOR_FORCED_HOTEL_TOOL", raising=False)
+        monkeypatch.setattr(enterprise_workspace, "get_hermes_home", lambda: tmp_path)
+        adapter = APIServerAdapter(PlatformConfig())
+
+        inputs = adapter._enterprise_turn_inputs({
+            "version": "enterprise-hermes-consumer-v1",
+            "requestId": "req-3",
+            "user": {"id": "staff-1", "type": "user"},
+            "session": {"id": "chat-1"},
+            "message": {"role": "user", "content": "上次那个酒店明天还有房吗"},
+            "runtimePolicy": {"allowedCapabilityRefs": ["hotel_search"]},
+            "credentialBroker": {"credentialRef": "cred-1", "scope": ["hotel_search"]},
+        })
+
+        assert inputs["request_overrides"]["tool_choice"]["function"]["name"] == "hotel_search"
+        assert inputs["skip_history"] is False
+        assert inputs["skip_memory"] is False

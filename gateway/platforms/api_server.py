@@ -42,6 +42,7 @@ import re
 import sqlite3
 import time
 import uuid
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -900,6 +901,7 @@ class APIServerAdapter(BasePlatformAdapter):
         # Number of in-flight runs on the non-streaming chat/responses paths
         # (the /v1/runs path tracks its own in-flight set via _run_streams).
         self._inflight_agent_runs: int = 0
+        self._enterprise_session_dbs: Dict[str, Any] = {}
 
     @staticmethod
     def _parse_cors_origins(value: Any) -> tuple[str, ...]:
@@ -1155,6 +1157,357 @@ class APIServerAdapter(BasePlatformAdapter):
                 logger.debug("SessionDB unavailable for API server: %s", e)
         return self._session_db
 
+    def _ensure_enterprise_session_db(self, db_path: Optional[str]):
+        if not db_path:
+            return self._ensure_session_db()
+        cached = self._enterprise_session_dbs.get(db_path)
+        if cached is not None:
+            return cached
+        try:
+            from hermes_state import SessionDB
+
+            db = SessionDB(Path(db_path))
+            self._enterprise_session_dbs[db_path] = db
+            return db
+        except Exception as e:
+            logger.debug("Enterprise SessionDB unavailable for %s: %s", db_path, e)
+            return None
+
+    @staticmethod
+    def _conversation_history_from_db(db, session_id: str) -> List[Dict[str, Any]]:
+        if not db or not session_id:
+            return []
+        try:
+            resolved_id = db.resolve_resume_session_id(session_id)
+            return db.get_messages_as_conversation(resolved_id)
+        except Exception as exc:
+            logger.warning("Failed to load enterprise session history for %s: %s", session_id, exc)
+            return []
+
+    @staticmethod
+    def _trim_enterprise_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep enterprise turns fast by limiting raw transcript injected each turn."""
+        try:
+            max_messages = int(os.getenv("HERMES_ENTERPRISE_HISTORY_MAX_MESSAGES", "20"))
+        except Exception:
+            max_messages = 20
+        try:
+            max_content_chars = int(os.getenv("HERMES_ENTERPRISE_HISTORY_MAX_CONTENT_CHARS", "2000"))
+        except Exception:
+            max_content_chars = 2000
+        try:
+            max_tool_chars = int(os.getenv("HERMES_ENTERPRISE_HISTORY_MAX_TOOL_CHARS", "1200"))
+        except Exception:
+            max_tool_chars = 1200
+
+        selected = history if max_messages <= 0 else history[-max_messages:]
+        if max_content_chars <= 0 and max_tool_chars <= 0:
+            return selected
+
+        def _truncate_content(content: Any, limit: int) -> Any:
+            if limit <= 0:
+                return content
+            if isinstance(content, str):
+                if len(content) <= limit:
+                    return content
+                return content[:limit] + "\n...[truncated enterprise history]"
+            if isinstance(content, list):
+                encoded = json.dumps(content, ensure_ascii=False)
+                if len(encoded) <= limit:
+                    return content
+                return encoded[:limit] + "\n...[truncated enterprise history]"
+            return content
+
+        trimmed: List[Dict[str, Any]] = []
+        for message in selected:
+            if not isinstance(message, dict):
+                continue
+            copy = dict(message)
+            role = str(copy.get("role") or "")
+            limit = max_tool_chars if role == "tool" else max_content_chars
+            copy["content"] = _truncate_content(copy.get("content"), limit)
+            trimmed.append(copy)
+        return trimmed
+
+    @staticmethod
+    def _enterprise_history_chars(history: List[Dict[str, Any]]) -> int:
+        total = 0
+        for message in history or []:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                total += len(content)
+            elif content is not None:
+                try:
+                    total += len(json.dumps(content, ensure_ascii=False))
+                except Exception:
+                    total += len(str(content))
+        return total
+
+    @staticmethod
+    def _env_flag(name: str, default: bool) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() not in {"0", "false", "no", "off", ""}
+
+    @classmethod
+    def _enterprise_should_force_hotel_tool_choice(
+        cls,
+        user_message: str,
+        allowed_capabilities: List[str],
+        enterprise_toolsets: List[str],
+    ) -> bool:
+        if not cls._env_flag("HERMES_ENTERPRISE_FORCE_HOTEL_TOOL_CHOICE", True):
+            return False
+        if "hotel_search" not in set(allowed_capabilities or []):
+            return False
+        if set(enterprise_toolsets or []) - {"hotel"}:
+            return False
+        text = str(user_message or "").lower()
+        hotel_markers = (
+            "酒店", "宾馆", "旅馆", "住宿", "房价", "报价", "入住", "离店",
+            "hotel", "room", "rate", "check-in", "checkin", "checkout", "stay",
+            "dbs",
+        )
+        return any(marker in text for marker in hotel_markers)
+
+    @staticmethod
+    def _enterprise_structured_hotel_args(contract: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        candidates = [
+            contract.get("toolArgs"),
+            contract.get("tool_args"),
+            (contract.get("message") or {}).get("toolArgs") if isinstance(contract.get("message"), dict) else None,
+            (contract.get("message") or {}).get("tool_args") if isinstance(contract.get("message"), dict) else None,
+        ]
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                hotel_args = candidate.get("hotel_search") if isinstance(candidate.get("hotel_search"), dict) else candidate
+                if isinstance(hotel_args, dict):
+                    return dict(hotel_args)
+        return None
+
+    @staticmethod
+    def _enterprise_message_needs_profile_context(text: str) -> bool:
+        text = str(text or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "我的偏好", "我偏好", "我的喜好", "我喜欢", "我常用", "我的预算", "我的要求",
+            "按我的", "根据我的", "上次", "之前", "以前", "历史", "记忆", "profile",
+            "preference", "preferences", "my usual", "as before", "last time",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _enterprise_message_needs_history_context(text: str) -> bool:
+        text = str(text or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "上次", "之前", "以前", "刚才", "前面", "上一轮", "历史", "记忆",
+            "继续", "接着", "这个", "那个", "它", "他们", "这些", "那些",
+            "as before", "last time", "previous", "earlier", "continue", "that one",
+        )
+        return any(marker in text for marker in markers)
+
+
+    @staticmethod
+    def _enterprise_parse_hotel_args_from_text(text: str) -> Optional[Dict[str, Any]]:
+        text = str(text or "").strip()
+        if not text:
+            return None
+
+        args: Dict[str, Any] = {}
+
+        city_names = (
+            "上海", "北京", "广州", "深圳", "杭州", "苏州", "南京", "成都", "重庆", "西安",
+            "武汉", "长沙", "厦门", "青岛", "三亚", "天津", "东京", "大阪", "京都", "新加坡",
+            "曼谷", "香港", "澳门", "首尔", "巴黎", "伦敦", "纽约", "洛杉矶",
+        )
+        for city in city_names:
+            if city in text:
+                args["destination"] = city
+                break
+
+        hotel_match = re.search(r"([\u4e00-\u9fffA-Za-z0-9·\-\s]{2,40}(?:酒店|宾馆|旅馆|饭店|Hotel|hotel))", text)
+        if hotel_match:
+            hotel_name = hotel_match.group(1).strip()
+            looks_like_query_phrase = any(
+                marker in hotel_name
+                for marker in ("帮我", "查", "查询", "明天", "后天", "今天", "入住", "离店", "报价", "价格")
+            ) or bool(re.search(r"\d+\s*(?:晚|夜|天|人|位)", hotel_name))
+            generic_destination_name = (
+                args.get("destination")
+                and hotel_name in {
+                    f"{args['destination']}酒店",
+                    f"{args['destination']}宾馆",
+                    f"{args['destination']}旅馆",
+                    f"{args['destination']}饭店",
+                }
+            )
+            if (
+                hotel_name
+                and hotel_name not in {"酒店", "宾馆", "旅馆", "饭店"}
+                and not generic_destination_name
+                and not looks_like_query_phrase
+            ):
+                args["hotelName"] = hotel_name
+
+        today = date.today()
+
+        def _fmt(d: date) -> str:
+            return d.strftime("%Y-%m-%d")
+
+        relative_dates: list[date] = []
+        if "大后天" in text:
+            relative_dates.append(today + timedelta(days=3))
+        if "后天" in text:
+            relative_dates.append(today + timedelta(days=2))
+        if "明天" in text or "明日" in text:
+            relative_dates.append(today + timedelta(days=1))
+        if "今天" in text or "今日" in text:
+            relative_dates.append(today)
+
+        explicit_dates: list[date] = []
+        for match in re.finditer(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?", text):
+            try:
+                explicit_dates.append(date(int(match.group(1)), int(match.group(2)), int(match.group(3))))
+            except ValueError:
+                pass
+        current_year = today.year
+        for match in re.finditer(r"(?<!\d)(\d{1,2})月(\d{1,2})日?", text):
+            try:
+                parsed = date(current_year, int(match.group(1)), int(match.group(2)))
+                if parsed < today:
+                    parsed = date(current_year + 1, int(match.group(1)), int(match.group(2)))
+                if parsed not in explicit_dates:
+                    explicit_dates.append(parsed)
+            except ValueError:
+                pass
+
+        dates = explicit_dates or relative_dates
+        if len(dates) >= 2:
+            start, end = dates[0], dates[1]
+            if end > start:
+                args["dateRangeStart"] = _fmt(start)
+                args["dateRangeEnd"] = _fmt(end)
+        elif len(dates) == 1:
+            start = dates[0]
+            nights = None
+            nights_match = re.search(r"(?:住|入住|连住)?\s*(\d{1,2})\s*(?:晚|夜|天)", text)
+            if nights_match:
+                nights = int(nights_match.group(1))
+            if nights:
+                args["dateRangeStart"] = _fmt(start)
+                args["dateRangeEnd"] = _fmt(start + timedelta(days=nights))
+                args["stayNights"] = nights
+            else:
+                args["searchRangeStart"] = _fmt(start)
+                args["searchRangeEnd"] = _fmt(start)
+
+        guest_match = re.search(r"(\d{1,2})\s*(?:人|位|成人)", text)
+        if guest_match:
+            args["guestCount"] = int(guest_match.group(1))
+        if re.search(r"\bDBS\b|星展", text, re.IGNORECASE):
+            args["isDBS"] = True
+
+        return args if args else None
+
+    def _enterprise_direct_hotel_args(self, inputs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        existing = inputs.get("direct_hotel_args")
+        if isinstance(existing, dict):
+            return dict(existing)
+        if not self._env_flag("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", True):
+            return None
+        if set(inputs.get("enterprise_toolsets") or []) - {"hotel"}:
+            return None
+        if "hotel_search" not in set(inputs.get("allowed_capabilities") or []):
+            return None
+        contract = inputs.get("contract") or {}
+        structured = self._enterprise_structured_hotel_args(contract)
+        if structured:
+            return structured
+        user_message = str(inputs.get("user_message") or "")
+        if self._enterprise_message_needs_profile_context(user_message):
+            return None
+        return self._enterprise_parse_hotel_args_from_text(user_message)
+
+    @staticmethod
+    def _enterprise_tool_user_message(normalized: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not normalized:
+            return None
+        error = normalized.get("error") if isinstance(normalized, dict) else None
+        if isinstance(error, dict):
+            message = str(error.get("userMessage") or "").strip()
+            if message:
+                return message
+        return None
+
+    @staticmethod
+    def _enterprise_direct_hotel_success_message(result_text: Any) -> str:
+        try:
+            data = json.loads(result_text) if isinstance(result_text, str) else result_text
+        except Exception:
+            data = None
+
+        def _find_count(value: Any) -> Optional[int]:
+            if isinstance(value, list):
+                return len(value)
+            if isinstance(value, dict):
+                for key in ("hotels", "items", "results", "list", "data", "rows"):
+                    found = _find_count(value.get(key))
+                    if found is not None:
+                        return found
+                for child in value.values():
+                    found = _find_count(child)
+                    if found is not None:
+                        return found
+            return None
+
+        count = _find_count(data)
+        if count is not None:
+            return f"酒店查询已完成，返回 {count} 条结果。"
+        return "酒店查询已完成，结果已返回。"
+
+    @staticmethod
+    def _normalize_enterprise_tool_result(tool_name: str, function_result: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(function_result, (dict, list)):
+            data = function_result
+        elif isinstance(function_result, str):
+            text = function_result.strip()
+            if not text:
+                return None
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                return None
+        else:
+            return None
+        if not isinstance(data, dict) or data.get("ok") is not False:
+            return None
+        error = data.get("error")
+        if not isinstance(error, dict):
+            error = {"message": str(error or "Tool execution failed.")}
+        error.setdefault("code", "TOOL_ERROR")
+        error.setdefault("missingFields", [])
+        if "userMessage" not in error:
+            message = str(error.get("message") or "").strip()
+            if message:
+                error["userMessage"] = message
+        error.setdefault("modelGuidance", "")
+        error.setdefault("nextActions", [])
+        return {
+            "type": "tool_result",
+            "tool": tool_name,
+            "ok": False,
+            "kind": str(data.get("kind") or "tool_error"),
+            "recoverable": bool(data.get("recoverable", True)),
+            "status": data.get("status"),
+            "error": error,
+        }
+
     # ------------------------------------------------------------------
     # Agent creation helper
     # ------------------------------------------------------------------
@@ -1241,6 +1594,19 @@ class APIServerAdapter(BasePlatformAdapter):
         tool_complete_callback=None,
         gateway_session_key: Optional[str] = None,
         route: Optional[Dict[str, Any]] = None,
+        extra_toolsets: Optional[List[str]] = None,
+        toolsets_override: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+        user_id_alt: Optional[str] = None,
+        user_name: Optional[str] = None,
+        memory_dir: Optional[str] = None,
+        workspace_home: Optional[str] = None,
+        session_db=None,
+        skip_context_files: bool = False,
+        skip_memory: bool = False,
+        disable_environment_probe: bool = False,
+        minimal_system_prompt: bool = False,
+        request_overrides: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
         Create an AIAgent instance using the gateway's runtime config.
@@ -1334,7 +1700,12 @@ class APIServerAdapter(BasePlatformAdapter):
             )
 
         user_config = _load_gateway_config()
-        enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))
+        if toolsets_override is not None:
+            enabled_toolsets = sorted({str(t).strip() for t in toolsets_override if str(t or "").strip()})
+        else:
+            enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))
+            if extra_toolsets:
+                enabled_toolsets = sorted(set(enabled_toolsets).union(extra_toolsets))
 
         max_iterations = _current_max_iterations()
 
@@ -1356,11 +1727,22 @@ class APIServerAdapter(BasePlatformAdapter):
             tool_progress_callback=tool_progress_callback,
             tool_start_callback=tool_start_callback,
             tool_complete_callback=tool_complete_callback,
-            session_db=self._ensure_session_db(),
+            session_db=session_db if session_db is not None else self._ensure_session_db(),
             fallback_model=fallback_model,
             reasoning_config=reasoning_config,
+            request_overrides=request_overrides,
             gateway_session_key=gateway_session_key,
+            skip_context_files=skip_context_files,
+            minimal_system_prompt=minimal_system_prompt,
+            skip_memory=skip_memory,
+            user_id=user_id,
+            user_id_alt=user_id_alt,
+            user_name=user_name,
+            memory_dir=memory_dir,
+            workspace_home=workspace_home,
         )
+        if disable_environment_probe:
+            agent._environment_probe = False
         return agent
 
     # ------------------------------------------------------------------
@@ -1514,6 +1896,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 "health_detailed": {"method": "GET", "path": "/health/detailed"},
                 "models": {"method": "GET", "path": "/v1/models"},
                 "chat_completions": {"method": "POST", "path": "/v1/chat/completions"},
+                "enterprise_turn": {"method": "POST", "path": "/v1/enterprise/turn"},
+                "enterprise_turn_stream": {"method": "POST", "path": "/v1/enterprise/turn/stream"},
                 "responses": {"method": "POST", "path": "/v1/responses"},
                 "runs": {"method": "POST", "path": "/v1/runs"},
                 "run_status": {"method": "GET", "path": "/v1/runs/{run_id}"},
@@ -1533,6 +1917,731 @@ class APIServerAdapter(BasePlatformAdapter):
                 "session_chat_stream": {"method": "POST", "path": "/api/sessions/{session_id}/chat/stream"},
             },
         })
+
+    def _enterprise_turn_inputs(self, contract: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(contract, dict):
+            raise ValueError("Enterprise turn contract must be a JSON object.")
+        if contract.get("version") != "enterprise-hermes-consumer-v1":
+            raise ValueError("Unsupported enterprise contract version.")
+
+        def _clean_ref(value: Any, field: str) -> str:
+            text = str(value or "").strip()
+            if not text:
+                raise ValueError(f"Missing enterprise {field}.")
+            if re.search(r"[\r\n\x00]", text):
+                raise ValueError(f"Invalid enterprise {field}.")
+            return text[:256]
+
+        message = contract.get("message") or {}
+        user = contract.get("user") or {}
+        session = contract.get("session") or {}
+        conversation = contract.get("conversation") or {}
+        runtime_policy = contract.get("runtimePolicy") or {}
+        credential_broker = contract.get("credentialBroker") or {}
+
+        content = message.get("content") or ""
+        user_id = _clean_ref(user.get("id"), "user.id")
+        user_type = str(user.get("type") or "").strip()[:64]
+        client_session_id = _clean_ref(
+            session.get("id") or conversation.get("sessionRef") or contract.get("requestId") or str(uuid.uuid4()),
+            "session.id",
+        )
+        raw_capabilities = runtime_policy.get("allowedCapabilityRefs") or []
+        if not isinstance(raw_capabilities, list):
+            raise ValueError("runtimePolicy.allowedCapabilityRefs must be a list.")
+        allowed_capabilities = sorted({
+            str(item).strip()
+            for item in raw_capabilities
+            if str(item or "").strip()
+        })
+        capability_toolsets = {
+            "clarify": "clarify",
+            "hotel_search": "hotel",
+            "kanban": "kanban",
+            "memory": "memory",
+            "order_search": "order_search",
+            "order_biQuery": "order_bi_query",
+            "order_bi_query": "order_bi_query",
+            "order_points": "order_points",
+            "order_confirmation": "order_confirmation",
+            "points_reconcile": "points_reconcile",
+            "order_benefits": "order_benefits",
+            "cancellation_eligibility": "cancellation_eligibility",
+            "payment_diagnosis": "payment_diagnosis",
+            "change_precheck": "change_precheck",
+            "hotelux_hotel_policy": "hotelux_hotel_policy",
+            "charmdeer_support_playbook": "charmdeer_support_playbook",
+            "charmdeer_hotel_policy": "charmdeer_hotel_policy",
+            "coupon_status": "coupon_status",
+            "promotion_explain": "promotion_explain",
+            "member_entitlement": "member_entitlement",
+            "afternoonTea_status": "afternoon_tea_status",
+            "afternoon_tea_status": "afternoon_tea_status",
+            "points_balance": "points_balance",
+            "case_precheck": "case_precheck",
+            "case_handoff": "case_handoff",
+            "activityResult_search": "activity_result_search",
+            "activity_result_search": "activity_result_search",
+            "activityResult_count": "activity_result_count",
+            "activity_result_count": "activity_result_count",
+            "resolver_time": "resolver_time",
+            "resolver_city": "resolver_city",
+            "resolver_country": "resolver_country",
+            "resolver_hotel": "resolver_hotel",
+            "resolver_channel": "resolver_channel",
+            "resolver_paymentType": "resolver_payment_type",
+            "resolver_payment_type": "resolver_payment_type",
+            "resolver_shopBrand": "resolver_shop_brand",
+            "resolver_shop_brand": "resolver_shop_brand",
+            "resolver_shopGroup": "resolver_shop_group",
+            "resolver_shop_group": "resolver_shop_group",
+            "hotelux_support_playbook": "hotelux_support_playbook",
+            "session_search": "session_search",
+            "todo": "todo",
+            "vision": "vision",
+            "browser": "browser",
+        }
+        enterprise_toolsets = sorted({
+            capability_toolsets[item]
+            for item in allowed_capabilities
+            if item in capability_toolsets
+        })
+        direct_hotel_args: Optional[Dict[str, Any]] = None
+        if (
+            self._env_flag("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", True)
+            and not (set(enterprise_toolsets or []) - {"hotel"})
+            and "hotel_search" in set(allowed_capabilities or [])
+        ):
+            direct_hotel_args = self._enterprise_structured_hotel_args(contract)
+            if direct_hotel_args is None and not self._enterprise_message_needs_profile_context(str(content)):
+                direct_hotel_args = self._enterprise_parse_hotel_args_from_text(str(content))
+
+        from gateway.enterprise_workspace import EnterpriseWorkspaceManager
+
+        role = EnterpriseWorkspaceManager.role_for_user(user)
+        workspace = EnterpriseWorkspaceManager().ensure_workspace(
+            user_id=user_id,
+            user_type=user_type,
+            role=role,
+            session_id=client_session_id,
+            create_dirs=direct_hotel_args is None,
+        )
+        profile_ref = workspace.profile_ref
+        workspace_ref = workspace.workspace_ref
+        hermes_session_id = workspace.session_id
+        memory_dir = str(workspace.memory_dir)
+        request_overrides: Dict[str, Any] = {}
+        force_hotel_tool_choice = self._enterprise_should_force_hotel_tool_choice(
+            str(content), allowed_capabilities, enterprise_toolsets
+        )
+        if force_hotel_tool_choice:
+            request_overrides["tool_choice"] = {
+                "type": "function",
+                "function": {"name": "hotel_search"},
+            }
+        raw_skip_history = os.getenv("HERMES_ENTERPRISE_SKIP_HISTORY_FOR_FORCED_HOTEL_TOOL")
+        if raw_skip_history is None:
+            skip_history = bool(
+                force_hotel_tool_choice
+                and not self._enterprise_message_needs_history_context(str(content))
+            )
+        else:
+            skip_history = bool(
+                force_hotel_tool_choice
+                and self._env_flag("HERMES_ENTERPRISE_SKIP_HISTORY_FOR_FORCED_HOTEL_TOOL", False)
+            )
+        credential_ref = credential_broker.get("credentialRef")
+        credential_scope = credential_broker.get("scope") or []
+        credential_ttl = credential_broker.get("ttlSeconds")
+        skip_context_files = self._env_flag("HERMES_ENTERPRISE_SKIP_CONTEXT_FILES", True)
+        disable_environment_probe = self._env_flag("HERMES_ENTERPRISE_DISABLE_ENVIRONMENT_PROBE", True)
+        raw_minimal_prompt = os.getenv("HERMES_ENTERPRISE_MINIMAL_SYSTEM_PROMPT")
+        if raw_minimal_prompt is None:
+            minimal_system_prompt = set(enterprise_toolsets or []) <= {"hotel"}
+        else:
+            minimal_system_prompt = self._env_flag("HERMES_ENTERPRISE_MINIMAL_SYSTEM_PROMPT", True)
+        skip_memory = self._env_flag("HERMES_ENTERPRISE_SKIP_MEMORY", False)
+
+        if direct_hotel_args is not None:
+            system_prompt = ""
+        else:
+            system_prompt = (
+                "You are Hermes Enterprise Runtime serving a hotel system.\n"
+                "Use the hotel_search tool when the user asks for live hotel availability, "
+                "prices, DBS hotel searches, destination searches, exact hotel searches, "
+                "or date/rate comparisons. Do not invent live rates.\n"
+                "Runtime context follows. Treat profile_ref/workspace_ref/session_id "
+                "as fixed system-owned context; do not invent, switch, or override them.\n"
+                "If a tool result has ok=false and kind=clarification_required, "
+                "use error.userMessage/modelGuidance to ask the user for the missing "
+                "information instead of treating it as a system failure.\n"
+                f"enterprise_role={json.dumps(workspace.role, ensure_ascii=False)}\n"
+                f"user_id={json.dumps(user_id, ensure_ascii=False)}\n"
+                f"user_type={json.dumps(user_type, ensure_ascii=False)}\n"
+                f"profile_ref={json.dumps(profile_ref, ensure_ascii=False)}\n"
+                f"workspace_ref={json.dumps(workspace_ref, ensure_ascii=False)}\n"
+                f"session_id={json.dumps(client_session_id, ensure_ascii=False)}\n"
+                f"allowed_capabilities={json.dumps(allowed_capabilities, ensure_ascii=False)}"
+            )
+            if workspace.role == "admin":
+                system_prompt += (
+                    "\nThis is an admin orchestrator workspace. Use admin-scoped tools only "
+                    "when they are available and do not write ordinary user memories into "
+                    "the admin workspace unless the admin explicitly asks for admin notes."
+                )
+
+        enterprise_context = {
+            "user_id": user_id,
+            "user_type": user_type,
+            "profile_ref": profile_ref,
+            "workspace_ref": workspace_ref,
+            "session_id": client_session_id,
+            "hermes_session_id": hermes_session_id,
+            "credentialRef": credential_ref,
+            "credential_scope": credential_scope,
+            "credential_ttl_seconds": credential_ttl,
+            "allowed_capabilities": allowed_capabilities,
+            **workspace.as_context(),
+            "requestId": contract.get("requestId"),
+        }
+        if direct_hotel_args is None:
+            enterprise_context["contract"] = contract
+
+        return {
+            "request_id": contract.get("requestId"),
+            "session_id": hermes_session_id,
+            "client_session_id": client_session_id,
+            "gateway_session_key": profile_ref,
+            "user_message": str(content),
+            "system_prompt": system_prompt,
+            "credential_ref": credential_ref,
+            "profile_ref": profile_ref,
+            "workspace_ref": workspace_ref,
+            "memory_dir": memory_dir,
+            "workspace_home": str(workspace.workspace_home),
+            "state_db_path": str(workspace.state_db_path),
+            "kanban_db_path": str(workspace.kanban_db_path),
+            "enterprise_role": workspace.role,
+            "allowed_capabilities": allowed_capabilities,
+            "extra_toolsets": enterprise_toolsets,
+            "enterprise_toolsets": enterprise_toolsets,
+            "skip_context_files": skip_context_files,
+            "skip_memory": skip_memory,
+            "disable_environment_probe": disable_environment_probe,
+            "minimal_system_prompt": minimal_system_prompt,
+            "request_overrides": request_overrides,
+            "direct_hotel_args": direct_hotel_args,
+            "skip_history": skip_history,
+            "enterprise_context": enterprise_context,
+            "contract": contract,
+        }
+
+    async def _handle_enterprise_turn(self, request: "web.Request") -> "web.Response":
+        """POST /v1/enterprise/turn - Hermes enterprise contract turn API."""
+        started_at = time.monotonic()
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            contract = await request.json()
+            inputs = self._enterprise_turn_inputs(contract)
+            logger.info(
+                "Enterprise turn parsed request_id=%s session=%s capabilities=%s toolsets=%s request_overrides=%s skip_context_files=%s skip_memory=%s minimal_system_prompt=%s skip_history=%s elapsed_ms=%.1f",
+                inputs.get("request_id"),
+                inputs.get("session_id"),
+                inputs.get("allowed_capabilities"),
+                inputs.get("enterprise_toolsets"),
+                sorted((inputs.get("request_overrides") or {}).keys()),
+                inputs.get("skip_context_files"),
+                inputs.get("skip_memory"),
+                inputs.get("minimal_system_prompt"),
+                inputs.get("skip_history"),
+                (time.monotonic() - started_at) * 1000,
+            )
+        except Exception as e:
+            return web.json_response({"error": {"message": str(e), "type": "invalid_request_error"}}, status=400)
+
+        from tools.enterprise_context import clear_enterprise_context, set_enterprise_context
+
+        task_id = inputs["session_id"]
+        set_enterprise_context(task_id, inputs["enterprise_context"])
+        direct_hotel_args = self._enterprise_direct_hotel_args(inputs)
+        if direct_hotel_args is not None:
+            try:
+                logger.info(
+                    "Enterprise turn prepared session=%s skip_history=direct_hotel history_messages=0 trimmed_history_messages=0 history_chars=0 trimmed_history_chars=0 elapsed_ms=%.1f",
+                    task_id,
+                    (time.monotonic() - started_at) * 1000,
+                )
+                tool_call_id = f"direct_hotel_{uuid.uuid4().hex[:12]}"
+                tool_start = time.monotonic()
+                logger.info(
+                    "Enterprise turn tool_start session=%s tool=hotel_search tool_call_id=%s elapsed_ms=%.1f direct=true",
+                    task_id,
+                    tool_call_id,
+                    (tool_start - started_at) * 1000,
+                )
+                from tools.hotel_search_tool import _handle_hotel_search
+
+                tool_result = await _handle_hotel_search(direct_hotel_args, task_id=task_id)
+                now = time.monotonic()
+                tool_elapsed_ms = (now - tool_start) * 1000
+                logger.info(
+                    "Enterprise turn tool_done session=%s tool=hotel_search tool_call_id=%s elapsed_ms=%.1f tool_elapsed_ms=%.1f direct=true",
+                    task_id,
+                    tool_call_id,
+                    (now - started_at) * 1000,
+                    tool_elapsed_ms,
+                )
+                normalized = self._normalize_enterprise_tool_result("hotel_search", tool_result)
+                final_response = (
+                    self._enterprise_tool_user_message(normalized)
+                    or self._enterprise_direct_hotel_success_message(tool_result)
+                )
+                return web.json_response({
+                    "status": "ok",
+                    "session": {
+                        "id": task_id,
+                        "clientId": inputs["client_session_id"],
+                        "source": "remote_hermes",
+                    },
+                    "profileRef": inputs["profile_ref"],
+                    "workspaceRef": inputs["workspace_ref"],
+                    "workspaceRole": inputs["enterprise_role"],
+                    "response": final_response,
+                    "completed": True,
+                    "partial": False,
+                    "failed": False,
+                    "error": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    "historySource": "remote_hermes",
+                    "auditSource": "remote_hermes",
+                    "direct": True,
+                })
+            except Exception as e:
+                logger.error("Enterprise direct hotel turn failed: %s", e, exc_info=True)
+                return web.json_response({"error": {"message": str(e), "type": "server_error"}}, status=500)
+            finally:
+                clear_enterprise_context(task_id)
+
+        session_db = self._ensure_enterprise_session_db(inputs["state_db_path"])
+        history = [] if inputs["skip_history"] else self._conversation_history_from_db(session_db, task_id)
+        raw_history_count = len(history)
+        raw_history_chars = self._enterprise_history_chars(history)
+        history = self._trim_enterprise_history(history)
+        trimmed_history_chars = self._enterprise_history_chars(history)
+        logger.info(
+            "Enterprise turn prepared session=%s skip_history=%s history_messages=%d trimmed_history_messages=%d history_chars=%d trimmed_history_chars=%d elapsed_ms=%.1f",
+            task_id,
+            inputs["skip_history"],
+            raw_history_count,
+            len(history),
+            raw_history_chars,
+            trimmed_history_chars,
+            (time.monotonic() - started_at) * 1000,
+        )
+        last_tool_user_message: Optional[str] = None
+        tool_started_at: Dict[str, float] = {}
+
+        def _on_tool_start(tool_call_id, function_name, function_args):
+            now = time.monotonic()
+            if tool_call_id:
+                tool_started_at[tool_call_id] = now
+            logger.info(
+                "Enterprise turn tool_start session=%s tool=%s tool_call_id=%s elapsed_ms=%.1f",
+                task_id,
+                function_name,
+                tool_call_id,
+                (now - started_at) * 1000,
+            )
+
+        def _on_tool_complete(tool_call_id, function_name, function_args, function_result):
+            nonlocal last_tool_user_message
+            now = time.monotonic()
+            started = tool_started_at.pop(tool_call_id, None) if tool_call_id else None
+            logger.info(
+                "Enterprise turn tool_done session=%s tool=%s tool_call_id=%s elapsed_ms=%.1f tool_elapsed_ms=%s",
+                task_id,
+                function_name,
+                tool_call_id,
+                (now - started_at) * 1000,
+                f"{((now - started) * 1000):.1f}" if started is not None else "unknown",
+            )
+            normalized = self._normalize_enterprise_tool_result(function_name, function_result)
+            if normalized:
+                error = normalized.get("error") or {}
+                user_message = str(error.get("userMessage") or "").strip()
+                if user_message:
+                    last_tool_user_message = user_message
+
+        try:
+            result, usage = await self._run_agent(
+                user_message=inputs["user_message"],
+                conversation_history=history,
+                ephemeral_system_prompt=inputs["system_prompt"],
+                session_id=task_id,
+                gateway_session_key=inputs["gateway_session_key"],
+                extra_toolsets=inputs["extra_toolsets"],
+                toolsets_override=inputs["enterprise_toolsets"],
+                enterprise_context=inputs["enterprise_context"],
+                tool_start_callback=_on_tool_start,
+                tool_complete_callback=_on_tool_complete,
+                user_id=inputs["enterprise_context"]["user_id"],
+                user_id_alt=inputs["profile_ref"],
+                user_name=inputs["enterprise_context"].get("user_type") or None,
+                memory_dir=inputs["memory_dir"],
+                workspace_home=inputs["workspace_home"],
+                session_db=session_db,
+                skip_context_files=inputs["skip_context_files"],
+                skip_memory=inputs["skip_memory"],
+                disable_environment_probe=inputs["disable_environment_probe"],
+                minimal_system_prompt=inputs["minimal_system_prompt"],
+                request_overrides=inputs["request_overrides"],
+            )
+        except Exception as e:
+            logger.error("Enterprise turn failed: %s", e, exc_info=True)
+            return web.json_response({"error": {"message": str(e), "type": "server_error"}}, status=500)
+        finally:
+            clear_enterprise_context(task_id)
+
+        if last_tool_user_message and not str(result.get("final_response") or "").strip():
+            result["final_response"] = last_tool_user_message
+            result["completed"] = True
+            result["failed"] = False
+
+        return web.json_response({
+            "status": "ok",
+            "session": {
+                "id": result.get("session_id", task_id),
+                "clientId": inputs["client_session_id"],
+                "source": "remote_hermes",
+            },
+            "profileRef": inputs["profile_ref"],
+            "workspaceRef": inputs["workspace_ref"],
+            "workspaceRole": inputs["enterprise_role"],
+            "response": result.get("final_response") or "",
+            "completed": bool(result.get("completed", True)),
+            "partial": bool(result.get("partial", False)),
+            "failed": bool(result.get("failed", False)),
+            "error": result.get("error"),
+            "usage": usage,
+            "historySource": "remote_hermes",
+            "auditSource": "remote_hermes",
+        })
+
+    async def _handle_enterprise_turn_stream(self, request: "web.Request") -> "web.StreamResponse":
+        """POST /v1/enterprise/turn/stream - SSE enterprise turn API."""
+        started_at = time.monotonic()
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            contract = await request.json()
+            inputs = self._enterprise_turn_inputs(contract)
+            logger.info(
+                "Enterprise stream parsed request_id=%s session=%s capabilities=%s toolsets=%s request_overrides=%s skip_context_files=%s skip_memory=%s minimal_system_prompt=%s skip_history=%s elapsed_ms=%.1f",
+                inputs.get("request_id"),
+                inputs.get("session_id"),
+                inputs.get("allowed_capabilities"),
+                inputs.get("enterprise_toolsets"),
+                sorted((inputs.get("request_overrides") or {}).keys()),
+                inputs.get("skip_context_files"),
+                inputs.get("skip_memory"),
+                inputs.get("minimal_system_prompt"),
+                inputs.get("skip_history"),
+                (time.monotonic() - started_at) * 1000,
+            )
+        except Exception as e:
+            return web.json_response({"error": {"message": str(e), "type": "invalid_request_error"}}, status=400)
+
+        import queue as _q
+        from tools.enterprise_context import clear_enterprise_context, set_enterprise_context
+
+        task_id = inputs["session_id"]
+        set_enterprise_context(task_id, inputs["enterprise_context"])
+        direct_hotel_args = self._enterprise_direct_hotel_args(inputs)
+        session_db = None
+        history: List[Dict[str, Any]] = []
+        if direct_hotel_args is None:
+            session_db = self._ensure_enterprise_session_db(inputs["state_db_path"])
+            history = [] if inputs["skip_history"] else self._conversation_history_from_db(session_db, task_id)
+            raw_history_count = len(history)
+            raw_history_chars = self._enterprise_history_chars(history)
+            history = self._trim_enterprise_history(history)
+            trimmed_history_chars = self._enterprise_history_chars(history)
+            logger.info(
+                "Enterprise stream prepared session=%s skip_history=%s history_messages=%d trimmed_history_messages=%d history_chars=%d trimmed_history_chars=%d elapsed_ms=%.1f",
+                task_id,
+                inputs["skip_history"],
+                raw_history_count,
+                len(history),
+                raw_history_chars,
+                trimmed_history_chars,
+                (time.monotonic() - started_at) * 1000,
+            )
+        else:
+            logger.info(
+                "Enterprise stream prepared session=%s skip_history=direct_hotel history_messages=0 trimmed_history_messages=0 history_chars=0 trimmed_history_chars=0 elapsed_ms=%.1f",
+                task_id,
+                (time.monotonic() - started_at) * 1000,
+            )
+
+        stream_q = _q.Queue()
+        started_tool_call_ids = set()
+        tool_started_at: Dict[str, float] = {}
+        emitted_text = False
+        last_tool_user_message: Optional[str] = None
+
+        def _on_delta(delta):
+            nonlocal emitted_text
+            if delta:
+                emitted_text = True
+            stream_q.put({"type": "delta", "delta": delta or ""})
+
+        def _on_tool_start(tool_call_id, function_name, function_args):
+            if not tool_call_id:
+                return
+            started_tool_call_ids.add(tool_call_id)
+            now = time.monotonic()
+            tool_started_at[tool_call_id] = now
+            elapsed_ms = (now - started_at) * 1000
+            logger.info(
+                "Enterprise stream tool_start session=%s tool=%s tool_call_id=%s elapsed_ms=%.1f",
+                task_id,
+                function_name,
+                tool_call_id,
+                elapsed_ms,
+            )
+            stream_q.put({
+                "type": "tool_start",
+                "tool": function_name,
+                "toolCallId": tool_call_id,
+                "args": function_args,
+                "elapsedMs": elapsed_ms,
+            })
+
+        def _on_tool_complete(tool_call_id, function_name, function_args, function_result):
+            nonlocal last_tool_user_message
+            now = time.monotonic()
+            started = tool_started_at.pop(tool_call_id, None) if tool_call_id else None
+            elapsed_ms = (now - started_at) * 1000
+            tool_elapsed_ms = ((now - started) * 1000) if started is not None else None
+            logger.info(
+                "Enterprise stream tool_done session=%s tool=%s tool_call_id=%s elapsed_ms=%.1f tool_elapsed_ms=%s",
+                task_id,
+                function_name,
+                tool_call_id,
+                elapsed_ms,
+                f"{tool_elapsed_ms:.1f}" if tool_elapsed_ms is not None else "unknown",
+            )
+            if tool_call_id and tool_call_id in started_tool_call_ids:
+                started_tool_call_ids.discard(tool_call_id)
+            normalized = self._normalize_enterprise_tool_result(function_name, function_result)
+            if normalized:
+                normalized["toolCallId"] = tool_call_id
+                normalized["args"] = function_args
+                normalized["elapsedMs"] = elapsed_ms
+                normalized["toolElapsedMs"] = tool_elapsed_ms
+                error = normalized.get("error") or {}
+                user_message = str(error.get("userMessage") or "").strip()
+                if user_message:
+                    last_tool_user_message = user_message
+                stream_q.put(normalized)
+            stream_q.put({
+                "type": "tool_done",
+                "tool": function_name,
+                "toolCallId": tool_call_id,
+                "elapsedMs": elapsed_ms,
+                "toolElapsedMs": tool_elapsed_ms,
+            })
+
+        response = web.StreamResponse(status=200, headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+
+        async def _write_event(event: Dict[str, Any]) -> None:
+            event_type = event.get("type") or "message"
+            await response.write(f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode())
+
+        try:
+            await _write_event({
+                "type": "start",
+                "session": {
+                    "id": task_id,
+                    "clientId": inputs["client_session_id"],
+                    "source": "remote_hermes",
+                },
+                "profileRef": inputs["profile_ref"],
+                "workspaceRef": inputs["workspace_ref"],
+                "workspaceRole": inputs["enterprise_role"],
+                "allowedCapabilities": inputs["allowed_capabilities"],
+            })
+            if direct_hotel_args is not None:
+                tool_call_id = f"direct_hotel_{uuid.uuid4().hex[:12]}"
+                tool_start = time.monotonic()
+                elapsed_ms = (tool_start - started_at) * 1000
+                logger.info(
+                    "Enterprise stream tool_start session=%s tool=hotel_search tool_call_id=%s elapsed_ms=%.1f direct=true",
+                    task_id,
+                    tool_call_id,
+                    elapsed_ms,
+                )
+                await _write_event({
+                    "type": "tool_start",
+                    "tool": "hotel_search",
+                    "toolCallId": tool_call_id,
+                    "args": direct_hotel_args,
+                    "elapsedMs": elapsed_ms,
+                    "direct": True,
+                })
+                from tools.hotel_search_tool import _handle_hotel_search
+
+                tool_result = await _handle_hotel_search(direct_hotel_args, task_id=task_id)
+                now = time.monotonic()
+                elapsed_ms = (now - started_at) * 1000
+                tool_elapsed_ms = (now - tool_start) * 1000
+                logger.info(
+                    "Enterprise stream tool_done session=%s tool=hotel_search tool_call_id=%s elapsed_ms=%.1f tool_elapsed_ms=%.1f direct=true",
+                    task_id,
+                    tool_call_id,
+                    elapsed_ms,
+                    tool_elapsed_ms,
+                )
+                normalized = self._normalize_enterprise_tool_result("hotel_search", tool_result)
+                if normalized:
+                    normalized["toolCallId"] = tool_call_id
+                    normalized["args"] = direct_hotel_args
+                    normalized["elapsedMs"] = elapsed_ms
+                    normalized["toolElapsedMs"] = tool_elapsed_ms
+                    normalized["direct"] = True
+                    await _write_event(normalized)
+                else:
+                    await _write_event({
+                        "type": "tool_result",
+                        "tool": "hotel_search",
+                        "toolCallId": tool_call_id,
+                        "ok": True,
+                        "result": tool_result,
+                        "elapsedMs": elapsed_ms,
+                        "toolElapsedMs": tool_elapsed_ms,
+                        "direct": True,
+                    })
+                await _write_event({
+                    "type": "tool_done",
+                    "tool": "hotel_search",
+                    "toolCallId": tool_call_id,
+                    "elapsedMs": elapsed_ms,
+                    "toolElapsedMs": tool_elapsed_ms,
+                    "direct": True,
+                })
+                final_response = (
+                    self._enterprise_tool_user_message(normalized)
+                    or self._enterprise_direct_hotel_success_message(tool_result)
+                )
+                await _write_event({"type": "delta", "delta": final_response})
+                await _write_event({
+                    "type": "done",
+                    "status": "ok",
+                    "session": {
+                        "id": task_id,
+                        "clientId": inputs["client_session_id"],
+                        "source": "remote_hermes",
+                    },
+                    "profileRef": inputs["profile_ref"],
+                    "workspaceRef": inputs["workspace_ref"],
+                    "workspaceRole": inputs["enterprise_role"],
+                    "response": final_response,
+                    "completed": True,
+                    "partial": False,
+                    "failed": False,
+                    "error": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    "historySource": "remote_hermes",
+                    "auditSource": "remote_hermes",
+                    "direct": True,
+                })
+                return response
+
+            agent_task = asyncio.ensure_future(self._run_agent(
+                user_message=inputs["user_message"],
+                conversation_history=history,
+                ephemeral_system_prompt=inputs["system_prompt"],
+                session_id=task_id,
+                stream_delta_callback=_on_delta,
+                tool_start_callback=_on_tool_start,
+                tool_complete_callback=_on_tool_complete,
+                gateway_session_key=inputs["gateway_session_key"],
+                extra_toolsets=inputs["extra_toolsets"],
+                toolsets_override=inputs["enterprise_toolsets"],
+                enterprise_context=inputs["enterprise_context"],
+                user_id=inputs["enterprise_context"]["user_id"],
+                user_id_alt=inputs["profile_ref"],
+                user_name=inputs["enterprise_context"].get("user_type") or None,
+                memory_dir=inputs["memory_dir"],
+                workspace_home=inputs["workspace_home"],
+                session_db=session_db,
+                skip_context_files=inputs["skip_context_files"],
+                skip_memory=inputs["skip_memory"],
+                disable_environment_probe=inputs["disable_environment_probe"],
+                minimal_system_prompt=inputs["minimal_system_prompt"],
+                request_overrides=inputs["request_overrides"],
+            ))
+            agent_task.add_done_callback(lambda _fut: stream_q.put(None))
+            loop = asyncio.get_running_loop()
+            while True:
+                try:
+                    item = await loop.run_in_executor(None, lambda: stream_q.get(timeout=0.5))
+                except _q.Empty:
+                    if agent_task.done():
+                        break
+                    await response.write(b": keepalive\n\n")
+                    continue
+                if item is None:
+                    break
+                await _write_event(item)
+
+            result, usage = await agent_task
+            final_response = str(result.get("final_response") or "")
+            if last_tool_user_message and not final_response.strip():
+                final_response = last_tool_user_message
+                result["final_response"] = final_response
+                result["completed"] = True
+                result["failed"] = False
+                if not emitted_text:
+                    await _write_event({"type": "delta", "delta": final_response})
+            await _write_event({
+                "type": "done",
+                "status": "ok",
+                "session": {
+                    "id": result.get("session_id", task_id),
+                    "clientId": inputs["client_session_id"],
+                    "source": "remote_hermes",
+                },
+                "profileRef": inputs["profile_ref"],
+                "workspaceRef": inputs["workspace_ref"],
+                "workspaceRole": inputs["enterprise_role"],
+                "response": final_response,
+                "completed": bool(result.get("completed", True)),
+                "partial": bool(result.get("partial", False)),
+                "failed": bool(result.get("failed", False)),
+                "error": result.get("error"),
+                "usage": usage,
+                "historySource": "remote_hermes",
+                "auditSource": "remote_hermes",
+            })
+        except Exception as e:
+            logger.error("Enterprise streaming turn failed: %s", e, exc_info=True)
+            await _write_event({"type": "error", "error": str(e)})
+        finally:
+            clear_enterprise_context(task_id)
+            await response.write_eof()
+
+        return response
 
     async def _handle_skills(self, request: "web.Request") -> "web.Response":
         """GET /v1/skills — list installed skills visible to the API-server agent.
@@ -4031,6 +5140,20 @@ class APIServerAdapter(BasePlatformAdapter):
         agent_ref: Optional[list] = None,
         gateway_session_key: Optional[str] = None,
         route: Optional[Dict[str, Any]] = None,
+        extra_toolsets: Optional[List[str]] = None,
+        toolsets_override: Optional[List[str]] = None,
+        enterprise_context: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        user_id_alt: Optional[str] = None,
+        user_name: Optional[str] = None,
+        memory_dir: Optional[str] = None,
+        workspace_home: Optional[str] = None,
+        session_db=None,
+        skip_context_files: bool = False,
+        skip_memory: bool = False,
+        disable_environment_probe: bool = False,
+        minimal_system_prompt: bool = False,
+        request_overrides: Optional[Dict[str, Any]] = None,
     ) -> tuple:
         """
         Create an agent and run a conversation in a thread executor.
@@ -4051,13 +5174,30 @@ class APIServerAdapter(BasePlatformAdapter):
 
         def _run():
             from gateway.session_context import clear_session_vars
+            from tools.enterprise_context import (
+                clear_current_enterprise_context,
+                set_current_enterprise_context,
+            )
 
             tokens = self._bind_api_server_session(
                 chat_id=session_id or "",
+                user_id=user_id or "",
+                user_name=user_name or "",
                 session_key=gateway_session_key or session_id or "",
                 session_id=session_id or "",
             )
+            previous_enterprise_context = set_current_enterprise_context(enterprise_context or {})
             try:
+                if enterprise_context and "kanban" in {str(t).strip() for t in (toolsets_override or [])}:
+                    try:
+                        from model_tools import _clear_tool_defs_cache
+                        from tools.registry import invalidate_check_fn_cache
+
+                        invalidate_check_fn_cache()
+                        _clear_tool_defs_cache()
+                    except Exception:
+                        pass
+                create_started_at = time.monotonic()
                 agent = self._create_agent(
                     ephemeral_system_prompt=ephemeral_system_prompt,
                     session_id=session_id,
@@ -4067,6 +5207,27 @@ class APIServerAdapter(BasePlatformAdapter):
                     tool_complete_callback=tool_complete_callback,
                     gateway_session_key=gateway_session_key,
                     route=route,
+                    extra_toolsets=extra_toolsets,
+                    toolsets_override=toolsets_override,
+                    user_id=user_id,
+                    user_id_alt=user_id_alt,
+                    user_name=user_name,
+                    memory_dir=memory_dir,
+                    workspace_home=workspace_home,
+                    session_db=session_db,
+                    skip_context_files=skip_context_files,
+                    skip_memory=skip_memory,
+                    disable_environment_probe=disable_environment_probe,
+                    minimal_system_prompt=minimal_system_prompt,
+                    request_overrides=request_overrides,
+                )
+                logger.info(
+                    "API server agent created session=%s enterprise=%s toolsets=%s request_overrides=%s elapsed_ms=%.1f",
+                    session_id,
+                    bool(enterprise_context),
+                    toolsets_override if toolsets_override is not None else extra_toolsets,
+                    sorted((request_overrides or {}).keys()),
+                    (time.monotonic() - create_started_at) * 1000,
                 )
                 if agent_ref is not None:
                     agent_ref[0] = agent
@@ -4089,6 +5250,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     result["session_id"] = _eff_sid
                 return result, usage
             finally:
+                clear_current_enterprise_context(previous_enterprise_context)
                 clear_session_vars(tokens)
 
         self._inflight_agent_runs += 1
@@ -4784,6 +5946,8 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_post("/api/sessions/{session_id}/chat", self._handle_session_chat)
             self._app.router.add_post("/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream)
             self._app.router.add_post("/v1/chat/completions", self._handle_chat_completions)
+            self._app.router.add_post("/v1/enterprise/turn", self._handle_enterprise_turn)
+            self._app.router.add_post("/v1/enterprise/turn/stream", self._handle_enterprise_turn_stream)
             self._app.router.add_post("/v1/responses", self._handle_responses)
             self._app.router.add_get("/v1/responses/{response_id}", self._handle_get_response)
             self._app.router.add_delete("/v1/responses/{response_id}", self._handle_delete_response)

@@ -1255,6 +1255,55 @@ class TestBuildSystemPrompt:
         prompt = agent._build_system_prompt(system_message="Custom instruction")
         assert "Custom instruction" in prompt
 
+    def test_minimal_system_prompt_skips_default_identity(self):
+        with (
+            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("hotel_search")),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+        ):
+            agent = AIAgent(
+                api_key="test-k...7890",
+                base_url="https://openrouter.ai/api/v1",
+                quiet_mode=True,
+                skip_context_files=True,
+                minimal_system_prompt=True,
+                skip_memory=True,
+                enabled_toolsets=["hotel"],
+            )
+            prompt = agent._build_system_prompt(system_message="enterprise_role=user")
+
+        assert DEFAULT_AGENT_IDENTITY not in prompt
+        assert "enterprise_role=user" in prompt
+        assert "hotel_search" in prompt
+        assert len(prompt) < 2000
+
+    def test_minimal_system_prompt_keeps_user_profile(self):
+        class _Store:
+            def format_for_system_prompt(self, target):
+                if target == "user":
+                    return "USER PROFILE: prefers quiet rooms"
+                return None
+
+        with (
+            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("hotel_search")),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+        ):
+            agent = AIAgent(
+                api_key="test-k...7890",
+                base_url="https://openrouter.ai/api/v1",
+                quiet_mode=True,
+                skip_context_files=True,
+                minimal_system_prompt=True,
+                skip_memory=True,
+                enabled_toolsets=["hotel"],
+            )
+            agent._memory_store = _Store()
+            agent._user_profile_enabled = True
+            prompt = agent._build_system_prompt(system_message="enterprise_role=user")
+
+        assert "USER PROFILE: prefers quiet rooms" in prompt
+
     def test_memory_guidance_when_memory_tool_loaded(self, agent_with_memory_tool):
         from agent.prompt_builder import MEMORY_GUIDANCE
 

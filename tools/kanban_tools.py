@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from agent.redact import redact_sensitive_text
@@ -76,6 +77,14 @@ def _check_kanban_mode() -> bool:
     """
     if os.environ.get("HERMES_KANBAN_TASK"):
         return True
+    try:
+        from tools.enterprise_context import get_current_enterprise_context
+
+        allowed = get_current_enterprise_context().get("allowed_capabilities") or []
+        if "kanban" in {str(item).strip() for item in allowed}:
+            return True
+    except Exception:
+        pass
     return _profile_has_kanban_toolset()
 
 
@@ -90,6 +99,14 @@ def _check_kanban_orchestrator_mode() -> bool:
     """
     if os.environ.get("HERMES_KANBAN_TASK"):
         return False
+    try:
+        from tools.enterprise_context import get_current_enterprise_context
+
+        allowed = get_current_enterprise_context().get("allowed_capabilities") or []
+        if "kanban" in {str(item).strip() for item in allowed}:
+            return True
+    except Exception:
+        pass
     return _profile_has_kanban_toolset()
 
 
@@ -176,6 +193,15 @@ def _connect(board: Optional[str] = None):
     the env-pinned active board without restarting Hermes.
     """
     from hermes_cli import kanban_db as kb
+    if board is None:
+        try:
+            from tools.enterprise_context import get_current_enterprise_context
+
+            kanban_db_path = get_current_enterprise_context().get("kanban_db_path")
+            if kanban_db_path:
+                return kb, kb.connect(db_path=Path(str(kanban_db_path)))
+        except Exception:
+            pass
     return kb, kb.connect(board=board)
 
 

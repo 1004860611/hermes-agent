@@ -8,7 +8,7 @@
 # inside the container (every Hermes runtime path runs under
 # ``s6-setuidgid hermes``). But s6-supervise creates each service's
 # ``supervise/`` and top-level ``event/`` directory with mode 0700
-# owned by its effective UID — which is root, because s6-supervise
+# owned by its effective UID 鈥?which is root, because s6-supervise
 # is spawned by s6-svscan running as PID 1. So unprivileged clients
 # get EACCES on every probe / control call against the slot.
 #
@@ -24,7 +24,7 @@
 # 2. For STATIC s6-rc services (dashboard, main-hermes) declared at
 #    image-build time under /etc/s6-overlay/s6-rc.d/*: these are
 #    compiled by s6-rc at boot, and s6-supervise spawns BEFORE
-#    cont-init.d gets to run — so by the time we're here, the
+#    cont-init.d gets to run 鈥?so by the time we're here, the
 #    supervise/ tree is already there as root:root 0700. We chown
 #    it here. s6-supervise will keep using the same files; it never
 #    re-asserts ownership on a running service.
@@ -32,7 +32,7 @@
 # This script runs as root after 01-hermes-setup but before
 # 02-reconcile-profiles, so the chowns are settled before the
 # Python reconciler walks the scandir. Lexicographic ordering
-# guarantees this — the suffix is unusual because we want to slot
+# guarantees this 鈥?the suffix is unusual because we want to slot
 # in between 01 and the existing 02-reconcile-profiles without
 # renumbering both (which would be a churn-noise patch on its own).
 
@@ -61,7 +61,7 @@ for svc in "$SVC_ROOT"/*; do
             ;;
     esac
 
-    # supervise/ tree — needed by s6-svstat / s6-svc.
+    # supervise/ tree 鈥?needed by s6-svstat / s6-svc.
     if [ -d "$svc/supervise" ]; then
         chown -R hermes:hermes "$svc/supervise" 2>/dev/null || \
             echo "[supervise-perms] could not chown $svc/supervise"
@@ -78,7 +78,7 @@ for svc in "$SVC_ROOT"/*; do
         fi
     fi
 
-    # Top-level event/ dir — s6-svlisten1 / s6-svwait subscribe here.
+    # Top-level event/ dir 鈥?s6-svlisten1 / s6-svwait subscribe here.
     if [ -d "$svc/event" ]; then
         chown hermes:hermes "$svc/event" 2>/dev/null || \
             echo "[supervise-perms] could not chown $svc/event"
