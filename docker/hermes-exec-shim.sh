@@ -1,18 +1,18 @@
 #!/bin/sh
 # shellcheck shell=sh
-# /opt/hermes/bin/hermes 鈥?`docker exec` privilege-drop shim.
+# /opt/hermes/bin/hermes — `docker exec` privilege-drop shim.
 #
 # Background
 # ----------
 # The s6 image runs the supervised gateway/main process as the unprivileged
 # `hermes` user (UID 10000). When an operator runs `docker exec <c> hermes ...`
 # the default UID is root (0), and any file the command writes under
-# $HERMES_HOME 鈥?auth.json, .env, config.yaml 鈥?ends up root-owned and
+# $HERMES_HOME — auth.json, .env, config.yaml — ends up root-owned and
 # unreadable to the supervised gateway. The most common manifestation: the
 # user runs `docker exec <c> hermes login`, this writes
 # /opt/data/auth.json as root:root mode 0600, and from then on the gateway
 # returns "Provider authentication failed: Hermes is not logged into Nous
-# Portal" on every incoming message 鈥?even though `docker exec <c> hermes
+# Portal" on every incoming message — even though `docker exec <c> hermes
 # chat -q ping` (also running as root) succeeds because root happens to be
 # able to read its own root-owned file. See systematic-debugging skill
 # notes attached to this fix.
@@ -23,8 +23,8 @@
 # When invoked as root, it drops to the hermes user (via s6-setuidgid)
 # before exec'ing the real venv binary, so anything that writes under
 # $HERMES_HOME is uid-aligned with the supervised processes. When invoked
-# as any non-root UID 鈥?including the supervised processes themselves,
-# `docker exec --user hermes`, kanban subagents, etc. 鈥?it short-circuits
+# as any non-root UID — including the supervised processes themselves,
+# `docker exec --user hermes`, kanban subagents, etc. — it short-circuits
 # straight to the venv binary with no privilege change. Net: one extra
 # fork on the docker-exec-as-root path, zero behavioral change on every
 # other path.
@@ -35,7 +35,7 @@
 #
 # Opt-out: set HERMES_DOCKER_EXEC_AS_ROOT=1 (1/true/yes, case-insensitive)
 # to keep running as root. Reserved for diagnostic sessions where the
-# operator deliberately wants root semantics 鈥?e.g. inspecting root-only
+# operator deliberately wants root semantics — e.g. inspecting root-only
 # state via the hermes CLI. Default is to drop.
 
 set -e

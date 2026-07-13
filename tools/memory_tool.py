@@ -127,17 +127,11 @@ class MemoryStore:
     # turn to budget exhaustion and suppress the user's reply (issue #42405).
     _MAX_CONSOLIDATION_FAILURES_PER_TURN = 3
 
-    def __init__(
-        self,
-        memory_char_limit: int = 2200,
-        user_char_limit: int = 1375,
-        memory_dir: Optional[Path | str] = None,
-    ):
+    def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375):
         self.memory_entries: List[str] = []
         self.user_entries: List[str] = []
         self.memory_char_limit = memory_char_limit
         self.user_char_limit = user_char_limit
-        self.memory_dir = Path(memory_dir) if memory_dir else None
         # Frozen snapshot for system prompt -- set once at load_from_disk()
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
         # Per-turn counter of failed at-capacity consolidation attempts; reset
@@ -171,9 +165,6 @@ class MemoryStore:
             ),
         }
 
-    def _memory_dir(self) -> Path:
-        return self.memory_dir or get_memory_dir()
-
     def load_from_disk(self):
         """Load entries from MEMORY.md and USER.md, capture system prompt snapshot.
 
@@ -191,7 +182,7 @@ class MemoryStore:
         Scanning is deterministic from disk bytes, so the snapshot remains
         stable for the entire session (prefix-cache invariant holds).
         """
-        mem_dir = self._memory_dir()
+        mem_dir = get_memory_dir()
         mem_dir.mkdir(parents=True, exist_ok=True)
 
         self.memory_entries = self._read_file(mem_dir / "MEMORY.md")
@@ -286,8 +277,9 @@ class MemoryStore:
                     pass
             fd.close()
 
-    def _path_for(self, target: str) -> Path:
-        mem_dir = self._memory_dir()
+    @staticmethod
+    def _path_for(target: str) -> Path:
+        mem_dir = get_memory_dir()
         if target == "user":
             return mem_dir / "USER.md"
         return mem_dir / "MEMORY.md"
@@ -316,7 +308,7 @@ class MemoryStore:
 
     def save_to_disk(self, target: str):
         """Persist entries to the appropriate file. Called after every mutation."""
-        self._memory_dir().mkdir(parents=True, exist_ok=True)
+        get_memory_dir().mkdir(parents=True, exist_ok=True)
         self._write_file(self._path_for(target), self._entries_for(target))
 
     def _entries_for(self, target: str) -> List[str]:

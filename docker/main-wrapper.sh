@@ -1,6 +1,6 @@
 #!/command/with-contenv sh
 # shellcheck shell=sh
-# /opt/hermes/docker/main-wrapper.sh 鈥?wraps the container's CMD with
+# /opt/hermes/docker/main-wrapper.sh — wraps the container's CMD with
 # the same argument-routing logic the pre-s6 entrypoint.sh used. Runs
 # as /init's "main program" (Docker CMD) so it inherits stdin/stdout/
 # stderr from the container.
@@ -12,9 +12,9 @@
 # what s6-supervised services use too (see main-hermes/run).
 #
 # Routing:
-#   no args                       鈫?exec `hermes` (the default)
-#   first arg is an executable    鈫?exec it directly (sleep, bash, sh, 鈥?
-#   first arg is anything else    鈫?exec `hermes <args>` (subcommand passthrough)
+#   no args                       → exec `hermes` (the default)
+#   first arg is an executable    → exec it directly (sleep, bash, sh, …)
+#   first arg is anything else    → exec `hermes <args>` (subcommand passthrough)
 #
 # Drop to hermes via s6-setuidgid, but skip it when already non-root.
 set -e
@@ -31,7 +31,7 @@ drop() { [ "$(id -u)" = 0 ] && set -- s6-setuidgid hermes "$@"; exec "$@"; }
 cur_uid="$(id -u)"
 if [ "$cur_uid" != 0 ] && [ "$cur_uid" != "$(id -u hermes)" ]; then
     cat >&2 <<EOF
-[hermes] ERROR: container started with --user $cur_uid (an arbitrary, non-hermes UID) 鈥?not supported.
+[hermes] ERROR: container started with --user $cur_uid (an arbitrary, non-hermes UID) — not supported.
 
 To make container-written files match your HOST user, don't use --user.
 Start as root (the default) and pass your host UID/GID instead:
@@ -43,7 +43,7 @@ NAS users (Synology / unRAID / UGOS) can use the PUID/PGID aliases:
     docker run -e PUID=\$(id -u) -e PGID=\$(id -g) ...
 
 The image remaps the hermes user to that UID/GID at boot and chowns the data
-volume, so files land owned by your host user 鈥?the same outcome --user gave,
+volume, so files land owned by your host user — the same outcome --user gave,
 without breaking the s6 supervision tree.
 EOF
     exit 1
@@ -74,7 +74,7 @@ if [ $# -eq 0 ]; then
 fi
 
 if command -v "$1" >/dev/null 2>&1; then
-    # Bare executable 鈥?pass through directly.
+    # Bare executable — pass through directly.
     drop "$@"
 fi
 

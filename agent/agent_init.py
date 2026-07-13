@@ -318,10 +318,7 @@ def init_agent(
     gateway_session_key: str = None,
     skip_context_files: bool = False,
     load_soul_identity: bool = False,
-    minimal_system_prompt: bool = False,
     skip_memory: bool = False,
-    memory_dir: str = None,
-    workspace_home: str = None,
     session_db=None,
     parent_session_id: str = None,
     iteration_budget: "IterationBudget" = None,
@@ -381,8 +378,6 @@ def init_agent(
         load_soul_identity (bool): If True, still use ~/.hermes/SOUL.md as the primary
             identity even when skip_context_files=True. Project context files from the cwd
             remain skipped.
-        minimal_system_prompt (bool): If True, build a compact runtime prompt for constrained
-            service integrations that only need tool-use discipline and caller-provided context.
     """
     _install_safe_stdio()
 
@@ -406,7 +401,6 @@ def init_agent(
     agent._chat_type = chat_type
     agent._thread_id = thread_id
     agent._gateway_session_key = gateway_session_key  # Stable per-chat key (e.g. agent:main:telegram:dm:123)
-    agent._workspace_home = workspace_home
     # Pluggable print function — CLI replaces this with _cprint so that
     # raw ANSI status lines are routed through prompt_toolkit's renderer
     # instead of going directly to stdout where patch_stdout's StdoutProxy
@@ -416,7 +410,6 @@ def init_agent(
     agent.memory_notifications = "on"  # Memory update notifications: "off", "on", "verbose"
     agent.skip_context_files = skip_context_files
     agent.load_soul_identity = load_soul_identity
-    agent.minimal_system_prompt = minimal_system_prompt
     agent.pass_session_id = pass_session_id
     agent._credential_pool = credential_pool
     agent.log_prefix_chars = log_prefix_chars
@@ -1348,7 +1341,6 @@ def init_agent(
                 agent._memory_store = MemoryStore(
                     memory_char_limit=mem_config.get("memory_char_limit", 2200),
                     user_char_limit=mem_config.get("user_char_limit", 1375),
-                    memory_dir=memory_dir,
                 )
                 agent._memory_store.load_from_disk()
         except Exception:
@@ -1377,8 +1369,6 @@ def init_agent(
                         "hermes_home": str(get_hermes_home()),
                         "agent_context": "primary",
                     }
-                    if workspace_home:
-                        _init_kwargs["workspace_home"] = workspace_home
                     if _init_kwargs["platform"] == "cli":
                         _init_kwargs["warning_callback"] = agent._emit_warning
                         _init_kwargs["status_callback"] = agent._emit_status

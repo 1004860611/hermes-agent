@@ -2,7 +2,7 @@
 # s6-overlay shim. The real logic lives in docker/stage2-hook.sh, invoked
 # by /etc/cont-init.d/01-hermes-setup (installed by the Dockerfile). This
 # file exists so external references to docker/entrypoint.sh still work,
-# but it's no longer the ENTRYPOINT 鈥?/init is.
+# but it's no longer the ENTRYPOINT — /init is.
 #
 # When called directly (e.g. by an old wrapper script that hard-coded
 # docker/entrypoint.sh as the container ENTRYPOINT, or by an external
@@ -22,6 +22,6 @@ echo "[hermes] WARNING: docker/entrypoint.sh is a deprecated shim under " \
     "s6-overlay. The container's real ENTRYPOINT is /init + " \
     "main-wrapper.sh; this script only runs the stage2 cont-init hook " \
     "and does NOT exec the CMD. If you hard-coded docker/entrypoint.sh " \
-    "as your ENTRYPOINT, drop the override 鈥?docker will use the image's " \
+    "as your ENTRYPOINT, drop the override — docker will use the image's " \
     "default ENTRYPOINT (/init), which handles bootstrap AND CMD." >&2
 exec /opt/hermes/docker/stage2-hook.sh "$@"

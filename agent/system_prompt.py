@@ -165,60 +165,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # we resolve through ``_ra()`` to honor those patches.
     _r = _ra()
 
-    if getattr(agent, "minimal_system_prompt", False):
-        stable_parts: List[str] = [
-            "You are Hermes, an enterprise AI runtime. Be concise, accurate, and useful.",
-        ]
-        if agent.valid_tool_names:
-            stable_parts.append(
-                "When a user request needs live data or an available tool, call the tool instead of guessing. "
-                "Use only tools that are relevant to the request and do not invent tool results."
-            )
-            if "hotel_search" in agent.valid_tool_names:
-                stable_parts.append(
-                    "For live hotel availability, rates, DBS hotel searches, destination searches, "
-                    "exact hotel searches, or date/rate comparisons, use hotel_search. If hotel_search "
-                    "returns ok=false with userMessage/modelGuidance, ask the user for the missing or "
-                    "narrowing information instead of treating it as a system failure."
-                )
-        context_parts: List[str] = []
-        if system_message is not None:
-            context_parts.append(system_message)
-
-        from hermes_time import now as _hermes_now
-        now = _hermes_now()
-        volatile_parts: List[str] = []
-        if agent._memory_store:
-            if agent._memory_enabled:
-                mem_block = agent._memory_store.format_for_system_prompt("memory")
-                if mem_block:
-                    volatile_parts.append(mem_block)
-            if agent._user_profile_enabled:
-                user_block = agent._memory_store.format_for_system_prompt("user")
-                if user_block:
-                    volatile_parts.append(user_block)
-        if agent._memory_manager:
-            try:
-                _ext_mem_block = agent._memory_manager.build_system_prompt()
-                if _ext_mem_block:
-                    volatile_parts.append(_ext_mem_block)
-            except Exception:
-                pass
-
-        volatile_lines = [f"Conversation started: {now.strftime('%A, %B %d, %Y')}"]
-        if agent.pass_session_id and agent.session_id:
-            volatile_lines.append(f"Session ID: {agent.session_id}")
-        if agent.model:
-            volatile_lines.append(f"Model: {agent.model}")
-        if agent.provider:
-            volatile_lines.append(f"Provider: {agent.provider}")
-        volatile_parts.append("\n".join(volatile_lines))
-        return {
-            "stable": "\n\n".join(p.strip() for p in stable_parts if p and p.strip()),
-            "context": "\n\n".join(p.strip() for p in context_parts if p and p.strip()),
-            "volatile": "\n\n".join(p.strip() for p in volatile_parts if p and p.strip()),
-        }
-
     # Resolve the model's context window once so context-file caps can scale
     # to it (dynamic cap — see prompt_builder._dynamic_context_file_max_chars).
     # None falls back to the historical flat default. This value is stable for

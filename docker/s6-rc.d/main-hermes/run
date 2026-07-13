@@ -2,10 +2,10 @@
 # shellcheck shell=sh
 # Main hermes service.
 #
-# IMPORTANT 鈥?this is NOT how the user's CMD runs.
+# IMPORTANT — this is NOT how the user's CMD runs.
 #
 # We chose Architecture B from the plan: the container's CMD (the bare
-# command the user passes to `docker run <image> 鈥) runs as /init's
+# command the user passes to `docker run <image> …`) runs as /init's
 # "main program" via Docker's CMD mechanism, NOT as an s6-supervised
 # service. This is the canonical s6-overlay pattern for "container
 # exits when the program exits" semantics, and it lets us preserve

@@ -12,7 +12,7 @@
 # $HERMES_HOME/profiles/ live on the persistent VOLUME. This script
 # walks the persistent profiles, recreates the s6 service slots,
 # and auto-starts only those whose last recorded state was
-# `running` 鈥?see hermes_cli/container_boot.py.
+# `running` — see hermes_cli/container_boot.py.
 #
 # Phase 4 also needs hermes-user writes to /run/service/ (so the
 # profile create/delete hooks can register/unregister at runtime),

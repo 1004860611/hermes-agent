@@ -9,7 +9,7 @@
 case "${HERMES_DASHBOARD:-}" in
     1|true|TRUE|True|yes|YES|Yes) ;;
     *)
-        # Exit 0; the finish script will exit 125 鈫?s6-supervise won't
+        # Exit 0; the finish script will exit 125 → s6-supervise won't
         # restart us and the slot reports down. Using a clean exit
         # (rather than `exec sleep infinity`) means s6-svstat reflects
         # reality: when HERMES_DASHBOARD is unset, the service is NOT

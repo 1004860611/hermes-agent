@@ -257,12 +257,6 @@ TOOLSETS = {
         "includes": []
     },
 
-    "hotel": {
-        "description": "Enterprise hotel search tools backed by the hotel system API",
-        "tools": ["hotel_search"],
-        "includes": []
-    },
-
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "

@@ -1,5 +1,5 @@
 #!/bin/sh
-# s6-overlay stage2 hook éˆ?runs as root after the supervision tree is
+# s6-overlay stage2 hook â€” runs as root after the supervision tree is
 # up but before user services start. Handles UID/GID remap, volume
 # chown, config seeding, and skills sync.
 #
@@ -10,7 +10,7 @@
 # Dockerfile. The shim at docker/entrypoint.sh forwards to this script
 # so external references to docker/entrypoint.sh still work.
 #
-# NB: cont-init.d scripts run with no arguments éˆ?the user's CMD args
+# NB: cont-init.d scripts run with no arguments â€” the user's CMD args
 # are NOT visible here. That's fine: we use Architecture B (s6-overlay
 # main-program model), so main-wrapper.sh runs the CMD with full
 # stdin/stdout/stderr access and handles arg parsing there.
@@ -37,7 +37,7 @@ as_hermes() { [ "$(id -u)" = 0 ] || { "$@"; return; }; s6-setuidgid hermes "$@";
 # supervision-tree side of this.
 #
 # The supported way to match host-side ownership is to start as root (the image
-# default) and pass HERMES_UID/HERMES_GID éˆ?or the PUID/PGID aliases éˆ?which the
+# default) and pass HERMES_UID/HERMES_GID â€” or the PUID/PGID aliases â€” which the
 # remap block below consumes via usermod/groupmod + targeted chown. That gives
 # the exact same outcome (files owned by your host UID) without breaking s6.
 #
@@ -54,7 +54,7 @@ if [ "$cur_uid" != 0 ] && [ "$cur_uid" != "$(id -u hermes)" ]; then
 This is not supported under the s6-overlay image. The container bootstrap
 (UID remap, data-volume ownership, config seeding) needs to start as root,
 and the baked /opt/hermes install tree is intentionally root-owned and
-non-writable, so a pinned --user UID cannot repair startup state éˆ?startup
+non-writable, so a pinned --user UID cannot repair startup state â€” startup
 will fail.
 
 To make container-written files match your HOST user, DON'T use --user.
@@ -67,7 +67,7 @@ NAS users (Synology / unRAID / UGOS) can use the PUID/PGID aliases:
     docker run -e PUID=\$(id -u) -e PGID=\$(id -g) ...
 
 The image remaps the hermes user to that UID/GID at boot and chowns the data
-volume accordingly, so files land owned by your host user éˆ?the same outcome
+volume accordingly, so files land owned by your host user â€” the same outcome
 --user was being used for, without breaking the supervision tree.
 EOF
     exit 1
@@ -81,7 +81,7 @@ fi
 # root can create (e.g. `HERMES_HOME=/home/hermes/.hermes` in a Compose
 # file, or any path under a fresh / not pre-populated by the image)
 # fail on first boot with `mkdir: cannot create directory '/...': Permission
-# denied` and the cont-init hook exits non-zero. Idempotent éˆ?`mkdir -p`
+# denied` and the cont-init hook exits non-zero. Idempotent â€” `mkdir -p`
 # is a no-op if the dir already exists. (#18482, salvages #18488)
 mkdir -p "$HERMES_HOME"
 
@@ -139,11 +139,11 @@ fi
 # restarts. Skipped silently when no socket is bind-mounted.
 #
 # Handles the awkward corner cases:
-#   - socket owned by GID 0 (root) éˆ?some Podman setups; usermod -aG root
+#   - socket owned by GID 0 (root) â€” some Podman setups; usermod -aG root
 #   - socket GID already used by a known container group (e.g. tty=5):
 #     reuse that group's name rather than creating a duplicate
 #   - hermes is already a member of the right group (idempotent restart)
-#   - chown/groupadd failures under rootless containers éˆ?non-fatal
+#   - chown/groupadd failures under rootless containers â€” non-fatal
 for sock in /var/run/docker.sock /run/docker.sock; do
     [ -S "$sock" ] || continue
     sock_gid=$(stat -c '%g' "$sock" 2>/dev/null) || continue
@@ -173,7 +173,7 @@ done
 
 # --- Fix ownership of data volume ---
 # When HERMES_UID is remapped or the top-level $HERMES_HOME isn't owned by
-# the runtime hermes UID, restore ownership to hermes éˆ?but ONLY for the
+# the runtime hermes UID, restore ownership to hermes â€” but ONLY for the
 # directories hermes actually writes to. The full $HERMES_HOME may be a
 # host-mounted bind containing unrelated user files; `chown -R` would
 # silently destroy host ownership of those (see issue #19788).
@@ -205,7 +205,7 @@ refuse_symlinked_path() {
     action="$1"
     target="$2"
     if path_has_symlink_component "$target"; then
-        echo "[stage2] Warning: refusing $action through symlinked path $target â€?continuing"
+        echo "[stage2] Warning: refusing $action through symlinked path $target â€” continuing"
         return 0
     fi
     return 1
@@ -217,7 +217,7 @@ chown_hermes_tree() {
         return 0
     fi
     chown -R hermes:hermes "$target" 2>/dev/null || \
-        echo "[stage2] Warning: chown $target failed (rootless container?) â€?continuing"
+        echo "[stage2] Warning: chown $target failed (rootless container?) â€” continuing"
 }
 
 needs_chown=false
@@ -227,7 +227,7 @@ fi
 if [ "$needs_chown" = true ]; then
     echo "[stage2] Fixing ownership of $HERMES_HOME (targeted) to hermes ($actual_hermes_uid)"
     # In rootless Podman the container's "root" is mapped to an
-    # unprivileged host UID éˆ?chown will fail. That's fine: the volume
+    # unprivileged host UID â€” chown will fail. That's fine: the volume
     # is already owned by the mapped user on the host side.
     #
     # Top-level $HERMES_HOME: chown the directory itself (not its contents)
@@ -237,7 +237,7 @@ if [ "$needs_chown" = true ]; then
         :
     else
         chown hermes:hermes "$HERMES_HOME" 2>/dev/null || \
-            echo "[stage2] Warning: chown $HERMES_HOME failed (rootless container?) â€?continuing"
+            echo "[stage2] Warning: chown $HERMES_HOME failed (rootless container?) â€” continuing"
     fi
     # Hermes-owned subdirs: recursive chown is safe here because these are
     # created and managed exclusively by hermes (see the s6-setuidgid mkdir
@@ -261,7 +261,7 @@ fi
 # install into the sealed venv, so they are redirected to the writable
 # $HERMES_HOME/lazy-packages dir on the data volume (Dockerfile sets
 # HERMES_LAZY_INSTALL_TARGET). That dir is appended to the END of sys.path,
-# so a package installed there can only ADD modules â€?it can never shadow or
+# so a package installed there can only ADD modules â€” it can never shadow or
 # break a core module, which is what keeps the sealed-venv guarantee intact
 # even though installs are re-enabled. The dir is seeded + chowned to hermes
 # in the mkdir/chown blocks above so first-use installs succeed as the
@@ -270,7 +270,7 @@ fi
 
 # Always reset ownership of $HERMES_HOME/profiles to hermes on every
 # boot. Profile dirs and files can land owned by root when commands
-# are invoked via `docker exec <container> hermes éˆ¥î›† (which defaults
+# are invoked via `docker exec <container> hermes â€¦` (which defaults
 # to root unless `-u` is passed), and that breaks the cont-init
 # reconciler (02-reconcile-profiles) which runs as hermes and walks
 # the profiles dir. Idempotent; skipped on rootless containers where
@@ -293,7 +293,7 @@ fi
 # approval files that the unprivileged hermes gateway cannot read,
 # silently leaving the approved user unauthorized (#10270). The targeted
 # data-volume chown above only runs when the top-level $HERMES_HOME is
-# mis-owned, so warm boots skip it â€?this block makes a container restart
+# mis-owned, so warm boots skip it â€” this block makes a container restart
 # self-heal. Tiny directory (a handful of small JSON files), so the cost
 # is negligible.
 if [ -d "$HERMES_HOME/platforms/pairing" ]; then
@@ -308,14 +308,14 @@ fi
 # The targeted data-volume chown above only covers hermes-owned
 # *subdirectories*; loose state files living directly under $HERMES_HOME
 # are missed. When those files are created or rewritten by
-# `docker exec <container> hermes éˆ¥î›† (root unless `-u` is passed) they
+# `docker exec <container> hermes â€¦` (root unless `-u` is passed) they
 # land root-owned, and the unprivileged hermes runtime then hits
 # PermissionError on next startup (e.g. gateway.lock / state.db /
 # auth.json), producing a gateway restart loop.
 #
 # We use an explicit allowlist rather than a blanket `find -user root`
 # sweep so host-owned files in a bind-mounted $HERMES_HOME are never
-# touched éˆ?same targeted-ownership contract as the subdir chown above
+# touched â€” same targeted-ownership contract as the subdir chown above
 # (issue #19788, PR #19795). The list mirrors the top-level *file*
 # entries of hermes_cli.profile_distribution.USER_OWNED_EXCLUDE plus the
 # runtime lock files; keep them in sync if that set changes.
@@ -352,7 +352,7 @@ fi
 # under rootless Podman where chown back to root would fail).
 #
 # Use direct `mkdir -p` invocation (no `sh -c "..."` wrapper) so the
-# shell isn't a second interpreter éˆ?defends against $HERMES_HOME values
+# shell isn't a second interpreter â€” defends against $HERMES_HOME values
 # containing shell metacharacters. PR #30136 review item O2.
 as_hermes mkdir -p \
     "$HERMES_HOME/backups" \
@@ -407,7 +407,7 @@ seed_one ".env" ".env.example"
 seed_one "config.yaml" "cli-config.yaml.example"
 seed_one "SOUL.md" "docker/SOUL.md"
 
-# .env holds API keys and secrets éˆ?restrict to owner-only access. Applied
+# .env holds API keys and secrets â€” restrict to owner-only access. Applied
 # unconditionally (not only on first-seed) so a host-mounted .env that was
 # created with a permissive umask gets tightened on every container start.
 if [ -f "$HERMES_HOME/.env" ]; then
@@ -431,7 +431,7 @@ if [ -f "$HERMES_HOME/config.yaml" ]; then
 fi
 
 # auth.json: bootstrap from env on first boot only. Same semantics as the
-# pre-s6 entrypoint éˆ?the [ ! -f ] guard is critical to avoid clobbering
+# pre-s6 entrypoint â€” the [ ! -f ] guard is critical to avoid clobbering
 # rotated refresh tokens on container restart.
 if [ ! -f "$HERMES_HOME/auth.json" ] && [ -n "${HERMES_AUTH_JSON_BOOTSTRAP:-}" ]; then
     if refuse_symlinked_path "seed" "$HERMES_HOME/auth.json"; then
@@ -448,7 +448,7 @@ fi
 # The [ ! -f ] guard above deliberately refuses to clobber an existing
 # auth.json, so a container whose Nous bootstrap session took a terminal
 # invalid_grant (tokens cleared, providers.nous.last_auth_error.relogin_required
-# stamped) can NOT recover from a plain restart â€?it stays unauthenticated until
+# stamped) can NOT recover from a plain restart â€” it stays unauthenticated until
 # the credential is replaced. An orchestrator that manages the container can
 # supply a freshly-issued session via HERMES_AUTH_JSON_REBOOTSTRAP (distinct
 # from the create-only *_BOOTSTRAP var); this helper swaps ONLY the
@@ -472,8 +472,8 @@ fi
 # fresh volume. Same first-boot-only env-seed pattern as auth.json above.
 #
 # On a blank volume there is no gateway_state.json, so the boot reconciler
-# (cont-init.d/02-reconcile-profiles éˆ?container_boot.reconcile_profile_gateways)
-# registers the gateway-default s6 slot but leaves it DOWN éˆ?it only
+# (cont-init.d/02-reconcile-profiles â†’ container_boot.reconcile_profile_gateways)
+# registers the gateway-default s6 slot but leaves it DOWN â€” it only
 # auto-starts when the last recorded state was "running". That means a
 # freshly-provisioned container comes up with the gateway down until
 # someone starts it (e.g. from the dashboard). An orchestrator that
@@ -486,7 +486,7 @@ fi
 # This is a generic container contract, not specific to any host: it seeds
 # the SAME gateway_state.json the reconciler already consults, exactly as
 # HERMES_AUTH_JSON_BOOTSTRAP seeds auth.json. The [ ! -f ] guard is the
-# load-bearing part éˆ?on every subsequent boot the persisted state wins,
+# load-bearing part â€” on every subsequent boot the persisted state wins,
 # so a gateway the operator deliberately stopped stays stopped across
 # restarts and we never clobber real runtime state.
 #
@@ -521,7 +521,7 @@ fi
 # a ``chromium_headless_shell-<build>/chrome-headless-shell-linux64/``
 # directory. agent-browser (the runtime CLI Hermes spawns for the
 # browser tool) doesn't recognise this layout in its own cache scan and
-# fails with "Auto-launch failed: Chrome not found" éˆ?even though the
+# fails with "Auto-launch failed: Chrome not found" â€” even though the
 # binary is right there (#15697).
 #
 # Fix: locate the binary at boot and export ``AGENT_BROWSER_EXECUTABLE_PATH``
