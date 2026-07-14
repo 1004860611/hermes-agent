@@ -1,0 +1,327 @@
+"""Non-blocking, manifest-backed DFM run lifecycle."""
+
+from __future__ import annotations
+
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
+from datetime import datetime, timezone
+from pathlib import Path
+import os
+from threading import RLock
+from typing import Any
+from uuid import uuid4
+
+from ..analyzers.base import AnalyzerContext, CancellationToken
+from ..analyzers.registry import AnalyzerRegistry
+from ..config import DFMConfig
+from ..contracts import ArtifactRecord, ProjectManifest, RunRecord, RunStatus, ensure_run_transition
+from ..errors import DFMError
+from ..project.manifest import ManifestStore
+from ..project.workspace import DFMWorkspace
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class JobManager:
+    def __init__(
+        self,
+        workspace: DFMWorkspace,
+        registry: AnalyzerRegistry,
+        config: DFMConfig,
+        *,
+        executor: Any | None = None,
+        reconcile: bool = True,
+    ) -> None:
+        self.workspace = workspace
+        self.registry = registry
+        self.config = config
+        self._executor = executor or ThreadPoolExecutor(
+            max_workers=config.max_concurrent_runs,
+            thread_name_prefix="dfm",
+        )
+        self._futures: dict[str, Future] = {}
+        self._tokens: dict[str, CancellationToken] = {}
+        self._lock = RLock()
+        self.runtime_id = f"runtime_{uuid4().hex[:16]}"
+        if reconcile:
+            self.reconcile_incomplete_runs()
+
+    def _store(self, project_id: str) -> ManifestStore:
+        return ManifestStore(self.workspace.project_dir(project_id))
+
+    @staticmethod
+    def _find_run(manifest: ProjectManifest, run_id: str) -> RunRecord:
+        for run in manifest.runs:
+            if run.run_id == run_id:
+                return run
+        raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
+
+    def status(self, project_id: str, run_id: str) -> RunRecord:
+        return self._find_run(self._store(project_id).load(), run_id)
+
+    def start(
+        self,
+        project_id: str,
+        analyzer_key: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> RunRecord:
+        store = self._store(project_id)
+        manifest = store.load()
+        if idempotency_key:
+            for existing in manifest.runs:
+                if existing.idempotency_key == idempotency_key:
+                    return existing
+        analyzer = self.registry.get(analyzer_key)
+        context = AnalyzerContext(
+            project_id,
+            self.workspace.project_dir(project_id),
+            manifest.input_mode,
+            manifest.inputs,
+        )
+        capability = analyzer.capability(context)
+        if capability.status.value != "available":
+            raise DFMError(
+                capability.error_code or capability.status.value,
+                capability.reason,
+                capability.details,
+            )
+
+        with self._lock:
+            active = sum(not future.done() for future in self._futures.values())
+            run_id = f"run_{uuid4().hex[:16]}"
+            now = _utc_now()
+            status = RunStatus.QUEUED if active < self.config.max_concurrent_runs else RunStatus.BLOCKED
+            error = None
+            if status is RunStatus.BLOCKED:
+                error = {"code": "concurrency_limit", "message": "DFM concurrency limit reached."}
+            run = RunRecord(
+                run_id,
+                analyzer.key,
+                analyzer.version,
+                status,
+                now,
+                now,
+                error=error,
+                idempotency_key=idempotency_key,
+                owner_pid=os.getpid(),
+                runtime_id=self.runtime_id,
+            )
+            store.update(lambda current: replace(current, runs=[*current.runs, run], updated_at=now))
+            if status is RunStatus.BLOCKED:
+                return run
+            token = CancellationToken()
+            self._tokens[run_id] = token
+            try:
+                future = self._executor.submit(self._execute, project_id, run_id, analyzer, token)
+            except Exception:
+                self._tokens.pop(run_id, None)
+                self._mark_failure(
+                    project_id,
+                    run_id,
+                    RunStatus.FAILED,
+                    "runtime_submit_failed",
+                    "The DFM runtime could not submit the run.",
+                )
+                return self.status(project_id, run_id)
+            self._futures[run_id] = future
+            future.add_done_callback(lambda _future, rid=run_id: self._forget_future(rid))
+            return run
+
+    def _forget_future(self, run_id: str) -> None:
+        with self._lock:
+            self._futures.pop(run_id, None)
+
+    def _replace_run(self, project_id: str, run_id: str, transform) -> RunRecord:
+        selected: RunRecord | None = None
+
+        def update(manifest: ProjectManifest) -> ProjectManifest:
+            nonlocal selected
+            runs = []
+            for run in manifest.runs:
+                if run.run_id == run_id:
+                    selected = transform(run)
+                    if selected.status is not run.status:
+                        ensure_run_transition(run.status, selected.status)
+                    runs.append(selected)
+                else:
+                    runs.append(run)
+            if selected is None:
+                raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
+            return replace(manifest, runs=runs, updated_at=_utc_now())
+
+        self._store(project_id).update(update)
+        assert selected is not None
+        return selected
+
+    def _execute(self, project_id: str, run_id: str, analyzer, token: CancellationToken) -> None:
+        try:
+            current = self.status(project_id, run_id)
+            if current.status is not RunStatus.QUEUED:
+                return
+            self._replace_run(
+                project_id,
+                run_id,
+                lambda run: replace(run, status=RunStatus.RUNNING, updated_at=_utc_now()),
+            )
+            manifest = self._store(project_id).load()
+            context = AnalyzerContext(
+                project_id,
+                self.workspace.project_dir(project_id),
+                manifest.input_mode,
+                manifest.inputs,
+                run_id,
+            )
+            artifacts = analyzer.run(context, token)
+            checked = [self._validate_artifact(context.project_dir, item) for item in artifacts]
+            self._complete_success(project_id, run_id, checked)
+        except DFMError as exc:
+            status = RunStatus.CANCELLED if exc.code == "run_cancelled" else RunStatus.FAILED
+            self._mark_failure(project_id, run_id, status, exc.code, exc.message)
+        except Exception:
+            self._mark_failure(
+                project_id,
+                run_id,
+                RunStatus.FAILED,
+                "analyzer_failed",
+                "The DFM analyzer failed. Run diagnostics for details.",
+            )
+        finally:
+            with self._lock:
+                self._tokens.pop(run_id, None)
+
+    def _mark_failure(self, project_id: str, run_id: str, status: RunStatus, code: str, message: str) -> None:
+        try:
+            self._replace_run(
+                project_id,
+                run_id,
+                lambda run: run if run.status not in {RunStatus.QUEUED, RunStatus.RUNNING} else replace(
+                    run, status=status, updated_at=_utc_now(), error={"code": code, "message": message}
+                ),
+            )
+        except DFMError:
+            return
+
+    def _complete_success(self, project_id: str, run_id: str, artifacts: list[ArtifactRecord]) -> None:
+        now = _utc_now()
+
+        def complete(current: ProjectManifest) -> ProjectManifest:
+            runs = []
+            found = False
+            for run in current.runs:
+                if run.run_id != run_id:
+                    runs.append(run)
+                    continue
+                found = True
+                ensure_run_transition(run.status, RunStatus.SUCCEEDED)
+                runs.append(replace(run, status=RunStatus.SUCCEEDED, updated_at=now, artifacts=artifacts))
+            if not found:
+                raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
+            known = {item.artifact_id for item in current.artifacts}
+            return replace(
+                current,
+                runs=runs,
+                artifacts=[*current.artifacts, *[item for item in artifacts if item.artifact_id not in known]],
+                updated_at=now,
+            )
+
+        self._store(project_id).update(complete)
+
+    @staticmethod
+    def _validate_artifact(project_dir: Path, artifact: ArtifactRecord) -> ArtifactRecord:
+        relative = Path(artifact.relative_path)
+        resolved = (project_dir / relative).resolve()
+        if relative.is_absolute() or not resolved.is_relative_to(project_dir.resolve()) or not resolved.is_file():
+            raise DFMError(
+                "artifact_invalid",
+                "Analyzer returned an invalid artifact path.",
+                {"path": artifact.relative_path},
+            )
+        return artifact
+
+    def cancel(self, project_id: str, run_id: str) -> RunRecord:
+        run = self.status(project_id, run_id)
+        if run.status not in {RunStatus.QUEUED, RunStatus.RUNNING}:
+            return run
+        with self._lock:
+            token = self._tokens.get(run_id)
+            if token:
+                token.cancel()
+            future = self._futures.get(run_id)
+            if run.status is RunStatus.QUEUED and future and future.cancel():
+                return self._replace_run(
+                    project_id,
+                    run_id,
+                    lambda item: replace(item, status=RunStatus.CANCELLED, updated_at=_utc_now()),
+                )
+        return self.status(project_id, run_id)
+
+    def result(self, project_id: str, run_id: str) -> RunRecord:
+        run = self.status(project_id, run_id)
+        if run.status is not RunStatus.SUCCEEDED:
+            raise DFMError(
+                "result_not_ready",
+                "DFM run result is not ready.",
+                {"run_id": run_id, "status": run.status.value},
+            )
+        return run
+
+    def reconcile_incomplete_runs(self) -> None:
+        if not self.workspace.projects_dir.exists():
+            return
+        for project_dir in self.workspace.projects_dir.glob("dfm_*"):
+            store = ManifestStore(project_dir)
+            try:
+                manifest = store.load()
+            except DFMError:
+                continue
+            if not any(
+                run.status in {RunStatus.QUEUED, RunStatus.RUNNING}
+                and not self._pid_is_alive(run.owner_pid)
+                for run in manifest.runs
+            ):
+                continue
+            now = _utc_now()
+            store.update(
+                lambda current: replace(
+                    current,
+                    runs=[
+                        replace(
+                            run,
+                            status=RunStatus.BLOCKED,
+                            updated_at=now,
+                            error={
+                                "code": "runtime_restarted",
+                                "message": "Run was interrupted by a runtime restart.",
+                            },
+                        )
+                        if run.status in {RunStatus.QUEUED, RunStatus.RUNNING}
+                        and not self._pid_is_alive(run.owner_pid)
+                        else run
+                        for run in current.runs
+                    ],
+                    updated_at=now,
+                )
+            )
+
+    @staticmethod
+    def _pid_is_alive(pid: int | None) -> bool:
+        if pid is None:
+            return False
+        if pid == os.getpid():
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
+
+    def shutdown(self) -> None:
+        with self._lock:
+            for token in self._tokens.values():
+                token.cancel()
+        self._executor.shutdown(wait=False, cancel_futures=True)

@@ -3,7 +3,7 @@ title: "DFM Hermes Agent 开发目标与路线图"
 status: active
 date: 2026-07-13
 type: product-development-plan
-target: standalone-hermes-dfm-agent
+target: builtin-hermes-dfm-toolset
 owners: DFM 工程团队
 ---
 # DFM Hermes Agent 开发目标与路线图
@@ -42,7 +42,18 @@ owners: DFM 工程团队
 
 ### 1.4 最终形态
 
-DFM 能力应优先以独立软件包、Hermes 插件或独立智能体仓库实现，并通过 Hermes 的技能、插件或 MCP 等边缘扩展方式接入。这样既能在 `hermes-agent` 环境中使用，也保留后续单独发布 DFM 智能体的可能性，避免把行业专用能力写进 Hermes 核心。
+第一版定位为**当前 Hermes fork 自带的内建 DFM 能力**。它使用 Hermes 已有的工具注册、toolset、技能、配置、会话工作区和 Desktop/Gateway 能力，不另建一套 Agent Loop，也不要求第一天就能脱离 Hermes 单独发布。
+
+DFM 采用“内建代码、按需启用”的方式：
+
+- `tools/dfm_tool.py` 只负责稳定的模型工具 Schema 和 Hermes 适配；
+- 领域实现放在 `tools/dfm/`，不堆入 `run_agent.py`、`model_tools.py` 或 `cli.py`；
+- 工具归属独立的 `dfm` toolset，默认关闭，不加入 `_HERMES_CORE_TOOLS`；
+- 用户通过 `hermes tools` 为指定平台启用 DFM，新会话建立后工具集保持稳定；
+- `skills/manufacturing/dfm-analysis/` 负责分析流程、追问规则和结果表达；
+- OpenCascade、OCR 等重型能力通过分析器接口和可终止运行时隔离。
+
+这种形态允许在当前仓库快速完成端到端闭环，同时保留以后把 `tools/dfm/` 中的纯领域模块抽取为独立软件包或 MCP 服务的可能性，但“可独立发布”不是第一版前置条件。
 
 ## 2. 产品目标与成功标准
 
@@ -57,7 +68,7 @@ DFM 能力应优先以独立软件包、Hermes 插件或独立智能体仓库实
 - 能跨会话恢复项目，区分项目事实、用户偏好、分析结果和未确认假设。
 - 能对每条风险说明：原始证据、测量值、适用规则、阈值、严重程度、置信度和改善建议。
 
-### 2.2 成功标准
+### 2.2 终极成功标准
 
 当一个开发人员只拿到本项目包和测试资料时，应能在不依赖其他业务系统的情况下完成以下闭环：
 
@@ -70,6 +81,19 @@ DFM 能力应优先以独立软件包、Hermes 插件或独立智能体仓库实
 7. 检查证据和风险结论；
 8. 中断后恢复分析；
 9. 导出结构化结果和可读报告。
+
+### 2.3 第一阶段成功标准
+
+第一阶段不要求立即实现上述全部领域算法，而是先验证终极架构可以承载它们：
+
+1. Hermes 可以启用独立的 `dfm` toolset，未启用时 DFM Schema 不进入模型请求；
+2. 可以创建、恢复和查询 profile-aware 的 DFM 项目；
+3. 可以登记 STEP、2D 图纸和混合输入，并得到明确的能力状态；
+4. STEP 分析器尚未接入时返回 `dependency_missing` 或 `not_implemented`，2D/融合模块未实现时返回 `not_implemented` 并附错误码 `unsupported_capability`，不得生成模拟 Finding；
+5. 分析任务具有稳定的 `start/status/cancel/result` 生命周期，长任务不阻塞一次模型工具调用；
+6. 所有项目状态、运行记录和制品引用都可从 Manifest 恢复；
+7. Desktop 现有 `file.attach` 与 Artifacts 页面能够承接输入和结果，不要求先开发 DFM 专用页面；
+8. 真实 STEP 分析器接入时不需要修改工具 Schema、Manifest 主结构或 Desktop 上传协议。
 
 ## 3. 三种输入模式及能力边界
 
@@ -95,6 +119,7 @@ flowchart TB
     end
 
     subgraph H[DFM Hermes Agent：理解与编排层]
+        TA[内建 dfm toolset<br/>dfm_project / dfm_analysis]
         C[对话协调器<br/>意图理解 / 追问 / 恢复]
         P[项目工作区与 Manifest<br/>权威项目状态]
         F[事实融合与冲突检测]
@@ -121,9 +146,11 @@ flowchart TB
     U --> S
     U --> D
     U --> T
-    S --> C
-    D --> C
+    S --> TA
+    D --> TA
     T --> C
+    TA --> C
+    TA <--> P
     C <--> P
     C <--> M
     P --> SI
@@ -157,13 +184,46 @@ flowchart TB
 2. **工程工具负责回答“算出了什么”。** OCR、STEP 解析、壁厚、拔模角、倒扣、距离、规则匹配和风险评分必须由可测试模块执行。
 3. **项目状态不依赖聊天记录。** `project_manifest.json` 是项目事实的权威来源，聊天记录只用于对话连续性。
 4. **风险结论必须有证据链。** 定量结论必须能回溯到输入、测量结果和版本化规则。
-5. **行业能力位于 Hermes 边缘。** 优先使用独立包、插件、技能或 MCP，不为 DFM 修改 Hermes 核心工具集。
+5. **内建但不侵入核心循环。** DFM 可以作为当前 fork 的常驻源码能力，但只能通过独立 toolset 和薄适配器接入；不修改 Agent Loop，不加入 `_HERMES_CORE_TOOLS`，未启用时不向模型发送 DFM Schema。
+6. **会话内工具 Schema 稳定。** 依赖状态变化通过结构化能力状态返回，不在同一会话中反复增删工具；配置变化在新会话或明确重载后生效，以保护提示词缓存。
+7. **未实现能力必须显式失败。** 预留模块可以被注册和查询，但只能返回 `not_implemented`、`unsupported_capability`、`dependency_missing` 等状态，不得返回占位测量或模拟 Finding。
+8. **界面复用 Hermes 现有能力。** Desktop、TUI、CLI 和 Gateway 是交互入口；DFM 领域层只处理规范化输入引用与 artifact，不拥有第二套聊天、上传或会话系统。
+
+### 4.2 Hermes 内建接入方式
+
+第一版提供两个模型工具，二者都归属 `dfm` toolset：
+
+| 工具 | 动作 | 职责 |
+| --- | --- | --- |
+| `dfm_project` | `create`、`add_input`、`status`、`confirm_fact`、`list` | 管理项目、输入、能力状态和用户确认，不执行重型分析 |
+| `dfm_analysis` | `plan`、`start`、`status`、`cancel`、`result` | 管理分析计划与长任务生命周期，返回结构化运行状态和 artifact 引用 |
+
+接入约束：
+
+- `tools/dfm_tool.py` 包含顶层 `registry.register(...)` 调用，以复用 Hermes 当前的自动发现机制；
+- `toolsets.py` 增加独立 `dfm` toolset，但 `_HERMES_CORE_TOOLS` 不包含任何 DFM 工具；
+- `hermes_cli/tools_config.py` 将 `dfm` 展示在 `hermes tools` 中并列入默认关闭集合；
+- 工具 `check_fn` 只做快速、稳定、无副作用的基础可用性检查，不探测网络、不安装依赖，也不因一次临时故障改变会话工具集；
+- OpenCascade/OCR 是否可运行由 `dfm_project status` 和 `dfm_analysis start` 返回的 capability 状态说明；
+- 非机密配置读取 `config.yaml` 的 `dfm.*`，不得新增面向用户的非机密 `HERMES_*` 环境变量。
+
+### 4.3 Desktop 与现有 Gateway 复用
+
+Desktop 已经提供文件选择、拖放、会话附件、远程文件暂存和 Artifacts 页面。DFM 接入按以下方式复用：
+
+1. Desktop 使用现有 `file.attach` 将 STEP/STP、PDF、PNG、JPG 暂存到会话工作区并生成 `@file:` 引用；
+2. Agent 将该引用传给 `dfm_project(add_input)`，DFM intake 校验后复制或登记到项目 `inputs/`；
+3. `dfm_analysis(result)` 返回带 `path`、`artifact`、`result`、`image` 等明确字段的结构化 artifact 列表；
+4. Desktop 现有 Artifacts 页面从工具结果和 Assistant 消息中收集报告、JSON、PNG 和高亮 STEP；
+5. 后续可以增加 DFM 项目状态、Finding 检查器或 3D 预览等结构化侧栏，但不得重写 Desktop 的主聊天、composer、附件和会话传输。
+
+当前 `file.attach` 的远程非图片上传会在 Gateway 内存中解码完整文件。进入生产验收前必须补充通用文件大小上限，或为大型 STEP 增加分块/直传能力；DFM intake 的落盘后校验不能替代上传前的传输层限制。
 
 ## 5. 工作原理与数据流
 
 ### 5.1 主流程
 
-1. **建立项目**：为每次产品评审创建独立项目目录和 `project_manifest.json`。
+1. **建立项目**：`dfm_project(create)` 在当前 Hermes profile 的 DFM 工作区创建独立项目目录和 `project_manifest.json`。
 2. **登记输入**：保存文件哈希、类型、版本、来源和处理状态，识别三种输入模式之一。
 3. **安全预检**：校验路径、扩展名、文件大小、页数和几何复杂度，隔离不可信文件。
 4. **并行提取**：
@@ -172,7 +232,7 @@ flowchart TB
 5. **事实融合**：把用户说明、图纸要求、STEP 几何事实和历史确认项合并，保留来源、置信度和冲突。
 6. **澄清门控**：若某项分析缺少关键条件，生成少量、具体、可回答的问题；答案写回项目事实后继续。
 7. **形成计划**：根据输入模式、目标工艺、材料、特征和可用工具，生成结构化分析计划。
-8. **执行工具**：按依赖顺序调用必要脚本，记录版本、参数、开始结束时间、状态、输出和错误。
+8. **启动运行**：`dfm_analysis(start)` 先持久化 Run，再启动可终止后台任务并立即返回 `run_id`；调用方通过 `status/cancel/result` 管理长任务。
 9. **应用规则**：把测量结果与知识库规则进行确定性匹配和风险计算。
 10. **形成发现**：每条 Finding 绑定测量证据、规则版本、严重程度、置信度和整改建议。
 11. **生成报告**：输出结构化 JSON 和 Markdown，后续可选渲染 HTML/PDF。
@@ -201,8 +261,10 @@ flowchart TB
 
 ## 6. 功能模块
 
-### 6.1 `coordinator`：DFM 对话协调器
+### 6.1 `dfm_tool` 与 `coordinator`：Hermes 适配和对话协调
 
+- 在 `tools/dfm_tool.py` 注册 `dfm_project` 和 `dfm_analysis`，不承载领域算法。
+- 把工具参数转换为 `tools/dfm/` 中的类型化服务调用，并把结果序列化为稳定 JSON。
 - 识别用户是新建、继续、补充资料、纠正事实还是要求重新分析。
 - 控制提取、澄清、计划、执行和报告阶段切换。
 - 仅向用户提出当前最关键的问题。
@@ -272,6 +334,22 @@ flowchart TB
 - 明确区分已确认事实、计算结果、假设和定性建议。
 - 输出结构化 JSON 与 Markdown 报告。
 
+### 6.11 `runtime`：能力注册与长任务运行
+
+- `Analyzer` 接口统一声明 `name`、`version`、`supported_inputs`、`capabilities()`、`plan()` 和 `run()`。
+- `AnalyzerRegistry` 根据输入模式和计划选择 STEP、drawing、fusion 等实现，不由工具 adapter 写条件分支。
+- STEP、drawing 和 fusion 从 M0 起都具有可查询的适配器；未实现适配器返回明确状态。
+- Run 状态固定为 `queued`、`running`、`succeeded`、`failed`、`cancelled`、`blocked`，任何状态迁移先落 Manifest 再对外返回。
+- 重型分析运行在可终止子进程或隔离环境，stdout 事件只能更新进度和 artifact，不能直接修改权威项目事实。
+- 运行器记录解释器、分析器版本、参数、输入哈希、PID、时间、退出码和净化后的错误。
+
+### 6.12 `config`：配置与依赖诊断
+
+- `dfm.*` 行为配置来自 profile-aware 的 `config.yaml`。
+- 第一版至少定义分析器解释器、默认工艺、文件/页数上限、运行超时、并发数和项目保留策略。
+- `hermes dfm doctor` 只诊断 Python/OpenCascade/渲染依赖和目录权限；安装动作必须由用户显式触发。
+- Hermes 主环境导入 DFM 工具时不得导入 `OCC.Core`、VTK 或 CADQuery；重型依赖只在分析进程内加载。
+
 ## 7. 核心数据契约
 
 ### 7.1 项目清单
@@ -282,6 +360,12 @@ flowchart TB
   "project_id": "dfm-20260713-001",
   "domain": "injection_molding",
   "input_mode": "step_and_drawing",
+  "revision": 4,
+  "capabilities": {
+    "step": {"status": "available", "analyzer": "pythonocc-step"},
+    "drawing": {"status": "not_implemented", "analyzer": null},
+    "fusion": {"status": "not_implemented", "analyzer": null}
+  },
   "inputs": [],
   "facts": [],
   "clarifications": [],
@@ -347,86 +431,187 @@ flowchart TB
 }
 ```
 
+### 7.5 分析器能力
+
+```json
+{
+  "analyzer": "drawing",
+  "version": null,
+  "status": "not_implemented",
+  "supported_inputs": ["pdf", "png", "jpg"],
+  "reason": "drawing analyzer adapter exists but no production implementation is configured",
+  "next_action": "continue_with_step_only_or_install_drawing_backend"
+}
+```
+
+`status` 只允许使用 `available`、`dependency_missing`、`not_implemented`、`disabled`、`unhealthy`。基础框架中的占位适配器只能返回这些能力状态，不能返回占位测量。
+
+### 7.6 分析运行
+
+```json
+{
+  "run_id": "run-20260713-0007",
+  "project_id": "dfm-20260713-001",
+  "plan_id": "plan-003",
+  "status": "running",
+  "input_hashes": ["sha256:..."],
+  "analyzers": [{"name": "pythonocc-step", "version": "legacy-baseline-1"}],
+  "created_at": "2026-07-13T09:30:00Z",
+  "started_at": "2026-07-13T09:30:01Z",
+  "finished_at": null,
+  "progress": {"stage": "geometry", "percent": 35},
+  "error": null,
+  "artifact_ids": []
+}
+```
+
+### 7.7 制品引用
+
+```json
+{
+  "artifact_id": "artifact-run7-report-md",
+  "run_id": "run-20260713-0007",
+  "kind": "report",
+  "media_type": "text/markdown",
+  "path": "reports/run-20260713-0007/dfm_report.md",
+  "sha256": "...",
+  "size_bytes": 18420,
+  "created_by": "pythonocc-step",
+  "source_refs": ["input-step-v1"]
+}
+```
+
+Manifest 保存相对项目根目录的 canonical path；工具结果可以同时返回为当前运行环境解析后的绝对路径，便于 Desktop Artifacts 页面发现和打开。URL 是交付层派生值，不写成领域层的唯一标识。
+
 ## 8. 建议目录结构
 
-DFM 能力可能后续单独发布，因此建议从第一天按独立仓库或独立 Python 包组织。本文档暂放在 `hermes-agent` 中作为研发上下文，不代表实现代码必须进入 Hermes 核心仓库。
+第一版直接在当前 `hermes-agent` fork 中实现，并遵循现有工具、技能、测试和打包目录。基础架构按终极模块边界设计，但 M0 只创建有真实调用方的骨架、契约和明确失败的适配器，避免大量无行为的空文件。
 
 ```text
-hermes-dfm-agent/
-├── pyproject.toml
-├── README.md
-├── config/
-│   ├── defaults.yaml
-│   └── logging.yaml
+hermes-agent/
+├── tools/
+│   ├── dfm_tool.py                  # 唯一的 Hermes 工具注册与参数适配入口
+│   └── dfm/
+│       ├── __init__.py
+│       ├── contracts.py             # Project/Input/Fact/Plan/Run/Finding/Artifact
+│       ├── errors.py                # 稳定错误码和可恢复性分类
+│       ├── config.py                # profile-aware config.yaml 读取和校验
+│       ├── service.py               # dfm_project / dfm_analysis 动作编排
+│       ├── coordinator.py           # 状态迁移、追问门控、恢复决策
+│       ├── project/
+│       │   ├── manifest.py          # schema 迁移、并发控制、原子写入
+│       │   ├── workspace.py         # 项目目录、输入版本和安全路径
+│       │   └── artifacts.py         # artifact 登记、哈希和引用解析
+│       ├── intake/
+│       │   ├── classifier.py        # STEP / drawing / mixed
+│       │   └── validation.py        # 扩展名、magic、大小和复杂度预检
+│       ├── analyzers/
+│       │   ├── base.py              # Analyzer Protocol 与 CapabilityStatus
+│       │   ├── registry.py          # 分析器注册和选择
+│       │   ├── step.py              # M0 占位，M1/M2 接入真实 STEP 分析器
+│       │   ├── drawing.py           # 明确返回 not_implemented，M3/M4 实现
+│       │   └── fusion.py            # 明确返回 not_implemented，M5 实现
+│       ├── planning/
+│       │   ├── planner.py           # 最小必要任务图
+│       │   └── executor.py          # 依赖、幂等、重试和恢复
+│       ├── knowledge/
+│       │   ├── schema.py
+│       │   ├── repository.py
+│       │   └── rules/
+│       │       └── injection_molding/
+│       ├── risk/
+│       │   └── scoring.py
+│       ├── reporting/
+│       │   ├── findings.py
+│       │   └── render.py
+│       └── runtime/
+│           ├── jobs.py              # start/status/cancel/result
+│           ├── subprocess.py        # argv 启动、事件流、进程树终止
+│           └── limits.py            # 超时、并发和资源限制
 ├── skills/
-│   └── dfm-engineer/
-│       ├── SKILL.md
-│       └── references/
-├── src/hermes_dfm/
-│   ├── coordinator/
-│   │   ├── agent.py
-│   │   ├── state_machine.py
-│   │   └── clarification.py
-│   ├── project/
-│   │   ├── manifest.py
-│   │   ├── workspace.py
-│   │   └── artifacts.py
-│   ├── intake/
-│   │   ├── classifier.py
-│   │   └── validation.py
-│   ├── drawing/
-│   │   ├── render.py
-│   │   ├── ocr.py
-│   │   ├── requirements.py
-│   │   └── features.py
-│   ├── geometry/
-│   │   ├── step_reader.py
-│   │   ├── topology.py
-│   │   ├── measurements.py
-│   │   └── evidence.py
-│   ├── fusion/
-│   │   ├── facts.py
-│   │   ├── conflicts.py
-│   │   └── feature_mapping.py
-│   ├── planning/
-│   │   ├── contracts.py
-│   │   ├── planner.py
-│   │   └── executor.py
-│   ├── knowledge/
-│   │   ├── schema.py
-│   │   ├── repository.py
-│   │   └── matcher.py
-│   ├── risk/
-│   │   └── scoring.py
-│   ├── reporting/
-│   │   ├── findings.py
-│   │   └── render.py
-│   └── runtime/
-│       ├── isolation.py
-│       ├── limits.py
-│       └── cancellation.py
-├── rules/
-│   └── injection_molding/
+│   └── manufacturing/
+│       └── dfm-analysis/
+│           ├── SKILL.md
+│           └── references/
+│               ├── workflow.md
+│               ├── checks.md
+│               └── result-contract.md
 ├── tests/
-│   ├── contracts/
-│   ├── unit/
-│   ├── integration/
-│   ├── e2e/
-│   └── fixtures/
-│       ├── step/
-│       ├── drawings/
-│       └── mixed/
-└── docs/
-    ├── architecture.md
-    └── rule-authoring.md
+│   └── tools/
+│       └── dfm/
+│           ├── contracts/
+│           ├── unit/
+│           ├── integration/
+│           ├── e2e/
+│           └── fixtures/
+│               ├── step/
+│               ├── drawings/
+│               └── mixed/
+├── docs/
+│   └── dfm/
+│       ├── architecture.md
+│       ├── configuration.md
+│       └── rule-authoring.md
+├── toolsets.py                      # 声明 dfm toolset，不加入 core tools
+├── hermes_cli/tools_config.py       # `hermes tools` 中默认关闭的 DFM 开关
+└── pyproject.toml                   # 仅声明必要 package-data/可选依赖
 ```
+
+M0 不要求一次创建目录树中的全部叶子文件。必须先创建并贯通的是 `dfm_tool.py`、`contracts.py`、`config.py`、`service.py`、project 三个模块、analyzer base/registry/三个适配器、`runtime/jobs.py` 和 DFM skill；其余文件在对应里程碑有第一个真实消费者时创建。
+
+### 8.1 运行时目录
+
+源码、用户配置和项目数据严格分离。DFM 项目使用当前 profile 的 Hermes Home：
+
+```text
+<HERMES_HOME>/workspace/dfm/
+├── projects/
+│   └── <project-id>/
+│       ├── project_manifest.json
+│       ├── inputs/
+│       │   └── <input-id>/
+│       ├── runs/
+│       │   └── <run-id>/
+│       ├── artifacts/
+│       └── reports/
+├── tmp/
+└── locks/
+```
+
+- 通过 `hermes_constants.get_hermes_home()` 解析根目录，支持默认 profile、命名 profile、Docker 和自定义 `HERMES_HOME`；
+- Manifest 内部只保存项目根目录相对路径；
+- 会话附件目录 `.hermes/desktop-attachments/` 只是 intake 来源，不是 DFM 项目数据库；
+- 输入登记后保存内容哈希和来源引用，是否复制文件由同盘安全性和保留策略决定；
+- 临时目录和锁文件可以清理，Manifest、输入、运行记录和已登记 artifact 不得因聊天清空而丢失。
+
+### 8.2 配置结构
+
+建议在 `config.yaml` 中使用以下命名空间；具体默认值在 M0 实施计划中固定：
+
+```yaml
+dfm:
+  runtime:
+    python: auto
+    max_concurrent_runs: 1
+    timeout_seconds: 900
+  intake:
+    max_file_size_mb: 200
+    max_drawing_pages: 50
+  defaults:
+    process: injection
+    pull_direction: [0, 0, 1]
+  retention:
+    keep_failed_runs: true
+```
+
+阈值和公司规则属于版本化规则集，不应全部塞入全局配置；凭据仍写入 `.env`，但当前本地 STEP 分析本身不需要新增凭据。
 
 ## 9. 现有 DFM 代码的复用与借鉴
 
-现有业务工程中的 DFM 代码是迁移来源和参考实现，不是新智能体的运行时依赖。迁移时应先通过基线测试固定现有有效行为，再逐步抽取领域算法，避免连同业务框架耦合一起搬迁。
+现有业务工程中的 DFM 代码是迁移来源和参考实现，不是 Hermes 内建 DFM 模块的运行时依赖。M0 先固定承载接口；M1 再通过基线测试固定现有有效行为并逐步适配领域算法，避免连同业务框架耦合一起搬迁。
 
 
-| 现有位置                                                              | 可复用或借鉴                                          | 不应带入独立 DFM Agent                                         |
+| 现有位置                                                              | 可复用或借鉴                                          | 不应带入 Hermes 内建 DFM 模块                                  |
 | ----------------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------- |
 | `backend/aimold_app/agents/skill/dfm-analysis/scripts/dfm_analyze.py` | STEP 读取、几何检查、指标计算、问题证据和结果生成思路 | Django settings、请求上下文、业务存储客户端和应用模型依赖      |
 | `backend/aimold_app/agents/skill/dfm-analysis/SKILL.md`               | DFM 分析步骤、检查项、工具使用约束和输出表达          | 与当前应用页面或调用链绑定的说明                               |
@@ -466,45 +651,51 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 
 ## 11. 开发计划
 
-### M0：范围基线与验收语料库
+### M0：Hermes 内建 DFM 基础架构
 
-**目标：** 固定当前注塑 DFM 的检查范围、术语、输入样本和可复现基线。
-
-**主要工作：**
-
-- 盘点现有 STEP、2D 图纸和 DFM 代码的实际行为。
-- 建立检查项分类：全局几何、局部特征、图纸要求、资料完整性和规则风险。
-- 建立仅 STEP、仅图纸、混合输入三类测试夹具。
-- 记录当前算法的测量、Finding、运行时间和资源基线。
-- 确认第一版支持的注塑材料、规则和局部特征范围。
-
-**退出标准：** 每个夹具都有输入说明、预期工程关系和可重复的基线结果；团队能明确回答第一版“分析什么”和“不分析什么”。
-
-### M1：独立 STEP 分析工具包
-
-**目标：** 在不依赖现有业务工程的环境中运行 STEP DFM 分析。
+**目标：** 先搭建能够承载终极目标的稳定骨架；领域算法可以未实现，但工具、契约、项目状态、分析器接口和长任务边界必须真实贯通。
 
 **主要工作：**
 
-- 抽取 STEP 解析、拓扑检查、几何测量和证据生成。
-- 定义稳定的输入、输出和错误契约。
-- 加入超时、取消、工作区隔离和资源限制。
-- 使用 M0 夹具对比新旧结果。
+- 注册默认关闭的 `dfm` toolset、`dfm_project` 和 `dfm_analysis`，确认未启用时不进入模型 Schema。
+- 建立 Project、Input、Fact、Clarification、Feature、Plan、Run、Finding、Artifact 和 CapabilityStatus 契约及 schema 版本策略。
+- 实现 profile-aware 工作区、路径安全、输入哈希、Manifest 原子写入、锁和恢复。
+- 实现 STEP/drawing/fusion 的 Analyzer 接口、Registry 和能力查询；未实现适配器返回明确状态。
+- 实现 `create/add_input/status` 与 `plan/start/status/cancel/result` 的服务层和 Run 状态机。
+- 使用可控的测试分析器验证后台任务、取消、失败、恢复、幂等和 artifact 登记，不生成任何模拟工程结论。
+- 建立 `dfm.*` 配置读取、`hermes dfm doctor` 诊断边界和 DFM skill 基础流程。
+- 用 Desktop 现有 `file.attach` 和 Artifacts 进行一条非几何 smoke path，并记录大型远程 STEP 上传的传输层限制。
 
-**退出标准：** 独立命令可处理基线 STEP，输出符合契约且与确认的旧结果一致；环境中不需要业务框架配置。
+**退出标准：** 在没有 OpenCascade/OCR 的环境中，Hermes 仍能创建项目、登记三种输入、查询能力、启动测试 Run、取消/恢复并发现 artifact；未实现能力全部显式失败；重启进程后可以从 Manifest 恢复；启用 DFM 不需要修改 Agent Loop。
 
-### M2：项目状态与 Hermes DFM 技能
+### M1：现有行为基线与 STEP 分析器适配
 
-**目标：** 让 Hermes 能创建、恢复和管理一个可审计的 DFM 项目。
+**目标：** 固定 Django 已跑通的 STEP 行为，并把现有分析器接到 M0 的 Analyzer 契约后面，而不是复制其业务编排。
 
 **主要工作：**
 
-- 实现项目工作区、Manifest、文件哈希和制品管理。
-- 实现输入分类、安全校验和三种输入模式判断。
-- 编写 DFM 技能，定义阶段、工具约束、追问规则和报告原则。
-- 实现中断、取消、恢复和增量更新。
+- 盘点现有 STEP 分析器的检查项、阈值、输出 Schema、进度事件、制品、运行时间和依赖。
+- 建立脱敏 STEP 与合成几何夹具，记录测量关系和允许误差，不冻结无意义的 issue 数量快照。
+- 把现有 `dfm_analyze.py` 作为第一版 worker 适配到 `StepAnalyzer`；先允许脚本整体迁入，再按检查族逐步拆分。
+- 移除 Django settings、请求上下文、MinIO、MySQL checkpointer、DeepAgents 和应用模型依赖。
+- 将 stdout 事件转换为 Run 进度和 artifact 登记；通过 argv 启动并支持进程树终止。
+- 明确 `generic/machining` 是保留的旧分析器能力还是首版隐藏能力；对外默认只承诺 injection。
 
-**退出标准：** Hermes 会话可以可靠创建/恢复项目、登记文件、查看状态，不把聊天历史当成项目数据库。
+**退出标准：** 同一 STEP 夹具在旧分析器与 Hermes 适配器中得到已批准的等价测量和证据；Hermes 运行不需要 Django；失败、超时和取消都留下可恢复 Run 记录。
+
+### M2：STEP DFM Hermes 端到端闭环
+
+**目标：** 让用户通过 Hermes 和现有 Desktop/CLI 完成第一条真实 DFM 闭环。
+
+**主要工作：**
+
+- 完成 STEP 输入预检、工艺/材料/拔模方向等澄清门控和分析计划确认。
+- 把分析器原始 issue 转换为稳定 Measurement、Finding 和 Artifact 契约。
+- 生成结构化 JSON、Markdown、PNG 证据和高亮 STEP，并在 Desktop Artifacts 中可见。
+- 实现项目继续、输入新版本、失效传播和受影响步骤重跑。
+- 完成 `hermes dfm doctor`、安装说明、示例和故障排查文档。
+
+**退出标准：** STEP 用户可以完成上传、追问、计划、分析、取消/恢复、证据检查和报告导出；相同输入、配置和分析器版本产生可复现结果。
 
 ### M3：2D 图纸文本理解与指标提取
 
@@ -513,6 +704,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 **主要工作：**
 
 - 页面渲染、OCR、标题栏与版面解析。
+- 建立合成图纸和真实脱敏图纸的文本、页码、区域与字段标注语料库。
 - 提取材料、尺寸、公差、技术说明、表面处理和单位。
 - 输出原文、规范化值、页码、边界框和置信度。
 - 实现冲突检测、澄清问题和用户确认写回。
@@ -530,7 +722,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 - 支持跨视图关联和人工确认。
 - 建立按特征类别统计的精确率、召回率和定位指标。
 
-**退出标准：** 达到 M0 批准的各类别阈值；低置信度特征不会被静默写成已确认事实。
+**退出标准：** 达到 M4 标注语料库评审批准的各类别阈值；低置信度特征不会被静默写成已确认事实。
 
 ### M5：事实融合、分析规划与工具编排
 
@@ -558,19 +750,21 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 
 **退出标准：** 相同输入、工具版本和规则版本重复运行得到相同测量、阈值和严重程度；不存在由 LLM 编造的数值。
 
-### M7：报告、端到端验收与独立发布准备
+### M7：Desktop 增强、全链路验收与发布准备
 
-**目标：** 完成可单独使用和发布的 DFM Hermes Agent 闭环。
+**目标：** 在通用聊天/附件/Artifacts 已可用的基础上，完成三种输入模式的产品化闭环；是否抽取独立包作为后续决策，不作为当前前置条件。
 
 **主要工作：**
 
 - 生成结构化 Finding、Markdown 报告和证据制品。
 - 支持项目摘要、未解决项和不同分析版本对比。
+- 评估并按需要增加 Desktop DFM 项目状态、Finding 检查器和 3D/证据预览侧栏，不重写聊天与 composer。
+- 为大型 STEP 的远程 Desktop 上传增加经过安全评审的大小限制、分块或直传方案。
 - 完成仅 STEP、仅图纸和混合输入的端到端验收。
 - 整理安装、配置、示例、规则编写和故障排查文档。
-- 确认独立包/插件的版本策略、依赖上限和许可证清单。
+- 确认内建模块的版本策略、依赖上限和许可证清单，并评估是否值得抽取独立领域包。
 
-**退出标准：** 用户可通过 Hermes 完成资料输入、追问、确认、分析、证据检查和报告导出；软件包不依赖其他业务系统，可作为独立 DFM 智能体候选版本发布。
+**退出标准：** 用户可通过 Hermes 完成资料输入、追问、确认、分析、证据检查和报告导出；DFM 不依赖 Django 等业务系统；Desktop 增强失败时不影响基础聊天和通用 Artifacts。
 
 ## 12. 测试与验收策略
 
@@ -582,7 +776,9 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 - **图纸测试**：使用合成图纸和真实脱敏图纸验证 OCR、指标提取和证据位置。
 - **视觉评估**：按螺牙、油管等类别统计精确率、召回率和定位质量。
 - **规划场景测试**：验证输入模式、缺失条件、工具选择和澄清门控。
-- **端到端测试**：验证三种输入模式下的完整项目闭环和恢复行为。
+- **基础架构端到端测试**：使用测试分析器验证工具启用、项目、Run、取消、恢复和 artifact，不断言伪造的工程结论。
+- **领域端到端测试**：按里程碑验证 STEP、图纸和混合输入的真实闭环。
+- **Desktop 兼容测试**：验证 `file.attach` 引用进入 DFM intake，工具结果中的 artifact 可被现有 Artifacts 页面发现。
 - **安全测试**：畸形 STEP、超大文件、路径遍历、恶意图纸文字、超时、取消和资源耗尽。
 
 ### 12.2 必须验证的不变量
@@ -606,7 +802,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 - 重复运行可复现率；
 - 取消延迟、恢复正确性和工作区清理正确性。
 
-具体数值阈值必须在 M0 建立代表性语料库后由工程团队批准，不能由文档预先猜测。
+具体数值阈值必须由对应里程碑的代表性语料库决定：STEP 几何阈值在 M1 批准，图纸文本指标在 M3 批准，视觉特征指标在 M4 批准；不能由路线图预先猜测。
 
 ## 13. 安全与运行约束
 
@@ -617,6 +813,10 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 - 重型几何分析与不可信解析器在可终止子进程或隔离环境中运行。
 - 记录工具版本、参数、开始/结束时间、退出状态和经过净化的错误信息。
 - 非机密行为配置写入 YAML；环境变量仅保存密钥和凭据。
+- 不在工具调用中自动安装 OpenCascade、VTK、CADQuery、OCR 或系统依赖；安装必须通过显式 CLI/setup 流程。
+- 使用 argv 启动分析进程，不把用户文件名、路径或图纸文字拼接为 shell 命令。
+- `dfm` toolset 的启用状态在会话建立时确定；运行时依赖故障通过结果状态表达，不动态重建工具 Schema。
+- Remote Desktop 上传必须在完整载入内存前限制大小；DFM intake 继续执行 magic、哈希和项目边界校验。
 - 新依赖必须设置版本范围，记录许可证并接受供应链审查。
 
 ## 14. 主要风险与应对
@@ -630,6 +830,10 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | 现有算法与业务框架耦合过深                 | 先建立行为基线，再抽取纯函数和契约；不把业务存储、请求上下文和模型依赖带入新包     |
 | 项目状态被错误存进 Hermes 长期记忆         | 以 Manifest 为权威状态，长期记忆只保存审核后的偏好和术语                           |
 | 重型几何依赖影响 Hermes 稳定性             | 独立进程/环境运行，通过精简 JSON 契约交互                                          |
+| 常驻 DFM 工具扩大所有会话 Schema           | 独立 `dfm` toolset 默认关闭，不加入 `_HERMES_CORE_TOOLS`，只在新会话启用          |
+| 基础架构占位被误认为已有工程能力           | Analyzer capability 显式返回 `not_implemented`，禁止测试适配器生成生产 Finding    |
+| Desktop 远程上传大型 STEP 占用过多内存     | 生产前增加传输层大小上限、分块或直传；intake 再做第二层校验                        |
+| 为 DFM 重写 Desktop 聊天造成双状态源        | 复用现有 `file.attach`、JSON-RPC、会话和 Artifacts；专用 UI 仅做附属视图            |
 | SimpleCADAPI 引入技术或许可锁定            | 置于 PoC 和许可决策门之后，必要时只借鉴设计理念                                    |
 | 范围扩张为通用制造平台                     | 第一阶段只做注塑 DFM；其他工艺按独立规则和工具包立项                               |
 
@@ -646,36 +850,40 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | 2026-07-13 | 现有业务工程中的 DFM 代码作为迁移来源和参考实现。                                       | 已有算法和流程具有复用价值，但新智能体不能依赖业务框架运行。                   |
 | 2026-07-13 | SimpleCADAPI 仅作为评估候选。                                                           | 查询和标签设计有价值，但 DFM 能力、技术兼容性和许可仍需验证。                  |
 | 2026-07-13 | 第一阶段制造领域限定为注塑。                                                            | 先完成可验收闭环，再评估扩展到其他工艺。                                       |
+| 2026-07-13 | 第一版改为当前 Hermes fork 自带的内建 DFM 能力；此前“优先独立包/插件”的决策被本条替代。 | 当前目标是先在官方 Hermes 基线之上跑通产品闭环，独立发布不是前置条件。          |
+| 2026-07-13 | DFM 使用默认关闭的独立 toolset，不加入 `_HERMES_CORE_TOOLS`。                           | 允许采用常驻源码，同时避免无关会话承担工具 Schema 成本并保护提示词缓存。        |
+| 2026-07-13 | M0 优先搭建终极架构所需契约和模块接口，具体算法后接。                                   | 后续 STEP、2D、融合与规则能力应通过稳定接口扩展，不反复改动工具和项目主结构。    |
+| 2026-07-13 | Desktop 首先复用现有附件、Gateway JSON-RPC 和 Artifacts，不建设 DFM 专用聊天页。         | 当前代码已经具备上传和结果发现链路；专用 UI 应是非破坏性的增强。                |
+| 2026-07-14 | M0 基础架构通过纵向验收，后续进入 M1 现有 STEP 行为基线与分析器适配。                    | 真实工具发现、生产显式失败、测试分析器异步成功和 Desktop artifact 路径均已有自动化证据。 |
 
 ## 16. 状态跟踪
 
 
 | 里程碑                            | 状态   | 证据/链接 |
 | ----------------------------------- | -------- | ----------- |
-| M0 范围基线与验收语料库           | 未开始 |           |
-| M1 独立 STEP 分析工具包           | 未开始 |           |
-| M2 项目状态与 Hermes DFM 技能     | 未开始 |           |
+| M0 Hermes 内建 DFM 基础架构       | 已完成 | `tests/tools/dfm/test_m0_e2e.py`；M0 聚焦套件 98 passed；静态编译与 Skill 校验通过 |
+| M1 现有行为基线与 STEP 分析器适配 | 未开始 |           |
+| M2 STEP DFM Hermes 端到端闭环     | 未开始 |           |
 | M3 2D 图纸文本理解与指标提取      | 未开始 |           |
 | M4 2D 工程特征识别                | 未开始 |           |
 | M5 事实融合、分析规划与工具编排   | 未开始 |           |
 | M6 版本化知识库与确定性风险计算   | 未开始 |           |
-| M7 报告、端到端验收与独立发布准备 | 未开始 |           |
+| M7 Desktop 增强、全链路验收与发布准备 | 未开始 |       |
 
 允许的状态：`未开始`、`设计中`、`进行中`、`受阻`、`评审中`、`已完成`。
 
 ## 17. 下一步工作
 
-下一份可执行实施计划只覆盖 M0，建议按以下顺序开展：
+下一份可执行实施计划覆盖 M1，建议按以下顺序开展：
 
-1. 盘点现有 DFM、2D 图纸分析和 STEP 分析代码，列出可复用函数、耦合点和行为基线。
-2. 从 `模具评审标准表.csv` 和现有实现中整理第一版注塑检查项分类，但暂不直接形成生产规则。
-3. 建立三类脱敏夹具：仅 STEP、仅图纸、STEP + 图纸。
-4. 为每个夹具编写预期工程关系、应触发检查、应追问字段和不应执行的检查。
-5. 运行现有分析器，保存测量、风险、制品、时间和资源占用基线。
-6. 确认独立 DFM 包的实际仓库位置和 Python/OpenCascade 依赖基线。
-7. 单独完成 SimpleCADAPI 的兼容性 PoC 与许可审查结论。
+1. 盘点 Django 已跑通 STEP 分析器的入口、依赖、输入输出、错误和 artifact 行为，形成迁移清单。
+2. 建立代表性 STEP 对比夹具，先固定 Django 当前有效行为和可接受误差，再迁移算法。
+3. 在现有 `Analyzer` 协议后实现 STEP 适配器，不改变 `dfm_project`、`dfm_analysis` 和 Manifest 公共契约。
+4. 将生产分析执行迁移到 argv 驱动、可超时和可强制终止的子进程；保留 M0 的 Run 状态与恢复语义。
+5. 接入版本、参数、测量证据和 artifact 登记，确保失败只返回显式能力或错误状态。
+6. 跑通 Hermes 与 Django 基线的差异报告，经代表性样本评审后再进入 M2 STEP 端到端闭环。
 
-M0 未通过评审前，不开始大规模 OCR 模型训练、Hermes 核心修改或其他制造工艺扩展。
+M1 不训练 OCR/视觉模型、不开发 DFM 专用 Desktop 聊天页、不引入其他制造工艺，也不开展 SimpleCADAPI 集成；这些工作仍按后续里程碑和决策门推进。
 
 ## 18. 文档维护规则
 

@@ -1,0 +1,58 @@
+import pytest
+
+from tools.dfm.config import DFMConfig, load_dfm_config
+from tools.dfm.errors import DFMError
+
+
+def test_dfm_config_defaults_match_m0_contract():
+    config = load_dfm_config({})
+
+    assert config == DFMConfig(
+        runtime_python="auto",
+        default_process="injection_molding",
+        max_concurrent_runs=1,
+        timeout_seconds=900,
+        max_file_size_mb=200,
+        max_pages=50,
+        keep_failed_runs=True,
+    )
+
+
+def test_dfm_config_reads_nested_values():
+    config = load_dfm_config(
+        {
+            "dfm": {
+                "runtime": {
+                    "python": "C:/dfm/python.exe",
+                    "max_concurrent_runs": 2,
+                    "timeout_seconds": 120,
+                },
+                "intake": {"max_file_size_mb": 12, "max_pages": 8},
+                "defaults": {"process": "injection_molding"},
+                "retention": {"keep_failed_runs": False},
+            }
+        }
+    )
+
+    assert config.runtime_python == "C:/dfm/python.exe"
+    assert config.max_concurrent_runs == 2
+    assert config.timeout_seconds == 120
+    assert config.max_file_size_mb == 12
+    assert config.max_pages == 8
+    assert config.keep_failed_runs is False
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        {"dfm": {"runtime": {"max_concurrent_runs": 0}}},
+        {"dfm": {"runtime": {"timeout_seconds": "slow"}}},
+        {"dfm": {"intake": {"max_file_size_mb": -1}}},
+        {"dfm": {"retention": {"keep_failed_runs": "yes"}}},
+    ],
+)
+def test_dfm_config_rejects_invalid_values(mapping):
+    with pytest.raises(DFMError) as exc_info:
+        load_dfm_config(mapping)
+
+    assert exc_info.value.code == "config_invalid"
