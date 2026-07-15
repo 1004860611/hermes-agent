@@ -11,7 +11,7 @@ from hermes_constants import reset_hermes_home_override, set_hermes_home_overrid
 from tools.dfm.analyzers.base import AnalyzerContext
 from tools.dfm.analyzers.registry import AnalyzerRegistry
 from tools.dfm.config import DFMConfig
-from tools.dfm.contracts import ArtifactRecord, Capability, CapabilityStatus, RunRecord, RunStatus
+from tools.dfm.contracts import ArtifactRecord, Capability, CapabilityStatus, PlanRecord, RunRecord, RunStatus
 from tools.dfm.errors import DFMError
 from tools.dfm.project.manifest import ManifestStore
 from tools.dfm.project.workspace import DFMWorkspace
@@ -27,11 +27,13 @@ class ControlledAnalyzer:
         self.started = Event()
         self.release = Event()
         self.fail = fail
+        self.contexts = []
 
     def capability(self, context):
         return Capability(self.key, CapabilityStatus.AVAILABLE, "test only")
 
     def run(self, context: AnalyzerContext, cancellation):
+        self.contexts.append(context)
         self.started.set()
         while not self.release.wait(0.01):
             cancellation.raise_if_cancelled()
@@ -127,6 +129,31 @@ def test_run_succeeds_and_registers_safe_artifact(job_env):
     assert repeated.run_id == run.run_id
     assert finished.artifacts[0].relative_path.startswith("artifacts/")
     assert (workspace.project_dir(project_id) / finished.artifacts[0].relative_path).exists()
+
+
+def test_run_executes_and_persists_the_named_plan_snapshot(job_env):
+    workspace, project_id, registry, analyzer, managers = job_env
+    manager = JobManager(workspace, registry, DFMConfig())
+    managers.append(manager)
+    plan = PlanRecord(
+        "plan_m1",
+        "step",
+        ["test"],
+        "ready",
+        "2026-07-15T00:00:00Z",
+        process="injection",
+        scope_id="injection.legacy-baseline",
+        scope_version="1.0.0",
+    )
+
+    run = manager.start(project_id, "test", plan=plan)
+    assert analyzer.started.wait(1)
+    analyzer.release.set()
+    finished = _wait_status(manager, project_id, run.run_id, RunStatus.SUCCEEDED)
+
+    assert finished.plan_id == plan.plan_id
+    assert finished.plan_snapshot == plan.to_dict()
+    assert analyzer.contexts[0].plan == plan
 
 
 def test_run_can_be_cancelled_cooperatively(job_env):

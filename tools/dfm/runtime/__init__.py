@@ -1,5 +1,5 @@
-"""Persistent runtime orchestration for DFM analyzers."""
+"""Persistent runtime orchestration for DFM analyzers.
 
-from .jobs import JobManager
-
-__all__ = ["JobManager"]
+Runtime submodules deliberately avoid eager re-exports so worker process
+primitives can be imported without loading the analyzer registry.
+"""

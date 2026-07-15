@@ -21,6 +21,7 @@ from .errors import DFMError
 from .project.inputs import InputRegistrar
 from .project.manifest import ManifestStore
 from .project.workspace import DFMWorkspace
+from .processes.registry import ProcessAdapterRegistry, build_default_process_registry
 from .runtime.jobs import JobManager
 
 
@@ -43,10 +44,11 @@ def _resolve_input_path(raw_path: object, working_dir: object = None) -> Path:
 
 
 class DFMService:
-    def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, reconcile_jobs: bool = True) -> None:
+    def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, process_registry: ProcessAdapterRegistry | None = None, reconcile_jobs: bool = True) -> None:
         self.config = config or load_dfm_config()
         self.workspace = workspace or DFMWorkspace()
         self.registry = registry or build_default_registry()
+        self.process_registry = process_registry or build_default_process_registry()
         self.inputs = InputRegistrar(self.workspace, self.config)
         self.jobs = JobManager(self.workspace, self.registry, self.config, reconcile=reconcile_jobs)
 
@@ -100,8 +102,35 @@ class DFMService:
             if not analyzer_key:
                 raise DFMError("input_required", "Register a DFM input before planning analysis.")
             analyzer = self.registry.get(str(analyzer_key))
-            capability = analyzer.capability(self._context(manifest))
-            plan = PlanRecord(f"plan_{uuid4().hex[:16]}", manifest.input_mode or str(analyzer_key), [str(analyzer_key)], "ready" if capability.status.value == "available" else "blocked", _utc_now())
+            context = self._context(manifest)
+            capability = analyzer.capability(context)
+            process = str(params.get("process") or "injection")
+            process_plan = None
+            if str(analyzer_key) == "step":
+                adapter = self.process_registry.get(process)
+                defaults = adapter.compile(context, {})
+                raw_parameters = {
+                    fact.name: {"value": fact.value, "source": "project_fact"}
+                    for fact in manifest.facts
+                    if fact.status == "confirmed" and fact.name in defaults.parameters
+                }
+                process_plan = adapter.compile(context, raw_parameters)
+            now = _utc_now()
+            plan = PlanRecord(
+                f"plan_{uuid4().hex[:16]}",
+                manifest.input_mode or str(analyzer_key),
+                [str(analyzer_key)],
+                "ready" if capability.status.value == "available" else "blocked",
+                now,
+                process=process_plan.process if process_plan else "",
+                process_adapter_version=process_plan.adapter_version if process_plan else "",
+                scope_id=process_plan.scope_id if process_plan else "",
+                scope_version=process_plan.scope_version if process_plan else "",
+                input_ids=[item.input_id for item in manifest.inputs],
+                input_hashes={item.input_id: item.sha256 for item in manifest.inputs},
+                parameters=process_plan.parameters if process_plan else {},
+                operations=process_plan.operations if process_plan else [],
+            )
             store.update(lambda current: replace(current, plans=[*current.plans, plan], updated_at=_utc_now()))
             return {"ok": True, "project_id": project_id, "plan": plan.to_dict(), "capability": capability.to_dict()}
         if action == "start":
@@ -110,7 +139,12 @@ class DFMService:
             plan = next((item for item in manifest.plans if item.plan_id == plan_id), None)
             if plan is None:
                 raise DFMError("plan_not_found", "DFM analysis plan was not found.", {"plan_id": plan_id})
-            run = self.jobs.start(project_id, plan.analyzer_keys[0], idempotency_key=params.get("idempotency_key"))
+            run = self.jobs.start(
+                project_id,
+                plan.analyzer_keys[0],
+                plan=plan,
+                idempotency_key=params.get("idempotency_key"),
+            )
             return {"ok": True, "project_id": project_id, "run": self._run_dict(project_id, run)}
         run_id = params.get("run_id") or ""
         if action == "status":

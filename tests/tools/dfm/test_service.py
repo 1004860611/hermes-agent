@@ -46,11 +46,23 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
     project_id = dfm.project("create", name="Bracket")["project_id"]
     source = temp / "part.step"
     source.write_bytes(b"opaque-step")
-    dfm.project("add_input", project_id=project_id, path=str(source))
+    added = dfm.project("add_input", project_id=project_id, path=str(source))
 
     plan = dfm.analysis("plan", project_id=project_id)
 
     assert plan["plan"]["analyzer_keys"] == ["step"]
+    assert plan["plan"]["process"] == "injection"
+    assert plan["plan"]["scope_id"] == "injection.legacy-baseline"
+    assert plan["plan"]["scope_version"] == "1.0.0"
+    assert plan["plan"]["input_ids"] == [plan["plan"]["input_ids"][0]]
+    assert set(plan["plan"]["input_hashes"].values()) == {
+        added["input"]["sha256"]
+    }
+    assert plan["plan"]["parameters"]["min_draft_deg"] == {
+        "value": 1.0,
+        "unit": "degree",
+        "source": "injection_legacy_default",
+    }
     assert plan["capability"]["status"] == "dependency_missing"
     with pytest.raises(DFMError) as exc_info:
         dfm.analysis("start", project_id=project_id, plan_id=plan["plan"]["plan_id"])

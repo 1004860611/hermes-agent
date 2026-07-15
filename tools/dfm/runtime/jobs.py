@@ -14,7 +14,7 @@ from uuid import uuid4
 from ..analyzers.base import AnalyzerContext, CancellationToken
 from ..analyzers.registry import AnalyzerRegistry
 from ..config import DFMConfig
-from ..contracts import ArtifactRecord, ProjectManifest, RunRecord, RunStatus, ensure_run_transition
+from ..contracts import ArtifactRecord, PlanRecord, ProjectManifest, RunRecord, RunStatus, ensure_run_transition
 from ..errors import DFMError
 from ..project.manifest import ManifestStore
 from ..project.workspace import DFMWorkspace
@@ -66,6 +66,7 @@ class JobManager:
         project_id: str,
         analyzer_key: str,
         *,
+        plan: PlanRecord | None = None,
         idempotency_key: str | None = None,
     ) -> RunRecord:
         store = self._store(project_id)
@@ -80,6 +81,7 @@ class JobManager:
             self.workspace.project_dir(project_id),
             manifest.input_mode,
             manifest.inputs,
+            plan=plan,
         )
         capability = analyzer.capability(context)
         if capability.status.value != "available":
@@ -108,6 +110,8 @@ class JobManager:
                 idempotency_key=idempotency_key,
                 owner_pid=os.getpid(),
                 runtime_id=self.runtime_id,
+                plan_id=plan.plan_id if plan else None,
+                plan_snapshot=plan.to_dict() if plan else None,
             )
             store.update(lambda current: replace(current, runs=[*current.runs, run], updated_at=now))
             if status is RunStatus.BLOCKED:
@@ -167,12 +171,19 @@ class JobManager:
                 lambda run: replace(run, status=RunStatus.RUNNING, updated_at=_utc_now()),
             )
             manifest = self._store(project_id).load()
+            persisted_run = self._find_run(manifest, run_id)
+            plan = (
+                PlanRecord.from_dict(persisted_run.plan_snapshot)
+                if persisted_run.plan_snapshot
+                else None
+            )
             context = AnalyzerContext(
                 project_id,
                 self.workspace.project_dir(project_id),
                 manifest.input_mode,
                 manifest.inputs,
                 run_id,
+                plan,
             )
             artifacts = analyzer.run(context, token)
             checked = [self._validate_artifact(context.project_dir, item) for item in artifacts]
