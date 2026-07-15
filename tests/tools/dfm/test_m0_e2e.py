@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -186,3 +188,65 @@ def test_injected_analyzer_vertical_slice_returns_desktop_compatible_artifact(tm
     assert artifact_path == (
         service.workspace.project_dir(project_id) / artifact["relative_path"]
     ).resolve()
+
+
+def test_desktop_file_attach_reference_flows_into_dfm_project(monkeypatch, tmp_path):
+    from tools.terminal_tool import clear_task_env_overrides, register_task_env_overrides
+    from tui_gateway import server
+
+    workspace = tmp_path / "desktop workspace"
+    workspace.mkdir()
+    task_id = "dfm-desktop-session"
+    fake_cli = types.ModuleType("cli")
+    fake_cli._detect_file_drop = lambda raw: None
+    fake_cli._split_path_input = lambda raw: (raw, "")
+    fake_cli._resolve_attachment_path = lambda raw: None
+    monkeypatch.setitem(sys.modules, "cli", fake_cli)
+    server._sessions[task_id] = {
+        "session_key": task_id,
+        "cwd": str(workspace),
+        "attached_images": [],
+    }
+    token = set_hermes_home_override(tmp_path / "home")
+    register_task_env_overrides(task_id, {"cwd": str(workspace)})
+    discover_builtin_tools()
+
+    try:
+        attached = server.handle_request(
+            {
+                "id": "attach-1",
+                "method": "file.attach",
+                "params": {
+                    "session_id": task_id,
+                    "name": "mold bracket.step",
+                    "data_url": "data:application/octet-stream;base64,b3BhcXVlLXN0ZXA=",
+                },
+            }
+        )["result"]
+        created = json.loads(
+            registry.dispatch(
+                "dfm_project",
+                {"action": "create", "name": "Desktop E2E"},
+                task_id=task_id,
+            )
+        )
+        added = json.loads(
+            registry.dispatch(
+                "dfm_project",
+                {
+                    "action": "add_input",
+                    "project_id": created["project_id"],
+                    "path": attached["ref_text"],
+                },
+                task_id=task_id,
+            )
+        )
+    finally:
+        get_dfm_service().close()
+        clear_task_env_overrides(task_id)
+        reset_hermes_home_override(token)
+        server._sessions.pop(task_id, None)
+
+    assert attached["ref_text"] == "@file:`.hermes/desktop-attachments/mold bracket.step`"
+    assert added["ok"] is True
+    assert added["input"]["source_name"] == "mold bracket.step"

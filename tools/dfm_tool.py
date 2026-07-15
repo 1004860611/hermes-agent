@@ -7,10 +7,16 @@ from tools.dfm.service import get_dfm_service
 from tools.registry import registry
 
 
-def _call(kind: str, args: dict) -> str:
+def _call(kind: str, args: dict, **context) -> str:
     try:
         service = get_dfm_service()
         params = {key: value for key, value in args.items() if key != "action"}
+        if kind == "project" and args.get("action") == "add_input":
+            from tools.terminal_tool import resolve_task_overrides
+
+            working_dir = resolve_task_overrides(context.get("task_id")).get("cwd")
+            if working_dir:
+                params["working_dir"] = working_dir
         result = service.project(args.get("action", ""), **params) if kind == "project" else service.analysis(args.get("action", ""), **params)
         return json.dumps(result, ensure_ascii=False)
     except DFMError as exc:
@@ -39,5 +45,5 @@ DFM_ANALYSIS_SCHEMA = {
     }, "required": ["action", "project_id"]},
 }
 
-registry.register(name="dfm_project", toolset="dfm", schema=DFM_PROJECT_SCHEMA, handler=lambda args, **kwargs: _call("project", args), emoji="🏭")
-registry.register(name="dfm_analysis", toolset="dfm", schema=DFM_ANALYSIS_SCHEMA, handler=lambda args, **kwargs: _call("analysis", args), emoji="📐")
+registry.register(name="dfm_project", toolset="dfm", schema=DFM_PROJECT_SCHEMA, handler=lambda args, **kwargs: _call("project", args, **kwargs), emoji="🏭")
+registry.register(name="dfm_analysis", toolset="dfm", schema=DFM_ANALYSIS_SCHEMA, handler=lambda args, **kwargs: _call("analysis", args, **kwargs), emoji="📐")

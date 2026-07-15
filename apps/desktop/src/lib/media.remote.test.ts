@@ -57,6 +57,8 @@ describe('mediaExternalUrl', () => {
     $connection.set({ mode: 'local' } as never)
     expect(mediaExternalUrl('/tmp/a.png')).toBe('file:///tmp/a.png')
     expect(mediaExternalUrl('file:///tmp/a.png')).toBe('file:///tmp/a.png')
+    expect(mediaExternalUrl('C:\\dfm results\\run.json')).toBe('file:///C:/dfm results/run.json')
+    expect(mediaExternalUrl('\\\\analysis-server\\dfm\\run.json')).toBe('file://analysis-server/dfm/run.json')
   })
 
   it('rewrites gateway-local paths to an authenticated download URL', () => {
@@ -66,6 +68,9 @@ describe('mediaExternalUrl', () => {
     )
     expect(mediaExternalUrl('/tmp/a b.png')).toBe(
       'https://gw/api/files/download?path=%2Ftmp%2Fa%20b.png&token=s%20e%2Fcret'
+    )
+    expect(mediaExternalUrl('C:\\dfm results\\run.json')).toBe(
+      'https://gw/api/files/download?path=C%3A%5Cdfm%20results%5Crun.json&token=s%20e%2Fcret'
     )
   })
 

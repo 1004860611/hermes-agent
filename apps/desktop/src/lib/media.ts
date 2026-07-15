@@ -76,7 +76,21 @@ export function mediaExternalUrl(path: string): string {
     }
   }
 
-  return /^file:/i.test(path) ? path : `file://${path}`
+  if (/^file:/i.test(path)) {
+    return path
+  }
+
+  const normalized = path.replace(/\\/g, '/')
+
+  if (/^[a-z]:\//i.test(normalized)) {
+    return `file:///${normalized}`
+  }
+
+  if (normalized.startsWith('//')) {
+    return `file://${normalized.slice(2)}`
+  }
+
+  return `file://${normalized}`
 }
 
 // Custom Electron scheme (registered in electron/main.ts) that streams a local

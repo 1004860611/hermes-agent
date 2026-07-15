@@ -25,6 +25,48 @@ def test_dfm_tools_are_discovered_with_stable_schemas_and_dispatch(tmp_path):
     assert result["ok"] is True
 
 
+def test_dfm_project_resolves_quoted_desktop_ref_from_task_cwd(tmp_path):
+    from tools.dfm.service import get_dfm_service
+    from tools.registry import discover_builtin_tools, registry
+    from tools.terminal_tool import clear_task_env_overrides, register_task_env_overrides
+
+    workspace = tmp_path / "session workspace"
+    attachment = workspace / ".hermes" / "desktop-attachments" / "mold bracket.step"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_bytes(b"opaque-step")
+    task_id = "desktop-session"
+    token = set_hermes_home_override(tmp_path / "home")
+    register_task_env_overrides(task_id, {"cwd": str(workspace)})
+    discover_builtin_tools()
+
+    try:
+        created = json.loads(
+            registry.dispatch(
+                "dfm_project",
+                {"action": "create", "name": "Desktop upload"},
+                task_id=task_id,
+            )
+        )
+        added = json.loads(
+            registry.dispatch(
+                "dfm_project",
+                {
+                    "action": "add_input",
+                    "project_id": created["project_id"],
+                    "path": "@file:`.hermes/desktop-attachments/mold bracket.step`",
+                },
+                task_id=task_id,
+            )
+        )
+    finally:
+        get_dfm_service().close()
+        clear_task_env_overrides(task_id)
+        reset_hermes_home_override(token)
+
+    assert added["ok"] is True
+    assert added["input"]["source_name"] == "mold bracket.step"
+
+
 def test_dfm_toolset_is_default_off_but_explicitly_configurable():
     from hermes_cli.tools_config import CONFIGURABLE_TOOLSETS, _DEFAULT_OFF_TOOLSETS, _get_platform_tools
     from toolsets import resolve_toolset

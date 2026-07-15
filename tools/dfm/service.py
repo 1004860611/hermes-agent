@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from agent.context_references import parse_context_references
 from hermes_constants import get_hermes_home
 
 from .analyzers.base import AnalyzerContext
@@ -24,6 +26,20 @@ from .runtime.jobs import JobManager
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _resolve_input_path(raw_path: object, working_dir: object = None) -> Path:
+    value = str(raw_path or "").strip()
+    references = parse_context_references(value)
+    if len(references) == 1 and references[0].kind == "file" and references[0].raw == value:
+        value = references[0].target
+    elif len(value) >= 2 and value[0] == value[-1] and value[0] in "`\"'":
+        value = value[1:-1]
+
+    path = Path(os.path.expanduser(value))
+    if not path.is_absolute() and working_dir:
+        path = Path(str(working_dir)).expanduser() / path
+    return path.resolve()
 
 
 class DFMService:
@@ -60,10 +76,8 @@ class DFMService:
 
         project_id = params.get("project_id") or ""
         if action == "add_input":
-            raw_path = str(params.get("path") or "")
-            if raw_path.startswith("@file:"):
-                raw_path = raw_path[len("@file:"):]
-            record = self.inputs.register(project_id, raw_path.strip().strip('"'))
+            source_path = _resolve_input_path(params.get("path"), params.get("working_dir"))
+            record = self.inputs.register(project_id, source_path)
             return {"ok": True, "project_id": project_id, "input": record.to_dict()}
         if action == "confirm_fact":
             name = str(params.get("fact_name") or "").strip()
