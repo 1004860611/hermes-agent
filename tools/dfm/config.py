@@ -11,7 +11,7 @@ from .errors import DFMError
 @dataclass(frozen=True)
 class DFMConfig:
     runtime_python: str = "auto"
-    default_process: str = "injection_molding"
+    default_process: str = "injection"
     max_concurrent_runs: int = 1
     timeout_seconds: int = 900
     max_file_size_mb: int = 200
@@ -49,11 +49,14 @@ def load_dfm_config(config: Mapping[str, Any] | None = None) -> DFMConfig:
         raise DFMError("config_invalid", "dfm.runtime.python must be a non-empty string.")
     if not isinstance(default_process, str) or not default_process.strip():
         raise DFMError("config_invalid", "dfm.defaults.process must be a non-empty string.")
+    normalized_process = default_process.strip()
+    if normalized_process == "injection_molding":
+        normalized_process = "injection"
     if not isinstance(keep_failed, bool):
         raise DFMError("config_invalid", "dfm.retention.keep_failed_runs must be boolean.")
     return DFMConfig(
         runtime_python=runtime_python.strip(),
-        default_process=default_process.strip(),
+        default_process=normalized_process,
         max_concurrent_runs=_positive_int(
             _nested(config, "dfm", "runtime", "max_concurrent_runs", default=defaults.max_concurrent_runs),
             "dfm.runtime.max_concurrent_runs",

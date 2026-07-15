@@ -855,6 +855,9 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | 2026-07-13 | M0 优先搭建终极架构所需契约和模块接口，具体算法后接。                                   | 后续 STEP、2D、融合与规则能力应通过稳定接口扩展，不反复改动工具和项目主结构。    |
 | 2026-07-13 | Desktop 首先复用现有附件、Gateway JSON-RPC 和 Artifacts，不建设 DFM 专用聊天页。         | 当前代码已经具备上传和结果发现链路；专用 UI 应是非破坏性的增强。                |
 | 2026-07-14 | M0 基础架构通过纵向验收，后续进入 M1 现有 STEP 行为基线与分析器适配。                    | 真实工具发现、生产显式失败、测试分析器异步成功和 Desktop artifact 路径均已有自动化证据。 |
+| 2026-07-15 | M1 对外只启用 `injection` ProcessAdapter，并以 `injection.legacy-baseline@1.0.0` 作为默认分析范围；Run 只执行已持久化的 Plan 快照。 | 保留未来新增工艺适配器的注册边界，同时保证当前参数来源、检查操作、输入哈希和版本可审计，避免模型临时输出直接驱动几何计算。 |
+| 2026-07-15 | STEP 几何分析通过版本化 JSON/JSON Lines 协议在可终止子进程中运行；`dfm.runtime.python` 可选择当前解释器或已安装 OCC 的独立运行时。 | Hermes 主进程不必加载 OpenCascade；本地多环境和 Docker 单环境都使用同一 Analyzer/worker 契约。 |
+| 2026-07-15 | M1 使用合成、非敏感的 30×20×6 mm 通孔板 STEP 固定 Django/Hermes 行为基线。 | 真实 OCC 对比验证测量、issue 关系和 artifact 闭环，不依赖客户业务文件，也不把 issue 总数冻结为脆弱快照。 |
 
 ## 16. 状态跟踪
 
@@ -862,7 +865,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | 里程碑                            | 状态   | 证据/链接 |
 | ----------------------------------- | -------- | ----------- |
 | M0 Hermes 内建 DFM 基础架构       | 已完成 | `tests/tools/dfm/test_m0_e2e.py`；M0 聚焦套件 98 passed；静态编译与 Skill 校验通过 |
-| M1 现有行为基线与 STEP 分析器适配 | 未开始 |           |
+| M1 现有行为基线与 STEP 分析器适配 | 已完成 | `tests/tools/dfm/test_m1_baseline.py`、`test_m1_e2e.py`；OCC 矩阵 130 passed；无 OCC 矩阵 128 passed、2 dependency-gated skipped；合成样件与 profile 位于 `tests/fixtures/dfm/step/` |
 | M2 STEP DFM Hermes 端到端闭环     | 未开始 |           |
 | M3 2D 图纸文本理解与指标提取      | 未开始 |           |
 | M4 2D 工程特征识别                | 未开始 |           |
@@ -874,16 +877,16 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 
 ## 17. 下一步工作
 
-下一份可执行实施计划覆盖 M1，建议按以下顺序开展：
+下一份可执行实施计划应覆盖 M2，建议按以下顺序开展：
 
-1. 盘点 Django 已跑通 STEP 分析器的入口、依赖、输入输出、错误和 artifact 行为，形成迁移清单。
-2. 建立代表性 STEP 对比夹具，先固定 Django 当前有效行为和可接受误差，再迁移算法。
-3. 在现有 `Analyzer` 协议后实现 STEP 适配器，不改变 `dfm_project`、`dfm_analysis` 和 Manifest 公共契约。
-4. 将生产分析执行迁移到 argv 驱动、可超时和可强制终止的子进程；保留 M0 的 Run 状态与恢复语义。
-5. 接入版本、参数、测量证据和 artifact 登记，确保失败只返回显式能力或错误状态。
-6. 跑通 Hermes 与 Django 基线的差异报告，经代表性样本评审后再进入 M2 STEP 端到端闭环。
+1. 为 STEP 输入增加真实格式/magic、B-Rep 可读性和复杂度预检，在进入重型 worker 前返回可恢复错误。
+2. 建立材料、拔模方向、单位和关键注塑参数的澄清门控，把用户确认事实映射到 Plan 参数 provenance。
+3. 把 M1 保留的 raw legacy issue 适配为稳定 Measurement、Finding 和 evidence 引用，不改写原始报告制品。
+4. 完成项目继续、输入新版本、Plan 失效传播和受影响步骤重跑语义。
+5. 验证 Desktop 附件到 DFM intake、运行状态、Artifacts 发现和报告打开的真实交互闭环。
+6. 补齐安装/容器配置、`dfm.runtime.python`、OpenCascade 依赖和故障排查文档。
 
-M1 不训练 OCR/视觉模型、不开发 DFM 专用 Desktop 聊天页、不引入其他制造工艺，也不开展 SimpleCADAPI 集成；这些工作仍按后续里程碑和决策门推进。
+M2 继续限定注塑 STEP 闭环；不训练 OCR/视觉模型、不开发第二套 Desktop 聊天页、不启用其他制造工艺，也不开展 SimpleCADAPI 集成。这些工作仍按后续里程碑和决策门推进。
 
 ## 18. 文档维护规则
 

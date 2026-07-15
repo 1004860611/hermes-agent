@@ -9,7 +9,7 @@ def test_dfm_config_defaults_match_m0_contract():
 
     assert config == DFMConfig(
         runtime_python="auto",
-        default_process="injection_molding",
+        default_process="injection",
         max_concurrent_runs=1,
         timeout_seconds=900,
         max_file_size_mb=200,
@@ -28,18 +28,25 @@ def test_dfm_config_reads_nested_values():
                     "timeout_seconds": 120,
                 },
                 "intake": {"max_file_size_mb": 12, "max_pages": 8},
-                "defaults": {"process": "injection_molding"},
+                "defaults": {"process": "injection"},
                 "retention": {"keep_failed_runs": False},
             }
         }
     )
 
     assert config.runtime_python == "C:/dfm/python.exe"
+    assert config.default_process == "injection"
     assert config.max_concurrent_runs == 2
     assert config.timeout_seconds == 120
     assert config.max_file_size_mb == 12
     assert config.max_pages == 8
     assert config.keep_failed_runs is False
+
+
+def test_dfm_config_normalizes_the_m0_process_name():
+    config = load_dfm_config({"dfm": {"defaults": {"process": "injection_molding"}}})
+
+    assert config.default_process == "injection"
 
 
 @pytest.mark.parametrize(

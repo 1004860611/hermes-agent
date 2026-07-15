@@ -13,11 +13,15 @@ def test_dfm_doctor_reports_workspace_config_and_capabilities(tmp_path, capsys):
         assert report["workspace"]["writable"] is True
         assert report["config"]["valid"] is True
         assert set(report["capabilities"]) == {"step", "drawing", "fusion"}
-        assert all(item["status"] != "available" for item in report["capabilities"].values())
+        assert report["capabilities"]["drawing"]["status"] == "not_implemented"
+        assert report["capabilities"]["fusion"]["status"] == "not_implemented"
         assert report["runtime"]["worker_import_path"] == "tools.dfm.workers.step_worker"
         assert report["runtime"]["worker_version"] == "legacy-step-v1"
         assert report["runtime"]["occ_dependency"] == "pythonocc-core"
         assert isinstance(report["runtime"]["occ_available"], bool)
+        assert report["runtime"]["occ_available"] == (
+            report["capabilities"]["step"]["status"] == "available"
+        )
         assert report["processes"]["supported"] == ["injection"]
         assert report["processes"]["injection"] == {
             "adapter_version": "legacy-injection-v1",

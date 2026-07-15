@@ -83,6 +83,18 @@ def test_production_step_vertical_slice_fails_explicitly_without_fake_results(tm
                 "plan_id": plan["plan"]["plan_id"],
             },
         )
+        terminal_run = None
+        if started.get("ok") is True:
+            run_id = started["run"]["run_id"]
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                terminal_run = _dispatch(
+                    "dfm_analysis",
+                    {"action": "status", "project_id": project_id, "run_id": run_id},
+                )["run"]
+                if terminal_run["status"] in {"failed", "blocked", "cancelled", "succeeded"}:
+                    break
+                time.sleep(0.05)
         final_status = _dispatch(
             "dfm_project",
             {"action": "status", "project_id": project_id},
@@ -95,11 +107,19 @@ def test_production_step_vertical_slice_fails_explicitly_without_fake_results(tm
         reset_hermes_home_override(token)
 
     assert status["project"]["input_mode"] == "step"
-    assert status["capabilities"]["step"]["status"] == "dependency_missing"
-    assert plan["plan"]["status"] == "blocked"
-    assert started["ok"] is False
-    assert started["error"]["code"] == "dependency_missing"
-    assert final_status["project"]["runs"] == []
+    if status["capabilities"]["step"]["status"] == "available":
+        assert plan["plan"]["status"] == "ready"
+        assert started["ok"] is True
+        assert terminal_run is not None
+        assert terminal_run["status"] == "failed"
+        assert terminal_run["error"]["code"] in {"analyzer_failed", "worker_failed"}
+        assert terminal_run["artifacts"] == []
+    else:
+        assert status["capabilities"]["step"]["status"] == "dependency_missing"
+        assert plan["plan"]["status"] == "blocked"
+        assert started["ok"] is False
+        assert started["error"]["code"] == "dependency_missing"
+        assert final_status["project"]["runs"] == []
     assert final_status["project"]["findings"] == []
     assert final_status["project"]["artifacts"] == []
     assert schemas_after == enabled_definitions

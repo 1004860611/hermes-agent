@@ -6,6 +6,7 @@ from .base import Analyzer
 from .drawing import DrawingAnalyzer
 from .fusion import FusionAnalyzer
 from .step import StepAnalyzer
+from ..config import DFMConfig
 from ..errors import DFMError
 
 
@@ -36,9 +37,15 @@ class AnalyzerRegistry:
         return sorted(self._analyzers)
 
 
-def build_default_registry() -> AnalyzerRegistry:
+def build_default_registry(config: DFMConfig | None = None) -> AnalyzerRegistry:
+    config = config or DFMConfig()
     registry = AnalyzerRegistry()
-    registry.register(StepAnalyzer())
+    registry.register(
+        StepAnalyzer(
+            python_executable=None if config.runtime_python == "auto" else config.runtime_python,
+            timeout_seconds=config.timeout_seconds,
+        )
+    )
     registry.register(DrawingAnalyzer())
     registry.register(FusionAnalyzer())
     return registry

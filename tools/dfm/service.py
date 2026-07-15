@@ -47,7 +47,7 @@ class DFMService:
     def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, process_registry: ProcessAdapterRegistry | None = None, reconcile_jobs: bool = True) -> None:
         self.config = config or load_dfm_config()
         self.workspace = workspace or DFMWorkspace()
-        self.registry = registry or build_default_registry()
+        self.registry = registry or build_default_registry(self.config)
         self.process_registry = process_registry or build_default_process_registry()
         self.inputs = InputRegistrar(self.workspace, self.config)
         self.jobs = JobManager(self.workspace, self.registry, self.config, reconcile=reconcile_jobs)
@@ -104,7 +104,7 @@ class DFMService:
             analyzer = self.registry.get(str(analyzer_key))
             context = self._context(manifest)
             capability = analyzer.capability(context)
-            process = str(params.get("process") or "injection")
+            process = str(params.get("process") or self.config.default_process)
             process_plan = None
             if str(analyzer_key) == "step":
                 adapter = self.process_registry.get(process)

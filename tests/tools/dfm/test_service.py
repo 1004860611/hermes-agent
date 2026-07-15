@@ -3,6 +3,10 @@ from pathlib import Path
 import pytest
 
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+from tools.dfm.analyzers.drawing import DrawingAnalyzer
+from tools.dfm.analyzers.fusion import FusionAnalyzer
+from tools.dfm.analyzers.registry import AnalyzerRegistry
+from tools.dfm.analyzers.step import StepAnalyzer
 from tools.dfm.errors import DFMError
 from tools.dfm.service import DFMService
 
@@ -10,7 +14,11 @@ from tools.dfm.service import DFMService
 @pytest.fixture
 def service(tmp_path):
     token = set_hermes_home_override(tmp_path / "home")
-    instance = DFMService(reconcile_jobs=False)
+    registry = AnalyzerRegistry()
+    registry.register(StepAnalyzer(dependency_probe=lambda: False))
+    registry.register(DrawingAnalyzer())
+    registry.register(FusionAnalyzer())
+    instance = DFMService(registry=registry, reconcile_jobs=False)
     try:
         yield instance, tmp_path
     finally:

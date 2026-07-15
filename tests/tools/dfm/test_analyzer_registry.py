@@ -5,6 +5,7 @@ import pytest
 from tools.dfm.analyzers.base import AnalyzerContext, CancellationToken
 from tools.dfm.analyzers.registry import AnalyzerRegistry, build_default_registry
 from tools.dfm.contracts import CapabilityStatus
+from tools.dfm.config import DFMConfig
 from tools.dfm.errors import DFMError
 
 
@@ -47,15 +48,24 @@ def test_default_registry_exposes_three_production_boundaries(tmp_path):
 
     assert registry.keys() == ["drawing", "fusion", "step"]
     assert capabilities["step"].status in {
+        CapabilityStatus.AVAILABLE,
         CapabilityStatus.DEPENDENCY_MISSING,
-        CapabilityStatus.NOT_IMPLEMENTED,
     }
     assert capabilities["drawing"].status is CapabilityStatus.NOT_IMPLEMENTED
     assert capabilities["fusion"].status is CapabilityStatus.NOT_IMPLEMENTED
     assert capabilities["drawing"].error_code == "unsupported_capability"
 
 
-@pytest.mark.parametrize("key", ["step", "drawing", "fusion"])
+def test_default_registry_propagates_runtime_configuration():
+    config = DFMConfig(runtime_python="C:/dfm/python.exe", timeout_seconds=123)
+
+    analyzer = build_default_registry(config).get("step")
+
+    assert analyzer.python_executable == "C:/dfm/python.exe"
+    assert analyzer.timeout_seconds == 123
+
+
+@pytest.mark.parametrize("key", ["drawing", "fusion"])
 def test_unavailable_production_analyzers_never_emit_placeholder_results(tmp_path, key):
     analyzer = build_default_registry().get(key)
 
@@ -63,6 +73,20 @@ def test_unavailable_production_analyzers_never_emit_placeholder_results(tmp_pat
         analyzer.run(_context(tmp_path), CancellationToken())
 
     assert exc_info.value.code in {"dependency_missing", "unsupported_capability"}
+
+
+def test_step_analyzer_requires_dependency_then_persisted_plan(tmp_path):
+    analyzer = build_default_registry().get("step")
+
+    with pytest.raises(DFMError) as exc_info:
+        analyzer.run(_context(tmp_path), CancellationToken())
+
+    expected = (
+        "plan_required"
+        if analyzer.capability(_context(tmp_path)).status is CapabilityStatus.AVAILABLE
+        else "dependency_missing"
+    )
+    assert exc_info.value.code == expected
 
 
 def test_cancellation_token_is_cooperative():

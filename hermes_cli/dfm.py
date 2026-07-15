@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
@@ -53,7 +52,7 @@ def collect_diagnostics() -> dict:
             probe.unlink(missing_ok=True)
 
     context = AnalyzerContext("doctor", workspace.root, None, [])
-    registry = build_default_registry()
+    registry = build_default_registry(config if config_report["valid"] else None)
     capabilities = {key: registry.get(key).capability(context).to_dict() for key in registry.keys()}
     process_registry = build_default_process_registry()
     processes = {"supported": list(process_registry.keys())}
@@ -73,7 +72,8 @@ def collect_diagnostics() -> dict:
             "worker_import_path": step_worker.__name__,
             "worker_version": step_worker.WORKER_VERSION,
             "occ_dependency": "pythonocc-core",
-            "occ_available": importlib.util.find_spec("OCC") is not None,
+            "python_executable": registry.get("step").python_executable,
+            "occ_available": capabilities["step"]["status"] == "available",
         },
         "processes": processes,
         "note": "Diagnostics never install CAD, OCR, or system dependencies.",

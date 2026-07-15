@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
+import threading
 from typing import Callable
 
 from ..contracts import (
@@ -28,11 +30,23 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _default_dependency_probe() -> bool:
+def _dependency_available(python_executable: str) -> bool:
+    if Path(python_executable).resolve() == Path(sys.executable).resolve():
+        try:
+            return importlib.util.find_spec("OCC") is not None
+        except (ImportError, AttributeError, ValueError):
+            return False
     try:
-        return importlib.util.find_spec("OCC") is not None
-    except (ImportError, AttributeError, ValueError):
+        completed = subprocess.run(
+            [python_executable, "-c", "import OCC"],
+            check=False,
+            capture_output=True,
+            shell=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
         return False
+    return completed.returncode == 0
 
 
 class StepAnalyzer:
@@ -49,12 +63,20 @@ class StepAnalyzer:
         timeout_seconds: float = 900,
     ) -> None:
         self.runner = runner or ProcessRunner()
-        self.dependency_probe = dependency_probe or _default_dependency_probe
         self.python_executable = python_executable or sys.executable
+        self.dependency_probe = dependency_probe or (
+            lambda: _dependency_available(self.python_executable)
+        )
+        self._dependency_status: bool | None = None
+        self._dependency_lock = threading.Lock()
         self.timeout_seconds = timeout_seconds
 
     def capability(self, context: AnalyzerContext) -> Capability:
-        if not self.dependency_probe():
+        if self._dependency_status is None:
+            with self._dependency_lock:
+                if self._dependency_status is None:
+                    self._dependency_status = bool(self.dependency_probe())
+        if not self._dependency_status:
             return Capability(
                 self.key,
                 CapabilityStatus.DEPENDENCY_MISSING,
@@ -78,6 +100,13 @@ class StepAnalyzer:
         cancellation: CancellationToken,
     ) -> list[ArtifactRecord]:
         cancellation.raise_if_cancelled()
+        capability = self.capability(context)
+        if capability.status is not CapabilityStatus.AVAILABLE:
+            raise DFMError(
+                capability.error_code or "dependency_missing",
+                capability.reason,
+                capability.details,
+            )
         if context.plan is None:
             raise DFMError("plan_required", "A persisted DFM execution plan is required.")
         if context.plan.process != "injection":
@@ -124,7 +153,7 @@ class StepAnalyzer:
                 "--request",
                 str(request_path),
             ],
-            context.project_dir,
+            Path(__file__).resolve().parents[3],
             self.timeout_seconds,
             cancellation,
             events.append,
