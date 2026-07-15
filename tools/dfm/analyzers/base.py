@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence, runtime_checkable
 
-from ..contracts import ArtifactRecord, Capability, InputRecord
+from ..contracts import ArtifactRecord, Capability, InputRecord, PlanRecord
 from ..errors import DFMError
 
 
@@ -18,6 +18,7 @@ class AnalyzerContext:
     input_mode: str | None
     inputs: Sequence[InputRecord]
     run_id: str = ""
+    plan: PlanRecord | None = None
 
 
 class CancellationToken:

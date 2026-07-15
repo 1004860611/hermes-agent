@@ -10,6 +10,7 @@ from .errors import DFMError
 
 
 MANIFEST_SCHEMA_VERSION = 1
+WORKER_SCHEMA_VERSION = 1
 
 
 class CapabilityStatus(str, Enum):
@@ -127,13 +128,167 @@ class PlanRecord:
     analyzer_keys: list[str]
     status: str
     created_at: str
+    process: str = ""
+    process_adapter_version: str = ""
+    scope_id: str = ""
+    scope_version: str = ""
+    input_ids: list[str] = field(default_factory=list)
+    input_hashes: dict[str, str] = field(default_factory=dict)
+    parameters: dict[str, "EffectiveParameter"] = field(default_factory=dict)
+    operations: list["PlanOperation"] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "plan_id": self.plan_id,
+            "input_mode": self.input_mode,
+            "analyzer_keys": list(self.analyzer_keys),
+            "status": self.status,
+            "created_at": self.created_at,
+            "process": self.process,
+            "process_adapter_version": self.process_adapter_version,
+            "scope_id": self.scope_id,
+            "scope_version": self.scope_version,
+            "input_ids": list(self.input_ids),
+            "input_hashes": dict(self.input_hashes),
+            "parameters": {key: value.to_dict() for key, value in self.parameters.items()},
+            "operations": [operation.to_dict() for operation in self.operations],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "PlanRecord":
+        values = dict(payload)
+        values["parameters"] = {
+            key: EffectiveParameter.from_dict(value)
+            for key, value in values.get("parameters", {}).items()
+        }
+        values["operations"] = [
+            PlanOperation.from_dict(value) for value in values.get("operations", [])
+        ]
+        return cls(**values)
+
+
+@dataclass(frozen=True)
+class EffectiveParameter:
+    value: Any
+    unit: str | None
+    source: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "PlanRecord":
+    def from_dict(cls, payload: dict[str, Any]) -> "EffectiveParameter":
         return cls(**payload)
+
+
+@dataclass(frozen=True)
+class PlanOperation:
+    operation_id: str
+    operation: str
+    depends_on: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "PlanOperation":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class WorkerRequest:
+    schema_version: int
+    run_id: str
+    input_path: str
+    output_dir: str
+    process: str
+    scope_id: str
+    analyzer_version: str
+    parameters: dict[str, EffectiveParameter] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "parameters": {key: value.to_dict() for key, value in self.parameters.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "WorkerRequest":
+        values = dict(payload)
+        values["parameters"] = {
+            key: EffectiveParameter.from_dict(value)
+            for key, value in values.get("parameters", {}).items()
+        }
+        return cls(**values)
+
+
+@dataclass(frozen=True)
+class WorkerEvent:
+    schema_version: int
+    type: str
+    stage: str | None = None
+    percent: int | None = None
+    kind: str | None = None
+    path: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "WorkerEvent":
+        try:
+            event = cls(**payload)
+        except (TypeError, ValueError) as exc:
+            raise DFMError("worker_event_invalid", "DFM worker event is invalid.") from exc
+        if event.schema_version != WORKER_SCHEMA_VERSION:
+            raise DFMError(
+                "worker_event_invalid",
+                "DFM worker event schema version is unsupported.",
+                {"schema_version": event.schema_version},
+            )
+        if event.type not in {"progress", "artifact", "completed", "error"}:
+            raise DFMError(
+                "worker_event_invalid",
+                "DFM worker event type is unsupported.",
+                {"type": event.type},
+            )
+        if event.type == "progress" and (
+            event.percent is None or not 0 <= event.percent <= 100
+        ):
+            raise DFMError(
+                "worker_event_invalid",
+                "DFM worker progress percent must be between 0 and 100.",
+            )
+        return event
+
+
+@dataclass(frozen=True)
+class WorkerResult:
+    schema_version: int
+    worker_version: str
+    input_sha256: str
+    process: str
+    scope_id: str
+    parameters: dict[str, EffectiveParameter]
+    result_path: str
+    artifacts: list[dict[str, str]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "parameters": {key: value.to_dict() for key, value in self.parameters.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "WorkerResult":
+        values = dict(payload)
+        values["parameters"] = {
+            key: EffectiveParameter.from_dict(value)
+            for key, value in values.get("parameters", {}).items()
+        }
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -215,6 +370,8 @@ class RunRecord:
     idempotency_key: str | None = None
     owner_pid: int | None = None
     runtime_id: str | None = None
+    plan_id: str | None = None
+    plan_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -229,6 +386,8 @@ class RunRecord:
             "idempotency_key": self.idempotency_key,
             "owner_pid": self.owner_pid,
             "runtime_id": self.runtime_id,
+            "plan_id": self.plan_id,
+            "plan_snapshot": self.plan_snapshot,
         }
 
     @classmethod
