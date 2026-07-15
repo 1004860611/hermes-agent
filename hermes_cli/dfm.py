@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,8 @@ from tools.dfm.analyzers.registry import build_default_registry
 from tools.dfm.config import load_dfm_config
 from tools.dfm.errors import DFMError
 from tools.dfm.project.workspace import DFMWorkspace
+from tools.dfm.processes.registry import build_default_process_registry
+from tools.dfm.workers import step_worker
 
 
 def build_parser(subparsers):
@@ -52,11 +55,27 @@ def collect_diagnostics() -> dict:
     context = AnalyzerContext("doctor", workspace.root, None, [])
     registry = build_default_registry()
     capabilities = {key: registry.get(key).capability(context).to_dict() for key in registry.keys()}
+    process_registry = build_default_process_registry()
+    processes = {"supported": list(process_registry.keys())}
+    for key in process_registry.keys():
+        process_plan = process_registry.get(key).compile(context, {})
+        processes[key] = {
+            "adapter_version": process_plan.adapter_version,
+            "scope_id": process_plan.scope_id,
+            "scope_version": process_plan.scope_version,
+        }
     return {
         "ok": bool(config_report["valid"] and writable),
         "config": config_report,
         "workspace": {"path": str(workspace.root), "writable": writable, "error": write_error},
         "capabilities": capabilities,
+        "runtime": {
+            "worker_import_path": step_worker.__name__,
+            "worker_version": step_worker.WORKER_VERSION,
+            "occ_dependency": "pythonocc-core",
+            "occ_available": importlib.util.find_spec("OCC") is not None,
+        },
+        "processes": processes,
         "note": "Diagnostics never install CAD, OCR, or system dependencies.",
     }
 
@@ -71,6 +90,21 @@ def dfm_command(args) -> int:
         print(f"DFM workspace: {report['workspace']['path']}")
         print(f"Workspace writable: {report['workspace']['writable']}")
         print(f"Config valid: {report['config']['valid']}")
+        print(
+            f"STEP worker: {report['runtime']['worker_import_path']} "
+            f"({report['runtime']['worker_version']})"
+        )
+        print(
+            f"OpenCascade available: {report['runtime']['occ_available']} "
+            f"({report['runtime']['occ_dependency']})"
+        )
+        print(f"Supported processes: {', '.join(report['processes']['supported'])}")
+        for key in report["processes"]["supported"]:
+            process = report["processes"][key]
+            print(
+                f"{key}: adapter={process['adapter_version']} "
+                f"scope={process['scope_id']}@{process['scope_version']}"
+            )
         for key, capability in report["capabilities"].items():
             print(f"{key}: {capability['status']} - {capability['reason']}")
     return 0 if report["ok"] else 1
