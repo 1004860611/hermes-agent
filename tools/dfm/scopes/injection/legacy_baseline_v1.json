@@ -1,0 +1,29 @@
+{
+  "scope_id": "injection.legacy-baseline",
+  "version": "1.0.0",
+  "process": "injection",
+  "parameters": {
+    "pull_dir": {"value": [0, 0, 1], "unit": null},
+    "min_wall_mm": {"value": 1.2, "unit": "mm"},
+    "min_hole_diameter_mm": {"value": 2.5, "unit": "mm"},
+    "min_tool_radius_mm": {"value": 0.8, "unit": "mm"},
+    "min_slot_width_mm": {"value": 1.0, "unit": "mm"},
+    "min_machining_gap_mm": {"value": 0.8, "unit": "mm"},
+    "min_draft_deg": {"value": 1.0, "unit": "degree"},
+    "max_planar_step_mm": {"value": 0.5, "unit": "mm"},
+    "local_boss_thickness_ratio": {"value": 4.0, "unit": "ratio"},
+    "max_local_boss_span_mm": {"value": 25.0, "unit": "mm"},
+    "min_hole_edge_distance_mm": {"value": 1.0, "unit": "mm"},
+    "min_hole_web_mm": {"value": 1.0, "unit": "mm"},
+    "max_hole_depth_ratio": {"value": 6.0, "unit": "ratio"}
+  },
+  "operations": [
+    {"operation_id": "step.load", "operation": "load_step", "depends_on": []},
+    {"operation_id": "step.topology", "operation": "inspect_topology", "depends_on": ["step.load"]},
+    {"operation_id": "step.features", "operation": "inspect_small_features", "depends_on": ["step.topology"]},
+    {"operation_id": "step.thickness", "operation": "measure_wall_thickness", "depends_on": ["step.topology"]},
+    {"operation_id": "step.draft", "operation": "measure_draft", "depends_on": ["step.topology"]},
+    {"operation_id": "step.undercut", "operation": "inspect_undercut", "depends_on": ["step.topology"]},
+    {"operation_id": "step.render", "operation": "render_evidence", "depends_on": ["step.features", "step.thickness", "step.draft", "step.undercut"]}
+  ]
+}
