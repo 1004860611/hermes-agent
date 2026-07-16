@@ -67,6 +67,35 @@ def test_dfm_project_resolves_quoted_desktop_ref_from_task_cwd(tmp_path):
     assert added["input"]["source_name"] == "mold bracket.step"
 
 
+def test_dfm_start_receives_internal_progress_context_without_schema_changes(monkeypatch):
+    from tools import dfm_tool
+    from tools.registry import discover_builtin_tools, registry
+
+    captured = {}
+
+    class FakeService:
+        def analysis(self, action, **params):
+            captured.update(params)
+            return {"ok": True, "action": action}
+
+    callback = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(dfm_tool, "get_dfm_service", lambda: FakeService())
+    discover_builtin_tools()
+
+    result = json.loads(
+        registry.dispatch(
+            "dfm_analysis",
+            {"action": "start", "project_id": "dfm_1", "plan_id": "plan_1"},
+            tool_progress_callback=callback,
+            tool_call_id="tool_1",
+        )
+    )
+
+    assert result["ok"] is True
+    assert captured["_tool_progress_callback"] is callback
+    assert captured["_tool_call_id"] == "tool_1"
+
+
 def test_dfm_toolset_is_default_off_but_explicitly_configurable():
     from hermes_cli.tools_config import CONFIGURABLE_TOOLSETS, _DEFAULT_OFF_TOOLSETS, _get_platform_tools
     from toolsets import resolve_toolset

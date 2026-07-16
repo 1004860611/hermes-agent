@@ -3693,6 +3693,32 @@ def _on_tool_progress(
     if event_type == "moa.aggregating":
         _emit("moa.aggregating", sid, {"aggregator": str(name or "")})
         return
+    if event_type in {"background.tool.progress", "background.tool.complete"}:
+        payload: dict[str, object] = {
+            "name": str(name or ""),
+            "preview": str(preview or ""),
+            "text": str(preview or ""),
+        }
+        for key in (
+            "tool_id",
+            "status",
+            "stage",
+            "percent",
+            "artifact_count",
+            "latest_artifact",
+            "latest_artifact_kind",
+            "run_id",
+            "is_error",
+        ):
+            value = _kwargs.get(key)
+            if value is not None:
+                payload[key] = value
+        _emit(
+            "tool.complete" if event_type == "background.tool.complete" else "tool.progress",
+            sid,
+            payload,
+        )
+        return
     if event_type.startswith("subagent."):
         payload = {
             "goal": str(_kwargs.get("goal") or ""),

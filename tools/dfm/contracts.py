@@ -205,6 +205,7 @@ class WorkerRequest:
     scope_id: str
     analyzer_version: str
     parameters: dict[str, EffectiveParameter] = field(default_factory=dict)
+    max_evidence_findings: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -372,6 +373,12 @@ class RunRecord:
     runtime_id: str | None = None
     plan_id: str | None = None
     plan_snapshot: dict[str, Any] | None = None
+    stage: str | None = None
+    progress_percent: int = 0
+    heartbeat_at: str | None = None
+    event_log_path: str | None = None
+    worker_stdout_path: str | None = None
+    worker_stderr_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -388,6 +395,12 @@ class RunRecord:
             "runtime_id": self.runtime_id,
             "plan_id": self.plan_id,
             "plan_snapshot": self.plan_snapshot,
+            "stage": self.stage,
+            "progress_percent": self.progress_percent,
+            "heartbeat_at": self.heartbeat_at,
+            "event_log_path": self.event_log_path,
+            "worker_stdout_path": self.worker_stdout_path,
+            "worker_stderr_path": self.worker_stderr_path,
         }
 
     @classmethod

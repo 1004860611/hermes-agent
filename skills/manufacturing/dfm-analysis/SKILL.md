@@ -30,7 +30,12 @@ worker.
    and parameter provenance. Explain blocked checks and assumptions before
    execution.
 6. Call `start` only when the selected capability is `available`. Preserve its `run_id`.
-7. Poll run `status` without blocking the conversation. Use `cancel` when requested. Call `result` only after `succeeded`.
+7. `start` is non-blocking. The run publishes background stage, percentage,
+   heartbeat, and incremental artifact updates to supported clients. Return
+   control to the user after starting; do not spend Agent turns on terminal
+   sleep loops or rapid status polling. Use `status` when the user asks, after
+   reconnecting, or after a meaningful external wait. Use `cancel` when
+   requested. Call `result` only after `succeeded`.
 8. Summarize Findings with measurement, rule, evidence, confidence, and artifact path. State unresolved checks separately.
 
 ## Capability handling
@@ -58,3 +63,8 @@ Drawing-only and Fusion execution remain explicit unavailable capabilities.
 ## Recovery
 
 After interruption, call project `status`, then run `status` with the recorded IDs. Do not create a replacement project or duplicate Run unless the user requests a new revision.
+
+For a failed or slow run, inspect the `diagnostics.events`,
+`diagnostics.stdout`, and `diagnostics.stderr` paths returned by run status.
+Partial artifacts remain attached to the Run even when it times out. Never
+automatically start a replacement Run after timeout.

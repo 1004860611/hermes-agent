@@ -22,7 +22,16 @@ class SuccessfulRunner:
         self.cwd = None
         self.timeout_seconds = None
 
-    def run(self, argv, cwd, timeout_seconds, cancellation, on_event):
+    def run(
+        self,
+        argv,
+        cwd,
+        timeout_seconds,
+        cancellation,
+        on_event,
+        stdout_log_path=None,
+        stderr_log_path=None,
+    ):
         self.argv = argv
         self.cwd = cwd
         self.timeout_seconds = timeout_seconds
@@ -101,5 +110,6 @@ def test_step_analyzer_runs_persisted_plan_and_returns_contained_artifacts(tmp_p
     assert runner.argv[0] == "C:/dfm/python.exe"
     assert runner.cwd == Path(__file__).resolve().parents[3]
     assert runner.timeout_seconds == 123
+    assert runner.request.max_evidence_findings == 12
     assert {artifact.kind for artifact in artifacts} == {"report_json", "worker_result"}
     assert all((tmp_path / artifact.relative_path).is_file() for artifact in artifacts)

@@ -11,7 +11,15 @@ from hermes_constants import reset_hermes_home_override, set_hermes_home_overrid
 from tools.dfm.analyzers.base import AnalyzerContext
 from tools.dfm.analyzers.registry import AnalyzerRegistry
 from tools.dfm.config import DFMConfig
-from tools.dfm.contracts import ArtifactRecord, Capability, CapabilityStatus, PlanRecord, RunRecord, RunStatus
+from tools.dfm.contracts import (
+    ArtifactRecord,
+    Capability,
+    CapabilityStatus,
+    PlanRecord,
+    RunRecord,
+    RunStatus,
+    WorkerEvent,
+)
 from tools.dfm.errors import DFMError
 from tools.dfm.project.manifest import ManifestStore
 from tools.dfm.project.workspace import DFMWorkspace
@@ -51,6 +59,24 @@ class ControlledAnalyzer:
                 "2026-07-14T00:00:00Z",
             )
         ]
+
+
+class ProgressAnalyzer(ControlledAnalyzer):
+    def run(self, context: AnalyzerContext, cancellation):
+        self.contexts.append(context)
+        output = context.project_dir / "runs" / context.run_id / "artifacts"
+        output.mkdir(parents=True, exist_ok=True)
+        partial = output / "partial.png"
+        partial.write_bytes(b"partial-image")
+        assert context.event_sink is not None
+        context.event_sink(WorkerEvent(1, "progress", stage="render_evidence", percent=42))
+        context.event_sink(
+            WorkerEvent(1, "artifact", kind="evidence_image", path="partial.png")
+        )
+        self.started.set()
+        while not self.release.wait(0.01):
+            cancellation.raise_if_cancelled()
+        return []
 
 
 class InspectingExecutor:
@@ -129,6 +155,39 @@ def test_run_succeeds_and_registers_safe_artifact(job_env):
     assert repeated.run_id == run.run_id
     assert finished.artifacts[0].relative_path.startswith("artifacts/")
     assert (workspace.project_dir(project_id) / finished.artifacts[0].relative_path).exists()
+
+
+def test_run_persists_incremental_progress_artifacts_and_event_log(job_env):
+    workspace, project_id, _, _, managers = job_env
+    analyzer = ProgressAnalyzer()
+    registry = AnalyzerRegistry()
+    registry.register(analyzer)
+    manager = JobManager(workspace, registry, DFMConfig())
+    managers.append(manager)
+
+    updates = []
+    run = manager.start(project_id, "test", on_update=updates.append)
+    assert analyzer.started.wait(1)
+    running = manager.status(project_id, run.run_id)
+
+    assert running.status is RunStatus.RUNNING
+    assert running.stage == "render_evidence"
+    assert running.progress_percent == 42
+    assert running.heartbeat_at is not None
+    assert [item.kind for item in running.artifacts] == ["evidence_image"]
+    assert running.event_log_path is not None
+    assert updates[-1].progress_percent == 42
+    event_log = workspace.project_dir(project_id) / running.event_log_path
+    assert '"render_evidence"' in event_log.read_text(encoding="utf-8")
+
+    analyzer.release.set()
+    finished = _wait_status(manager, project_id, run.run_id, RunStatus.SUCCEEDED)
+    assert finished.progress_percent == 100
+    assert finished.artifacts == running.artifacts
+    deadline = time.monotonic() + 1
+    while updates[-1].status is not RunStatus.SUCCEEDED and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert updates[-1].status is RunStatus.SUCCEEDED
 
 
 def test_run_executes_and_persists_the_named_plan_snapshot(job_env):

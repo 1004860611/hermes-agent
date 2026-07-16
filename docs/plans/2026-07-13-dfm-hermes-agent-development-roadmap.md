@@ -600,6 +600,9 @@ dfm:
   defaults:
     process: injection
     pull_direction: [0, 0, 1]
+  evidence:
+    # Complete findings are preserved; only targeted three-view rendering is capped.
+    max_rendered_findings: 12
   retention:
     keep_failed_runs: true
 ```

@@ -5,19 +5,33 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
+import hashlib
+import json
+import logging
 from pathlib import Path
 import os
 from threading import RLock
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from ..analyzers.base import AnalyzerContext, CancellationToken
 from ..analyzers.registry import AnalyzerRegistry
 from ..config import DFMConfig
-from ..contracts import ArtifactRecord, PlanRecord, ProjectManifest, RunRecord, RunStatus, ensure_run_transition
+from ..contracts import (
+    ArtifactRecord,
+    PlanRecord,
+    ProjectManifest,
+    RunRecord,
+    RunStatus,
+    WorkerEvent,
+    ensure_run_transition,
+)
 from ..errors import DFMError
 from ..project.manifest import ManifestStore
 from ..project.workspace import DFMWorkspace
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -43,6 +57,7 @@ class JobManager:
         )
         self._futures: dict[str, Future] = {}
         self._tokens: dict[str, CancellationToken] = {}
+        self._listeners: dict[str, Callable[[RunRecord], None]] = {}
         self._lock = RLock()
         self.runtime_id = f"runtime_{uuid4().hex[:16]}"
         if reconcile:
@@ -68,6 +83,7 @@ class JobManager:
         *,
         plan: PlanRecord | None = None,
         idempotency_key: str | None = None,
+        on_update: Callable[[RunRecord], None] | None = None,
     ) -> RunRecord:
         store = self._store(project_id)
         manifest = store.load()
@@ -112,12 +128,20 @@ class JobManager:
                 runtime_id=self.runtime_id,
                 plan_id=plan.plan_id if plan else None,
                 plan_snapshot=plan.to_dict() if plan else None,
+                stage="queued",
+                progress_percent=0,
+                heartbeat_at=now,
+                event_log_path=f"runs/{run_id}/events.jsonl",
+                worker_stdout_path=f"runs/{run_id}/worker.stdout.log",
+                worker_stderr_path=f"runs/{run_id}/worker.stderr.log",
             )
             store.update(lambda current: replace(current, runs=[*current.runs, run], updated_at=now))
             if status is RunStatus.BLOCKED:
                 return run
             token = CancellationToken()
             self._tokens[run_id] = token
+            if on_update is not None:
+                self._listeners[run_id] = on_update
             try:
                 future = self._executor.submit(self._execute, project_id, run_id, analyzer, token)
             except Exception:
@@ -129,6 +153,7 @@ class JobManager:
                     "runtime_submit_failed",
                     "The DFM runtime could not submit the run.",
                 )
+                self._listeners.pop(run_id, None)
                 return self.status(project_id, run_id)
             self._futures[run_id] = future
             future.add_done_callback(lambda _future, rid=run_id: self._forget_future(rid))
@@ -168,7 +193,14 @@ class JobManager:
             self._replace_run(
                 project_id,
                 run_id,
-                lambda run: replace(run, status=RunStatus.RUNNING, updated_at=_utc_now()),
+                lambda run: replace(
+                    run,
+                    status=RunStatus.RUNNING,
+                    updated_at=_utc_now(),
+                    heartbeat_at=_utc_now(),
+                    stage="starting",
+                    progress_percent=max(run.progress_percent, 1),
+                ),
             )
             manifest = self._store(project_id).load()
             persisted_run = self._find_run(manifest, run_id)
@@ -184,14 +216,27 @@ class JobManager:
                 manifest.inputs,
                 run_id,
                 plan,
+                lambda event: self._record_event(project_id, run_id, event),
             )
             artifacts = analyzer.run(context, token)
             checked = [self._validate_artifact(context.project_dir, item) for item in artifacts]
             self._complete_success(project_id, run_id, checked)
         except DFMError as exc:
+            logger.warning(
+                "DFM run failed: project_id=%s run_id=%s code=%s",
+                project_id,
+                run_id,
+                exc.code,
+                exc_info=True,
+            )
             status = RunStatus.CANCELLED if exc.code == "run_cancelled" else RunStatus.FAILED
             self._mark_failure(project_id, run_id, status, exc.code, exc.message)
         except Exception:
+            logger.exception(
+                "Unexpected DFM analyzer failure: project_id=%s run_id=%s",
+                project_id,
+                run_id,
+            )
             self._mark_failure(
                 project_id,
                 run_id,
@@ -202,16 +247,23 @@ class JobManager:
         finally:
             with self._lock:
                 self._tokens.pop(run_id, None)
+                self._listeners.pop(run_id, None)
 
     def _mark_failure(self, project_id: str, run_id: str, status: RunStatus, code: str, message: str) -> None:
         try:
-            self._replace_run(
+            updated = self._replace_run(
                 project_id,
                 run_id,
                 lambda run: run if run.status not in {RunStatus.QUEUED, RunStatus.RUNNING} else replace(
-                    run, status=status, updated_at=_utc_now(), error={"code": code, "message": message}
+                    run,
+                    status=status,
+                    updated_at=_utc_now(),
+                    heartbeat_at=_utc_now(),
+                    stage="cancelled" if status is RunStatus.CANCELLED else "failed",
+                    error={"code": code, "message": message},
                 ),
             )
+            self._notify(run_id, updated)
         except DFMError:
             return
 
@@ -227,7 +279,19 @@ class JobManager:
                     continue
                 found = True
                 ensure_run_transition(run.status, RunStatus.SUCCEEDED)
-                runs.append(replace(run, status=RunStatus.SUCCEEDED, updated_at=now, artifacts=artifacts))
+                combined = {item.relative_path: item for item in run.artifacts}
+                combined.update({item.relative_path: item for item in artifacts})
+                runs.append(
+                    replace(
+                        run,
+                        status=RunStatus.SUCCEEDED,
+                        updated_at=now,
+                        heartbeat_at=now,
+                        stage="complete",
+                        progress_percent=100,
+                        artifacts=list(combined.values()),
+                    )
+                )
             if not found:
                 raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
             known = {item.artifact_id for item in current.artifacts}
@@ -239,6 +303,94 @@ class JobManager:
             )
 
         self._store(project_id).update(complete)
+        self._notify(run_id, self.status(project_id, run_id))
+
+    def _record_event(self, project_id: str, run_id: str, event: WorkerEvent) -> None:
+        now = _utc_now()
+        project_dir = self.workspace.project_dir(project_id)
+        event_path = project_dir / "runs" / run_id / "events.jsonl"
+        event_path.parent.mkdir(parents=True, exist_ok=True)
+        with event_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+
+        artifact = self._artifact_from_event(project_dir, run_id, event, now)
+
+        def update(run: RunRecord) -> RunRecord:
+            if run.status not in {RunStatus.QUEUED, RunStatus.RUNNING}:
+                return run
+            artifacts = list(run.artifacts)
+            if artifact is not None and all(
+                item.relative_path != artifact.relative_path for item in artifacts
+            ):
+                artifacts.append(artifact)
+            percent = run.progress_percent
+            stage = run.stage
+            if event.type == "progress":
+                percent = max(percent, int(event.percent or 0))
+                stage = event.stage or stage
+            return replace(
+                run,
+                artifacts=artifacts,
+                progress_percent=percent,
+                stage=stage,
+                heartbeat_at=now,
+                updated_at=now,
+            )
+
+        updated = self._replace_run(project_id, run_id, update)
+        self._notify(run_id, updated)
+
+    def _notify(self, run_id: str, run: RunRecord) -> None:
+        listener = self._listeners.get(run_id)
+        if listener is None:
+            return
+        try:
+            listener(run)
+        except Exception:
+            logger.debug("DFM run update listener failed: run_id=%s", run_id, exc_info=True)
+
+    @staticmethod
+    def _artifact_from_event(
+        project_dir: Path,
+        run_id: str,
+        event: WorkerEvent,
+        created_at: str,
+    ) -> ArtifactRecord | None:
+        if event.type != "artifact" or not event.path:
+            return None
+        relative = Path("runs") / run_id / "artifacts" / Path(event.path)
+        resolved = (project_dir / relative).resolve()
+        artifact_root = (project_dir / "runs" / run_id / "artifacts").resolve()
+        if (
+            Path(event.path).is_absolute()
+            or not resolved.is_relative_to(artifact_root)
+            or not resolved.is_file()
+        ):
+            logger.warning(
+                "Ignoring invalid incremental DFM artifact: run_id=%s path=%s",
+                run_id,
+                event.path,
+            )
+            return None
+        media_type = {
+            ".json": "application/json",
+            ".md": "text/markdown",
+            ".png": "image/png",
+            ".step": "model/step",
+            ".stp": "model/step",
+        }.get(resolved.suffix.lower(), "application/octet-stream")
+        digest = hashlib.sha256(relative.as_posix().encode("utf-8")).hexdigest()[:16]
+        kind = {
+            "image": "evidence_image",
+            "step": "highlighted_step",
+        }.get(event.kind or "", event.kind or "artifact")
+        return ArtifactRecord(
+            f"artifact_{digest}",
+            kind,
+            relative.as_posix(),
+            media_type,
+            created_at,
+        )
 
     @staticmethod
     def _validate_artifact(project_dir: Path, artifact: ArtifactRecord) -> ArtifactRecord:

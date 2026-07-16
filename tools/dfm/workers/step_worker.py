@@ -7,6 +7,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
+import traceback
 from typing import Any
 
 from ..contracts import WORKER_SCHEMA_VERSION, WorkerEvent, WorkerRequest, WorkerResult
@@ -38,12 +40,15 @@ def _occ_available() -> bool:
 
 
 def _legacy_config(request: WorkerRequest) -> dict[str, Any]:
-    return {
+    config = {
         "process": request.process,
         "thresholds": {
             key: parameter.value for key, parameter in request.parameters.items()
         },
     }
+    if request.max_evidence_findings is not None:
+        config["max_evidence_issues"] = request.max_evidence_findings
+    return config
 
 
 def _load_request(path: Path) -> WorkerRequest:
@@ -125,6 +130,13 @@ def _execute(request: WorkerRequest) -> WorkerResult:
     from ..geometry.step import legacy_analyzer
 
     def bridge_legacy_event(event: str, **payload: Any) -> None:
+        if event == "progress":
+            _emit(
+                "progress",
+                stage=str(payload.get("stage") or "legacy_analysis"),
+                percent=int(payload.get("percent") or 0),
+            )
+            return
         if event != "artifact":
             return
         raw_path = Path(str(payload.get("path") or ""))
@@ -192,6 +204,7 @@ def run_request(request_path: Path) -> int:
         _emit("error", code=exc.code, message=exc.message)
         return 1
     except Exception:
+        traceback.print_exc(file=sys.stderr)
         _emit(
             "error",
             code="worker_failed",

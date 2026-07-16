@@ -33,6 +33,8 @@ class ProcessRunner:
         timeout_seconds: float,
         cancellation: CancellationToken,
         on_event: Callable[[WorkerEvent], None],
+        stdout_log_path: Path | None = None,
+        stderr_log_path: Path | None = None,
     ) -> ProcessResult:
         if not argv or timeout_seconds <= 0:
             raise DFMError(
@@ -68,11 +70,23 @@ class ProcessRunner:
 
         stdout_queue: queue.Queue[str | None] = queue.Queue()
         stderr_parts: list[str] = []
+        try:
+            stdout_log = self._open_log(stdout_log_path)
+            stderr_log = self._open_log(stderr_log_path)
+        except OSError as exc:
+            self._terminate_process_tree(process)
+            raise DFMError(
+                "worker_log_failed",
+                "The DFM worker diagnostic logs could not be created.",
+            ) from exc
 
         def read_stdout() -> None:
             assert process.stdout is not None
             try:
                 for line in process.stdout:
+                    if stdout_log is not None:
+                        stdout_log.write(line)
+                        stdout_log.flush()
                     stdout_queue.put(line)
             finally:
                 stdout_queue.put(None)
@@ -81,6 +95,9 @@ class ProcessRunner:
             assert process.stderr is not None
             for line in process.stderr:
                 stderr_parts.append(line)
+                if stderr_log is not None:
+                    stderr_log.write(line)
+                    stderr_log.flush()
 
         stdout_thread = threading.Thread(target=read_stdout, daemon=True)
         stderr_thread = threading.Thread(target=read_stderr, daemon=True)
@@ -125,12 +142,24 @@ class ProcessRunner:
                 process.stdout.close()
             if process.stderr is not None:
                 process.stderr.close()
+            if stdout_log is not None:
+                stdout_log.close()
+            if stderr_log is not None:
+                stderr_log.close()
 
         return ProcessResult(
             returncode=returncode,
             stdout="".join(stdout_parts),
             stderr="".join(stderr_parts),
         )
+
+    @staticmethod
+    def _open_log(path: Path | None):
+        if path is None:
+            return None
+        resolved = Path(path)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved.open("w", encoding="utf-8", errors="replace")
 
     @staticmethod
     def _terminate_process_tree(process: subprocess.Popen[str]) -> None:

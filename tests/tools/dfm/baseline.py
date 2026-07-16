@@ -207,6 +207,8 @@ def _flatten_numbers(value: Any, prefix: str, result: dict[str, float]) -> None:
         result[prefix] = float(value)
     elif isinstance(value, dict):
         for key in sorted(value):
+            if key == "render_checks":
+                continue
             _flatten_numbers(value[key], f"{prefix}.{key}", result)
     elif isinstance(value, list):
         for index, item in enumerate(value):

@@ -15,6 +15,7 @@ def test_dfm_config_defaults_match_m0_contract():
         max_file_size_mb=200,
         max_pages=50,
         keep_failed_runs=True,
+        max_evidence_findings=12,
     )
 
 
@@ -30,6 +31,7 @@ def test_dfm_config_reads_nested_values():
                 "intake": {"max_file_size_mb": 12, "max_pages": 8},
                 "defaults": {"process": "injection"},
                 "retention": {"keep_failed_runs": False},
+                "evidence": {"max_rendered_findings": 7},
             }
         }
     )
@@ -41,6 +43,7 @@ def test_dfm_config_reads_nested_values():
     assert config.max_file_size_mb == 12
     assert config.max_pages == 8
     assert config.keep_failed_runs is False
+    assert config.max_evidence_findings == 7
 
 
 def test_dfm_config_normalizes_the_m0_process_name():
@@ -56,6 +59,7 @@ def test_dfm_config_normalizes_the_m0_process_name():
         {"dfm": {"runtime": {"timeout_seconds": "slow"}}},
         {"dfm": {"intake": {"max_file_size_mb": -1}}},
         {"dfm": {"retention": {"keep_failed_runs": "yes"}}},
+        {"dfm": {"evidence": {"max_rendered_findings": 0}}},
     ],
 )
 def test_dfm_config_rejects_invalid_values(mapping):

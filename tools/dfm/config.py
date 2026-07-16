@@ -17,6 +17,7 @@ class DFMConfig:
     max_file_size_mb: int = 200
     max_pages: int = 50
     keep_failed_runs: bool = True
+    max_evidence_findings: int = 12
 
 
 def _nested(mapping: Mapping[str, Any], *keys: str, default: Any) -> Any:
@@ -74,4 +75,14 @@ def load_dfm_config(config: Mapping[str, Any] | None = None) -> DFMConfig:
             "dfm.intake.max_pages",
         ),
         keep_failed_runs=keep_failed,
+        max_evidence_findings=_positive_int(
+            _nested(
+                config,
+                "dfm",
+                "evidence",
+                "max_rendered_findings",
+                default=defaults.max_evidence_findings,
+            ),
+            "dfm.evidence.max_rendered_findings",
+        ),
     )

@@ -17,6 +17,9 @@ def _call(kind: str, args: dict, **context) -> str:
             working_dir = resolve_task_overrides(context.get("task_id")).get("cwd")
             if working_dir:
                 params["working_dir"] = working_dir
+        if kind == "analysis" and args.get("action") == "start":
+            params["_tool_progress_callback"] = context.get("tool_progress_callback")
+            params["_tool_call_id"] = context.get("tool_call_id")
         result = service.project(args.get("action", ""), **params) if kind == "project" else service.analysis(args.get("action", ""), **params)
         return json.dumps(result, ensure_ascii=False)
     except DFMError as exc:

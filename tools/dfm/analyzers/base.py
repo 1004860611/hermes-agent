@@ -5,9 +5,9 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Callable, Protocol, Sequence, runtime_checkable
 
-from ..contracts import ArtifactRecord, Capability, InputRecord, PlanRecord
+from ..contracts import ArtifactRecord, Capability, InputRecord, PlanRecord, WorkerEvent
 from ..errors import DFMError
 
 
@@ -19,6 +19,7 @@ class AnalyzerContext:
     inputs: Sequence[InputRecord]
     run_id: str = ""
     plan: PlanRecord | None = None
+    event_sink: Callable[[WorkerEvent], None] | None = None
 
 
 class CancellationToken:

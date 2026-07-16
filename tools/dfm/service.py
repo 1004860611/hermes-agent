@@ -16,7 +16,7 @@ from hermes_constants import get_hermes_home
 from .analyzers.base import AnalyzerContext
 from .analyzers.registry import AnalyzerRegistry, build_default_registry
 from .config import DFMConfig, load_dfm_config
-from .contracts import FactRecord, PlanRecord, ProjectManifest, RunRecord
+from .contracts import FactRecord, PlanRecord, ProjectManifest, RunRecord, RunStatus
 from .errors import DFMError
 from .project.inputs import InputRegistrar
 from .project.manifest import ManifestStore
@@ -139,11 +139,53 @@ class DFMService:
             plan = next((item for item in manifest.plans if item.plan_id == plan_id), None)
             if plan is None:
                 raise DFMError("plan_not_found", "DFM analysis plan was not found.", {"plan_id": plan_id})
+            progress_callback = params.get("_tool_progress_callback")
+            tool_call_id = str(params.get("_tool_call_id") or "")
+
+            def on_update(updated: RunRecord) -> None:
+                if not callable(progress_callback):
+                    return
+                terminal = updated.status in {
+                    RunStatus.SUCCEEDED,
+                    RunStatus.FAILED,
+                    RunStatus.CANCELLED,
+                    RunStatus.BLOCKED,
+                }
+                latest = updated.artifacts[-1] if updated.artifacts else None
+                latest_text = (
+                    f", latest {latest.kind}: {latest.relative_path}"
+                    if latest is not None
+                    else ""
+                )
+                preview = (
+                    f"DFM {updated.status.value}: {updated.stage or 'working'} "
+                    f"({updated.progress_percent}%, {len(updated.artifacts)} artifacts{latest_text})"
+                )
+                try:
+                    progress_callback(
+                        "background.tool.complete" if terminal else "background.tool.progress",
+                        "dfm_analysis",
+                        preview,
+                        None,
+                        tool_id=tool_call_id,
+                        status=updated.status.value,
+                        stage=updated.stage,
+                        percent=updated.progress_percent,
+                        artifact_count=len(updated.artifacts),
+                        latest_artifact=(latest.relative_path if latest else None),
+                        latest_artifact_kind=(latest.kind if latest else None),
+                        run_id=updated.run_id,
+                        is_error=updated.status in {RunStatus.FAILED, RunStatus.BLOCKED},
+                    )
+                except Exception:
+                    return
+
             run = self.jobs.start(
                 project_id,
                 plan.analyzer_keys[0],
                 plan=plan,
                 idempotency_key=params.get("idempotency_key"),
+                on_update=on_update,
             )
             return {"ok": True, "project_id": project_id, "run": self._run_dict(project_id, run)}
         run_id = params.get("run_id") or ""
@@ -161,6 +203,15 @@ class DFMService:
         payload = run.to_dict()
         project_dir = self.workspace.project_dir(project_id)
         payload["artifacts"] = [{**artifact.to_dict(), "path": str((project_dir / artifact.relative_path).resolve())} for artifact in run.artifacts]
+        payload["diagnostics"] = {
+            key: str((project_dir / relative).resolve())
+            for key, relative in {
+                "events": run.event_log_path,
+                "stdout": run.worker_stdout_path,
+                "stderr": run.worker_stderr_path,
+            }.items()
+            if relative
+        }
         return payload
 
     def close(self) -> None:

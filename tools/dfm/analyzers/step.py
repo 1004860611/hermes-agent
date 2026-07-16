@@ -61,6 +61,7 @@ class StepAnalyzer:
         dependency_probe: Callable[[], bool] | None = None,
         python_executable: str | None = None,
         timeout_seconds: float = 900,
+        max_evidence_findings: int = 12,
     ) -> None:
         self.runner = runner or ProcessRunner()
         self.python_executable = python_executable or sys.executable
@@ -70,6 +71,7 @@ class StepAnalyzer:
         self._dependency_status: bool | None = None
         self._dependency_lock = threading.Lock()
         self.timeout_seconds = timeout_seconds
+        self.max_evidence_findings = max_evidence_findings
 
     def capability(self, context: AnalyzerContext) -> Capability:
         if self._dependency_status is None:
@@ -138,6 +140,7 @@ class StepAnalyzer:
             scope_id=context.plan.scope_id,
             analyzer_version=self.version,
             parameters=context.plan.parameters,
+            max_evidence_findings=self.max_evidence_findings,
         )
         request_path = run_dir / "request.json"
         request_path.write_text(
@@ -145,6 +148,12 @@ class StepAnalyzer:
             encoding="utf-8",
         )
         events: list[WorkerEvent] = []
+
+        def handle_event(event: WorkerEvent) -> None:
+            events.append(event)
+            if context.event_sink is not None:
+                context.event_sink(event)
+
         process_result = self.runner.run(
             [
                 self.python_executable,
@@ -156,7 +165,9 @@ class StepAnalyzer:
             Path(__file__).resolve().parents[3],
             self.timeout_seconds,
             cancellation,
-            events.append,
+            handle_event,
+            run_dir / "worker.stdout.log",
+            run_dir / "worker.stderr.log",
         )
         if process_result.returncode != 0:
             error = next((event for event in reversed(events) if event.type == "error"), None)

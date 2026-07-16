@@ -44,6 +44,7 @@ def build_default_registry(config: DFMConfig | None = None) -> AnalyzerRegistry:
         StepAnalyzer(
             python_executable=None if config.runtime_python == "auto" else config.runtime_python,
             timeout_seconds=config.timeout_seconds,
+            max_evidence_findings=config.max_evidence_findings,
         )
     )
     registry.register(DrawingAnalyzer())

@@ -7,7 +7,12 @@ from tools.dfm.contracts import EffectiveParameter, WorkerRequest
 from tools.dfm.runtime.events import parse_worker_event
 
 
-def _request(tmp_path: Path, *, process: str = "injection") -> Path:
+def _request(
+    tmp_path: Path,
+    *,
+    process: str = "injection",
+    max_evidence_findings: int | None = None,
+) -> Path:
     input_path = tmp_path / "part.step"
     input_path.write_bytes(b"opaque-step")
     payload = WorkerRequest(
@@ -26,6 +31,7 @@ def _request(tmp_path: Path, *, process: str = "injection") -> Path:
                 [0.0, 0.0, 1.0], None, "injection_legacy_default"
             ),
         },
+        max_evidence_findings=max_evidence_findings,
     )
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(payload.to_dict()), encoding="utf-8")
@@ -78,3 +84,12 @@ def test_worker_builds_legacy_config_from_effective_parameters(tmp_path):
         "process": "injection",
         "thresholds": {"min_wall_mm": 1.2, "pull_dir": [0.0, 0.0, 1.0]},
     }
+
+
+def test_worker_passes_evidence_budget_to_legacy_config(tmp_path):
+    from tools.dfm.workers.step_worker import _legacy_config
+
+    request_path = _request(tmp_path, max_evidence_findings=12)
+    request = WorkerRequest.from_dict(json.loads(request_path.read_text(encoding="utf-8")))
+
+    assert _legacy_config(request)["max_evidence_issues"] == 12

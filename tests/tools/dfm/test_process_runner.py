@@ -15,18 +15,24 @@ FIXTURE = Path(__file__).parent / "fixtures" / "worker_fixture.py"
 def test_process_runner_streams_events_and_keeps_stderr_separate(tmp_path):
     events = []
 
+    stdout_log = tmp_path / "worker.stdout.log"
+    stderr_log = tmp_path / "worker.stderr.log"
     result = ProcessRunner().run(
         [sys.executable, str(FIXTURE), "success"],
         tmp_path / "含 空格",
         5,
         CancellationToken(),
         events.append,
+        stdout_log,
+        stderr_log,
     )
 
     assert result.returncode == 0
     assert [event.type for event in events] == ["progress", "completed"]
     assert "ordinary worker output" in result.stdout
     assert "fixture diagnostic" in result.stderr
+    assert '"type":"progress"' in stdout_log.read_text(encoding="utf-8")
+    assert "fixture diagnostic" in stderr_log.read_text(encoding="utf-8")
 
 
 def test_process_runner_times_out_and_terminates_worker(tmp_path):

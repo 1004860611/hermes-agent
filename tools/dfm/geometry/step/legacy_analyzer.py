@@ -5,8 +5,9 @@ Migration source:
 E:/workspace/mongo-hu/django-vue3-admin/backend/aimold_app/agents/
 skill/dfm-analysis/scripts/dfm_analyze.py
 
-Keep algorithm changes out of this module until the M1 comparison baseline is
-approved. Hermes integration belongs in ``tools.dfm.workers.step_worker``.
+Keep geometry measurement and rule changes out of this module until approved
+by the M1 comparison baseline. Runtime progress and bounded evidence scheduling
+remain covered by parity tests; process orchestration belongs in the worker.
 """
 from __future__ import annotations
 
@@ -3776,6 +3777,17 @@ DFM_STAGE_TITLES = [
 ]
 
 
+DFM_STAGE_KEYS = [
+    "geometry_and_small_features",
+    "planar_steps_and_gaps",
+    "surface_quality",
+    "holes_and_edge_distance",
+    "wall_thickness",
+    "surface_continuity",
+    "draft_and_undercut",
+]
+
+
 def format_threshold_value(key: str, value: Any) -> str:
     if key == "process":
         return PROCESS_LABELS.get(str(value), str(value))
@@ -3865,31 +3877,61 @@ def emit_stage_issue_details(
 ) -> None:
     emit_report_delta(f"#### {title} 图文说明\n\n")
     ordered_issues = sorted(issues, key=lambda issue: issue.id)
-    if shape is None or occ is None or out_dir is None or args is None or args.no_render:
-        for issue in ordered_issues:
-            emit_issue_detail(issue)
-        return
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    bbox = global_bbox or shape_bbox(shape, occ)
+    # Defer targeted evidence until every geometry check has completed. The
+    # worker can then apply a bounded evidence budget without dropping any
+    # engineering findings.
     for issue in ordered_issues:
-        if not issue.images:
-            try:
-                images = render_issue_with_vtk(
-                    shape,
-                    occ,
-                    issue,
-                    out_dir,
-                    args.image_width,
-                    args.image_height,
-                    args.mesh_deflection_mm,
-                    bbox,
-                )
-                issue.images = images
-                issue.image = images[0] if images else None
-            except Exception as exc:
-                print(f"[warn] targeted render failed for {issue.id}: {exc}", file=sys.stderr)
         emit_issue_detail(issue)
+    return
+
+
+def emit_stage_progress(title: str, *, completed: bool) -> None:
+    try:
+        index = DFM_STAGE_TITLES.index(title)
+    except ValueError:
+        index = 0
+    key = DFM_STAGE_KEYS[index] if index < len(DFM_STAGE_KEYS) else "geometry_analysis"
+    percent = 18 + index * 6 + (5 if completed else 0)
+    emit_dfm_event("progress", stage=key, percent=min(percent, 62))
+
+
+def render_issue_evidence(
+    shape: Any,
+    occ: SimpleNamespace,
+    issues: list[Issue],
+    out_dir: Path,
+    args: argparse.Namespace,
+) -> int:
+    if args.no_render:
+        emit_dfm_event("progress", stage="evidence_skipped", percent=78)
+        return 0
+    limit = args.max_evidence_issues
+    selected = issues if limit is None else issues[:limit]
+    bbox = shape_bbox(shape, occ)
+    total = max(len(selected), 1)
+    for index, issue in enumerate(selected, start=1):
+        emit_dfm_event(
+            "progress",
+            stage="render_evidence",
+            percent=64 + int(((index - 1) / total) * 14),
+        )
+        try:
+            images = render_issue_with_vtk(
+                shape,
+                occ,
+                issue,
+                out_dir,
+                args.image_width,
+                args.image_height,
+                args.mesh_deflection_mm,
+                bbox,
+            )
+            issue.images = images
+            issue.image = images[0] if images else None
+        except Exception as exc:
+            print(f"[warn] targeted render failed for {issue.id}: {exc}", file=sys.stderr)
+    emit_dfm_event("progress", stage="evidence_complete", percent=78)
+    return len(selected)
 
 
 def mark_stage_issues(title: str, issues: list[Issue]) -> None:
@@ -3919,6 +3961,7 @@ def emit_model_summary(stats: dict[str, Any]) -> None:
 
 
 def emit_stage_start(title: str) -> None:
+    emit_stage_progress(title, completed=False)
     emit_report_delta(f"### {title}\n\n")
     emit_report_delta("正在检测...\n\n")
 
@@ -3933,6 +3976,7 @@ def emit_stage_result(
     args: argparse.Namespace | None = None,
     global_bbox: BBox | None = None,
 ) -> None:
+    emit_stage_progress(title, completed=True)
     if not issues:
         emit_report_delta(f"{title}：未发现超过当前阈值的风险项。\n\n")
         return
@@ -4144,6 +4188,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-tolerance-mm", type=float, default=0.01)
     parser.add_argument("--max-issues", type=int)
     parser.add_argument("--max-issues-per-code", type=int)
+    parser.add_argument(
+        "--max-evidence-issues",
+        type=int,
+        default=None,
+        help="Render targeted evidence for at most this many severity-sorted findings.",
+    )
     parser.add_argument("--image-width", type=int, default=1280)
     parser.add_argument("--image-height", type=int, default=860)
     parser.add_argument("--mesh-deflection-mm", type=float, default=0.5)
@@ -4258,13 +4308,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         clean_previous_outputs(out_dir)
         emit_analysis_intro()
+        emit_dfm_event("progress", stage="load_dependencies", percent=5)
         occ = import_occ()
+        emit_dfm_event("progress", stage="load_step", percent=10)
         shape = read_step(input_path, occ)
+        emit_dfm_event("progress", stage="inspect_geometry", percent=15)
         issues, stats = analyze_shape(shape, occ, args, out_dir)
+        rendered_findings = render_issue_evidence(shape, occ, issues, out_dir, args)
+        emit_dfm_event("progress", stage="render_overview", percent=80)
         render_outputs(shape, occ, issues, out_dir, args)
         highlighted_step = None
         highlighted_step_error = None
         if args.highlight_step:
+            emit_dfm_event("progress", stage="export_highlighted_step", percent=88)
             try:
                 highlighted_step = export_highlighted_step(shape, occ, issues, out_dir / args.highlight_step_name)
             except Exception as exc:
@@ -4279,11 +4335,21 @@ def main(argv: list[str] | None = None) -> int:
             "stats": stats,
             "issue_count": len(issues),
             "issues": [asdict(issue) for issue in issues],
+            "evidence": {
+                "rendered_findings": rendered_findings,
+                "total_findings": len(issues),
+                "limit": args.max_evidence_issues,
+            },
             "highlighted_step": highlighted_step,
             "highlighted_step_error": highlighted_step_error,
         }
-        write_json_report(out_dir / "dfm_report.json", result)
-        write_markdown_report(out_dir / "dfm_report.md", result, emit_stream=False)
+        emit_dfm_event("progress", stage="write_reports", percent=95)
+        json_report = out_dir / "dfm_report.json"
+        markdown_report = out_dir / "dfm_report.md"
+        write_json_report(json_report, result)
+        emit_artifact_event(json_report, "report_json")
+        write_markdown_report(markdown_report, result, emit_stream=False)
+        emit_artifact_event(markdown_report, "report_markdown")
     except Exception as exc:
         if args.debug:
             traceback.print_exc()
