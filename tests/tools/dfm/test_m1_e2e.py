@@ -75,6 +75,7 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         assert {item["kind"] for item in result["run"]["artifacts"]} >= {
             "report_json",
             "report_markdown",
+            "report_presentation",
             "worker_result",
         }
         assert all(Path(item["path"]).is_file() for item in result["run"]["artifacts"])

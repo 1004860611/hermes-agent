@@ -375,6 +375,7 @@ class JobManager:
         media_type = {
             ".json": "application/json",
             ".md": "text/markdown",
+            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             ".png": "image/png",
             ".step": "model/step",
             ".stp": "model/step",

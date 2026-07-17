@@ -17,9 +17,15 @@ def test_dfm_doctor_reports_workspace_config_and_capabilities(tmp_path, capsys):
         assert report["capabilities"]["fusion"]["status"] == "not_implemented"
         assert report["runtime"]["worker_import_path"] == "tools.dfm.workers.step_worker"
         assert report["runtime"]["worker_version"] == "legacy-step-v1"
-        assert report["runtime"]["occ_dependency"] == "pythonocc-core"
-        assert isinstance(report["runtime"]["occ_available"], bool)
-        assert report["runtime"]["occ_available"] == (
+        assert set(report["runtime"]["dependencies"]) == {
+            "pythonocc-core",
+            "python-pptx",
+        }
+        assert all(
+            isinstance(value, bool)
+            for value in report["runtime"]["dependencies"].values()
+        )
+        assert report["runtime"]["step_available"] == (
             report["capabilities"]["step"]["status"] == "available"
         )
         assert report["processes"]["supported"] == ["injection"]

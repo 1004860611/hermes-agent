@@ -93,3 +93,16 @@ def test_worker_passes_evidence_budget_to_legacy_config(tmp_path):
     request = WorkerRequest.from_dict(json.loads(request_path.read_text(encoding="utf-8")))
 
     assert _legacy_config(request)["max_evidence_issues"] == 12
+
+
+def test_worker_classifies_powerpoint_report_artifact(tmp_path):
+    from tools.dfm.workers.step_worker import _artifact_metadata
+
+    report = tmp_path / "dfm_report.pptx"
+    report.write_bytes(b"pptx")
+
+    assert _artifact_metadata(report, tmp_path) == {
+        "kind": "report_presentation",
+        "path": "dfm_report.pptx",
+        "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }

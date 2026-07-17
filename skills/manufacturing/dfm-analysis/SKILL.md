@@ -36,11 +36,11 @@ worker.
    sleep loops or rapid status polling. Use `status` when the user asks, after
    reconnecting, or after a meaningful external wait. Use `cancel` when
    requested. Call `result` only after `succeeded`.
-8. Summarize Findings with measurement, rule, evidence, confidence, and artifact path. State unresolved checks separately.
+8. Summarize Findings with measurement, rule, evidence, confidence, and artifact path. State unresolved checks separately. For a successful STEP run, present `dfm_report.pptx` as the primary human-readable report; retain JSON and Markdown as traceable engineering artifacts. Do not ask the model to recreate the deterministic PPTX.
 
 ## Capability handling
 
-- `dependency_missing`: explain the missing backend and suggest `hermes dfm doctor`; never install automatically.
+- `dependency_missing`: explain the missing backend (OpenCascade or python-pptx) and suggest `hermes dfm doctor`; never install automatically.
 - `not_implemented` or `unsupported_capability`: state the limitation and offer supported partial analysis.
 - `disabled`: ask the user to configure and enable the capability in a new session.
 - `unhealthy`: preserve project and Run IDs and report diagnostics.

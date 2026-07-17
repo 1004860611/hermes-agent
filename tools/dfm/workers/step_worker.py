@@ -39,6 +39,12 @@ def _occ_available() -> bool:
         return False
 
 
+def _pptx_available() -> bool:
+    from ..reporting.pptx import pptx_available
+
+    return pptx_available()
+
+
 def _legacy_config(request: WorkerRequest) -> dict[str, Any]:
     config = {
         "process": request.process,
@@ -75,6 +81,9 @@ def _artifact_metadata(path: Path, output_dir: Path) -> dict[str, str]:
         kind, media_type = "report_json", "application/json"
     elif path.name == "dfm_report.md":
         kind, media_type = "report_markdown", "text/markdown"
+    elif path.name == "dfm_report.pptx":
+        kind = "report_presentation"
+        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     elif suffix in {".step", ".stp"}:
         kind, media_type = "highlighted_step", "model/step"
     elif suffix == ".png":
@@ -111,6 +120,12 @@ def _execute(request: WorkerRequest) -> WorkerResult:
             "dependency_missing",
             "pythonocc-core/OpenCascade is required by the STEP worker.",
             {"dependency": "pythonocc-core"},
+        )
+    if not _pptx_available():
+        raise DFMError(
+            "dependency_missing",
+            "python-pptx is required to generate the DFM PowerPoint report.",
+            {"dependency": "python-pptx", "install_extra": "hermes-agent[dfm]"},
         )
 
     input_path = Path(request.input_path).expanduser().resolve()
@@ -166,6 +181,35 @@ def _execute(request: WorkerRequest) -> WorkerResult:
             "analyzer_failed",
             "The legacy STEP analyzer exited unsuccessfully.",
             {"returncode": returncode},
+        )
+
+    report_path = output_dir / "dfm_report.json"
+    try:
+        report_result = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        raise DFMError(
+            "report_generation_failed",
+            "The DFM JSON report could not be loaded for PowerPoint generation.",
+        ) from exc
+    if not isinstance(report_result, dict):
+        raise DFMError(
+            "report_generation_failed",
+            "The DFM JSON report must contain an object.",
+        )
+
+    from ..reporting import render_default_reports
+
+    _emit("progress", stage="render_presentation", percent=97)
+    for report in render_default_reports(
+        artifact_dir=output_dir,
+        result=report_result,
+        process=request.process,
+        scope_id=request.scope_id,
+    ):
+        _emit(
+            "artifact",
+            kind=report.kind,
+            path=report.path.relative_to(output_dir).as_posix(),
         )
 
     artifacts = [

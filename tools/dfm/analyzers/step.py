@@ -30,15 +30,15 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _dependency_available(python_executable: str) -> bool:
+def _module_available(python_executable: str, module: str) -> bool:
     if Path(python_executable).resolve() == Path(sys.executable).resolve():
         try:
-            return importlib.util.find_spec("OCC") is not None
+            return importlib.util.find_spec(module) is not None
         except (ImportError, AttributeError, ValueError):
             return False
     try:
         completed = subprocess.run(
-            [python_executable, "-c", "import OCC"],
+            [python_executable, "-c", f"import {module}"],
             check=False,
             capture_output=True,
             shell=False,
@@ -47,6 +47,17 @@ def _dependency_available(python_executable: str) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return completed.returncode == 0
+
+
+def dependency_statuses(python_executable: str) -> dict[str, bool]:
+    return {
+        "pythonocc-core": _module_available(python_executable, "OCC"),
+        "python-pptx": _module_available(python_executable, "pptx"),
+    }
+
+
+def _dependency_available(python_executable: str) -> bool:
+    return all(dependency_statuses(python_executable).values())
 
 
 class StepAnalyzer:
@@ -82,10 +93,11 @@ class StepAnalyzer:
             return Capability(
                 self.key,
                 CapabilityStatus.DEPENDENCY_MISSING,
-                "pythonocc-core/OpenCascade is required by the STEP analyzer.",
+                "pythonocc-core/OpenCascade and python-pptx are required by the STEP analyzer.",
                 "dependency_missing",
                 {
-                    "dependency": "pythonocc-core",
+                    "dependencies": ["pythonocc-core", "python-pptx"],
+                    "install_extra": "hermes-agent[dfm]",
                     "worker_version": self.version,
                 },
             )

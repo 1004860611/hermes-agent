@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from tools.dfm.analyzers.base import AnalyzerContext
 from tools.dfm.analyzers.registry import build_default_registry
+from tools.dfm.analyzers.step import dependency_statuses
 from tools.dfm.config import load_dfm_config
 from tools.dfm.errors import DFMError
 from tools.dfm.project.workspace import DFMWorkspace
@@ -63,6 +64,8 @@ def collect_diagnostics() -> dict:
             "scope_id": process_plan.scope_id,
             "scope_version": process_plan.scope_version,
         }
+    step = registry.get("step")
+    dependencies = dependency_statuses(step.python_executable)
     return {
         "ok": bool(config_report["valid"] and writable),
         "config": config_report,
@@ -71,9 +74,9 @@ def collect_diagnostics() -> dict:
         "runtime": {
             "worker_import_path": step_worker.__name__,
             "worker_version": step_worker.WORKER_VERSION,
-            "occ_dependency": "pythonocc-core",
-            "python_executable": registry.get("step").python_executable,
-            "occ_available": capabilities["step"]["status"] == "available",
+            "python_executable": step.python_executable,
+            "dependencies": dependencies,
+            "step_available": capabilities["step"]["status"] == "available",
         },
         "processes": processes,
         "note": "Diagnostics never install CAD, OCR, or system dependencies.",
@@ -94,10 +97,9 @@ def dfm_command(args) -> int:
             f"STEP worker: {report['runtime']['worker_import_path']} "
             f"({report['runtime']['worker_version']})"
         )
-        print(
-            f"OpenCascade available: {report['runtime']['occ_available']} "
-            f"({report['runtime']['occ_dependency']})"
-        )
+        for dependency, available in report["runtime"]["dependencies"].items():
+            print(f"{dependency} available: {available}")
+        print(f"STEP capability available: {report['runtime']['step_available']}")
         print(f"Supported processes: {', '.join(report['processes']['supported'])}")
         for key in report["processes"]["supported"]:
             process = report["processes"][key]

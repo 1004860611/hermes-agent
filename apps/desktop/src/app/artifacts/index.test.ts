@@ -87,6 +87,25 @@ describe('collectArtifactsForSession', () => {
     })
   })
 
+  it('indexes generated DFM PowerPoint reports as files', () => {
+    const path = 'C:\\Users\\lenovo\\.hermes\\workspace\\dfm\\projects\\dfm_1\\artifacts\\dfm_report.pptx'
+
+    const artifacts = collectArtifactsForSession(makeSession({ id: 'dfm-pptx' }), [
+      {
+        content: JSON.stringify({ artifact: { kind: 'report_presentation', path } }),
+        role: 'tool',
+        timestamp: 4500
+      }
+    ])
+
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0]).toMatchObject({
+      kind: 'file',
+      label: 'dfm_report.pptx',
+      value: path
+    })
+  })
+
   it('indexes UNC artifact paths from tool JSON payloads', () => {
     const path = '\\\\analysis-server\\dfm-results\\mold\\report.json'
 
