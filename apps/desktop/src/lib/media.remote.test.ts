@@ -41,6 +41,15 @@ describe('filePathFromMediaPath', () => {
   it('decodes a file:// URL with encoded characters', () => {
     expect(filePathFromMediaPath('file:///tmp/a%20b.png')).toBe('/tmp/a b.png')
   })
+
+  it('removes the URL root slash before a Windows drive', () => {
+    expect(filePathFromMediaPath('file:///C:/Users/a%20b/dfm.png')).toBe('C:/Users/a b/dfm.png')
+    expect(filePathFromMediaPath('file://C:\\Users\\a\\dfm.png')).toBe('C:/Users/a/dfm.png')
+  })
+
+  it('preserves UNC file URL hosts', () => {
+    expect(filePathFromMediaPath('file://analysis-server/dfm/run.png')).toBe('//analysis-server/dfm/run.png')
+  })
 })
 
 describe('mediaExternalUrl', () => {

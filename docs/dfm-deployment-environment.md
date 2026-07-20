@@ -2,6 +2,8 @@
 
 本文定义 Hermes Agent 内建 DFM 能力的开发、测试与生产部署环境。目标是让同一套 DFM 代码在 Windows 本地开发、Linux/Docker 部署中保持一致，并避免长期依赖 Django 旧工程或 `aimold312` 等外部环境。
 
+一次分析实际生成的输入副本、Run 日志、结构化结果、证据图片和 PPTX 位置，参见 [单次 DFM 分析数据说明](dfm-analysis-runbook.md)。
+
 ## 1. 当前支持范围
 
 当前 M1 阶段的部署基线为：

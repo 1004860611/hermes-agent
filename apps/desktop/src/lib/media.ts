@@ -118,7 +118,23 @@ export function filePathFromMediaPath(path: string): string {
   }
 
   try {
-    return decodeURIComponent(new URL(path).pathname)
+    const url = new URL(path)
+    const pathname = decodeURIComponent(url.pathname).replace(/\\/g, '/')
+
+    // WHATWG file URLs keep the leading slash before a Windows drive
+    // (file:///C:/x -> /C:/x). Passing that value to path.resolve() on
+    // Windows incorrectly turns it into <cwd-drive>:\\C:\\x.
+    if (/^\/[a-z]:\//i.test(pathname)) {
+      return pathname.slice(1).replace(/^([a-z]:)\/+/, '$1/')
+    }
+
+    // Preserve UNC hosts instead of dropping them when converting
+    // file://server/share/x to a filesystem path.
+    if (url.hostname && url.hostname.toLowerCase() !== 'localhost') {
+      return `//${url.hostname}${pathname}`
+    }
+
+    return pathname
   } catch {
     return path.replace(/^file:\/\//, '')
   }
