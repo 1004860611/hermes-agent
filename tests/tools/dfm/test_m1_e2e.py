@@ -39,6 +39,21 @@ def test_m1_real_tool_vertical_slice(tmp_path):
             "dfm_project",
             {"action": "add_input", "project_id": project_id, "path": str(FIXTURE)},
         )
+        for name, value in {
+            "material": "ABS",
+            "pull_dir": [0, 0, 1],
+            "model_units": "mm",
+        }.items():
+            _dispatch(
+                registry,
+                "dfm_project",
+                {
+                    "action": "confirm_fact",
+                    "project_id": project_id,
+                    "fact_name": name,
+                    "fact_value": value,
+                },
+            )
         plan = _dispatch(
             registry, "dfm_analysis", {"action": "plan", "project_id": project_id}
         )
@@ -114,6 +129,19 @@ def test_m1_real_tool_vertical_slice(tmp_path):
             set(item["measurement_refs"]) <= measurement_ids
             and item["outcome"] in {"pass", "fail", "indeterminate"}
             for item in measurement_payload["evaluations"]
+        )
+        project_status = _dispatch(
+            registry, "dfm_project", {"action": "status", "project_id": project_id}
+        )
+        findings = project_status["project"]["findings"]
+        failed_evaluations = [
+            item for item in measurement_payload["evaluations"] if item["outcome"] == "fail"
+        ]
+        assert len(findings) == len(failed_evaluations)
+        assert all(
+            item["rule_ref"].startswith("injection.legacy-issues@1.0.0:")
+            and measurement_artifact["relative_path"] in item["evidence_refs"]
+            for item in findings
         )
     finally:
         get_dfm_service().close()

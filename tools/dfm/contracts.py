@@ -136,6 +136,9 @@ class PlanRecord:
     input_hashes: dict[str, str] = field(default_factory=dict)
     parameters: dict[str, "EffectiveParameter"] = field(default_factory=dict)
     operations: list["PlanOperation"] = field(default_factory=list)
+    parent_plan_id: str | None = None
+    invalidated_by: str | None = None
+    affected_operation_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -154,6 +157,9 @@ class PlanRecord:
                 key: value.to_dict() for key, value in self.parameters.items()
             },
             "operations": [operation.to_dict() for operation in self.operations],
+            "parent_plan_id": self.parent_plan_id,
+            "invalidated_by": self.invalidated_by,
+            "affected_operation_ids": list(self.affected_operation_ids),
         }
 
     @classmethod
@@ -402,6 +408,8 @@ class InputRecord:
     size_bytes: int
     sha256: str
     created_at: str
+    preflight: dict[str, Any] = field(default_factory=dict)
+    supersedes_input_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -412,6 +420,8 @@ class InputRecord:
             "size_bytes": self.size_bytes,
             "sha256": self.sha256,
             "created_at": self.created_at,
+            "preflight": dict(self.preflight),
+            "supersedes_input_id": self.supersedes_input_id,
         }
 
     @classmethod

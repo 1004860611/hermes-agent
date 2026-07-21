@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 import time
@@ -26,6 +27,25 @@ from tools.dfm.service import DFMService, get_dfm_service
 from tools.registry import discover_builtin_tools, registry
 
 
+STEP_FIXTURE = Path("tests/fixtures/dfm/step/injection_plate_with_hole.step").resolve()
+
+
+def _confirm_step_facts(project_id: str) -> None:
+    for name, value in {
+        "material": "ABS",
+        "pull_dir": [0, 0, 1],
+        "model_units": "mm",
+    }.items():
+        _dispatch(
+            "dfm_project",
+            {
+                "action": "confirm_fact",
+                "project_id": project_id,
+                "fact_name": name,
+                "fact_value": value,
+            },
+        )
+
 def _tool_names(toolsets: list[str]) -> set[str]:
     return {
         definition["function"]["name"]
@@ -37,7 +57,7 @@ def _dispatch(name: str, arguments: dict) -> dict:
     return json.loads(registry.dispatch(name, arguments))
 
 
-def test_production_step_vertical_slice_fails_explicitly_without_fake_results(tmp_path):
+def test_production_step_intake_rejects_fake_content_without_fake_results(tmp_path):
     discover_builtin_tools()
     core_names = _tool_names(["hermes-cli"])
     enabled_definitions = get_tool_definitions(
@@ -59,7 +79,7 @@ def test_production_step_vertical_slice_fails_explicitly_without_fake_results(tm
             {"action": "create", "name": "M0 production acceptance"},
         )
         project_id = created["project_id"]
-        _dispatch(
+        added = _dispatch(
             "dfm_project",
             {
                 "action": "add_input",
@@ -71,30 +91,6 @@ def test_production_step_vertical_slice_fails_explicitly_without_fake_results(tm
             "dfm_project",
             {"action": "status", "project_id": project_id},
         )
-        plan = _dispatch(
-            "dfm_analysis",
-            {"action": "plan", "project_id": project_id},
-        )
-        started = _dispatch(
-            "dfm_analysis",
-            {
-                "action": "start",
-                "project_id": project_id,
-                "plan_id": plan["plan"]["plan_id"],
-            },
-        )
-        terminal_run = None
-        if started.get("ok") is True:
-            run_id = started["run"]["run_id"]
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                terminal_run = _dispatch(
-                    "dfm_analysis",
-                    {"action": "status", "project_id": project_id, "run_id": run_id},
-                )["run"]
-                if terminal_run["status"] in {"failed", "blocked", "cancelled", "succeeded"}:
-                    break
-                time.sleep(0.05)
         final_status = _dispatch(
             "dfm_project",
             {"action": "status", "project_id": project_id},
@@ -106,20 +102,10 @@ def test_production_step_vertical_slice_fails_explicitly_without_fake_results(tm
         get_dfm_service().close()
         reset_hermes_home_override(token)
 
-    assert status["project"]["input_mode"] == "step"
-    if status["capabilities"]["step"]["status"] == "available":
-        assert plan["plan"]["status"] == "ready"
-        assert started["ok"] is True
-        assert terminal_run is not None
-        assert terminal_run["status"] == "failed"
-        assert terminal_run["error"]["code"] in {"analyzer_failed", "worker_failed"}
-        assert terminal_run["artifacts"] == []
-    else:
-        assert status["capabilities"]["step"]["status"] == "dependency_missing"
-        assert plan["plan"]["status"] == "blocked"
-        assert started["ok"] is False
-        assert started["error"]["code"] == "dependency_missing"
-        assert final_status["project"]["runs"] == []
+    assert added["ok"] is False
+    assert added["error"]["code"] == "step_format_invalid"
+    assert status["project"]["input_mode"] is None
+    assert final_status["project"]["runs"] == []
     assert final_status["project"]["findings"] == []
     assert final_status["project"]["artifacts"] == []
     assert schemas_after == enabled_definitions
@@ -160,7 +146,7 @@ def test_injected_analyzer_vertical_slice_returns_desktop_compatible_artifact(tm
         reconcile_jobs=False,
     )
     source = tmp_path / "accepted.step"
-    source.write_bytes(b"synthetic test analyzer input")
+    source.write_bytes(STEP_FIXTURE.read_bytes())
     try:
         project_id = service.project("create", name="M0 success acceptance")[
             "project_id"
@@ -170,6 +156,17 @@ def test_injected_analyzer_vertical_slice_returns_desktop_compatible_artifact(tm
             project_id=project_id,
             path=f"@file:{source}",
         )
+        for name, value in {
+            "material": "ABS",
+            "pull_dir": [0, 0, 1],
+            "model_units": "mm",
+        }.items():
+            service.project(
+                "confirm_fact",
+                project_id=project_id,
+                fact_name=name,
+                fact_value=value,
+            )
         plan = service.analysis("plan", project_id=project_id)
         started = service.analysis(
             "start",
@@ -239,7 +236,8 @@ def test_desktop_file_attach_reference_flows_into_dfm_project(monkeypatch, tmp_p
                 "params": {
                     "session_id": task_id,
                     "name": "mold bracket.step",
-                    "data_url": "data:application/octet-stream;base64,b3BhcXVlLXN0ZXA=",
+                    "data_url": "data:application/octet-stream;base64,"
+                    + base64.b64encode(STEP_FIXTURE.read_bytes()).decode("ascii"),
                 },
             }
         )["result"]

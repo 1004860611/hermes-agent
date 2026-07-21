@@ -16,7 +16,7 @@ def test_dfm_doctor_reports_workspace_config_and_capabilities(tmp_path, capsys):
         assert report["capabilities"]["drawing"]["status"] == "not_implemented"
         assert report["capabilities"]["fusion"]["status"] == "not_implemented"
         assert report["runtime"]["worker_import_path"] == "tools.dfm.workers.step_worker"
-        assert report["runtime"]["worker_version"] == "legacy-step-v1"
+        assert report["runtime"]["worker_version"] == "step-m12-v1"
         assert set(report["runtime"]["dependencies"]) == {
             "pythonocc-core",
             "python-pptx",
@@ -32,7 +32,7 @@ def test_dfm_doctor_reports_workspace_config_and_capabilities(tmp_path, capsys):
         assert report["processes"]["injection"] == {
             "adapter_version": "legacy-injection-v1",
             "scope_id": "injection.legacy-baseline",
-            "scope_version": "1.0.0",
+            "scope_version": "1.1.0",
         }
 
         code = dfm_command(argparse.Namespace(dfm_action="doctor", json=True))

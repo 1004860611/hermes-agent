@@ -13,6 +13,7 @@ from ..config import DFMConfig
 from ..contracts import InputRecord, ProjectManifest
 from ..errors import DFMError
 from .manifest import ManifestStore
+from .step_preflight import inspect_step
 from .workspace import DFMWorkspace
 
 
@@ -101,6 +102,21 @@ class InputRegistrar:
         finally:
             temporary.unlink(missing_ok=True)
 
+        try:
+            preflight = inspect_step(destination) if kind == "step" else {}
+        except DFMError:
+            # A rejected intake must not leave an unreferenced project input.
+            destination.unlink(missing_ok=True)
+            raise
+        previous = ManifestStore(project_dir).load()
+        superseded = next(
+            (
+                item
+                for item in reversed(previous.inputs)
+                if item.kind == kind and item.source_name == source.name
+            ),
+            None,
+        )
         record = InputRecord(
             input_id=f"input_{kind}_{sha256[:16]}",
             kind=kind,
@@ -109,6 +125,8 @@ class InputRegistrar:
             size_bytes=copied_bytes,
             sha256=sha256,
             created_at=_utc_now(),
+            preflight=preflight,
+            supersedes_input_id=superseded.input_id if superseded else None,
         )
         selected: InputRecord = record
 
@@ -123,6 +141,15 @@ class InputRegistrar:
                 current,
                 inputs=inputs,
                 input_mode=_input_mode(inputs),
+                plans=[
+                    replace(
+                        plan,
+                        status="invalidated",
+                        invalidated_by=record.input_id,
+                        affected_operation_ids=[item.operation_id for item in plan.operations],
+                    )
+                    for plan in current.plans
+                ],
                 updated_at=_utc_now(),
             )
 

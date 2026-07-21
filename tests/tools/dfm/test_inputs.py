@@ -11,6 +11,11 @@ from tools.dfm.project.manifest import ManifestStore
 from tools.dfm.project.workspace import DFMWorkspace
 
 
+STEP_PAYLOAD = (
+    Path(__file__).parents[3] / "tests" / "fixtures" / "dfm" / "step" / "injection_plate_with_hole.step"
+).read_bytes()
+
+
 @pytest.fixture
 def project(tmp_path):
     token = set_hermes_home_override(tmp_path / "home")
@@ -26,13 +31,16 @@ def project(tmp_path):
 def test_registers_supported_input_with_hash_and_safe_relative_path(project, suffix, kind):
     workspace, project_id, temp = project
     source = temp / f"part{suffix}"
-    source.write_bytes(b"synthetic-dfm-input")
+    source.write_bytes(STEP_PAYLOAD if kind == "step" else b"synthetic-dfm-input")
 
     record = InputRegistrar(workspace, DFMConfig()).register(project_id, source)
 
     assert record.kind == kind
     assert len(record.sha256) == 64
     assert record.relative_path.startswith("inputs/")
+    if kind == "step":
+        assert record.preflight["status"] == "passed"
+        assert record.preflight["complexity"]["entity_count"] > 0
     assert (workspace.project_dir(project_id) / record.relative_path).read_bytes() == source.read_bytes()
 
 
@@ -41,9 +49,9 @@ def test_project_mode_becomes_fusion_and_duplicate_content_is_idempotent(project
     step = temp / "part.step"
     drawing = temp / "drawing.pdf"
     duplicate = temp / "renamed.step"
-    step.write_bytes(b"step")
+    step.write_bytes(STEP_PAYLOAD)
     drawing.write_bytes(b"drawing")
-    duplicate.write_bytes(b"step")
+    duplicate.write_bytes(STEP_PAYLOAD)
     registrar = InputRegistrar(workspace, DFMConfig())
 
     first = registrar.register(project_id, step)
@@ -79,7 +87,7 @@ def test_source_name_cannot_control_destination_path(project):
     workspace, project_id, temp = project
     outside = temp / "nested" / "part.step"
     outside.parent.mkdir()
-    outside.write_bytes(b"step")
+    outside.write_bytes(STEP_PAYLOAD)
 
     record = InputRegistrar(workspace, DFMConfig()).register(project_id, Path(outside))
 
@@ -91,7 +99,7 @@ def test_same_bytes_with_different_engineering_kind_are_distinct(project):
     workspace, project_id, temp = project
     step = temp / "part.step"
     drawing = temp / "drawing.pdf"
-    step.write_bytes(b"same-opaque-bytes")
+    step.write_bytes(STEP_PAYLOAD)
     drawing.write_bytes(b"same-opaque-bytes")
     registrar = InputRegistrar(workspace, DFMConfig())
 
@@ -102,6 +110,18 @@ def test_same_bytes_with_different_engineering_kind_are_distinct(project):
     assert step_record.input_id != drawing_record.input_id
     assert len(manifest.inputs) == 2
     assert manifest.input_mode == "fusion"
+
+
+def test_step_preflight_rejects_invalid_content_without_leaving_a_project_copy(project):
+    workspace, project_id, temp = project
+    source = temp / "not-a-step.step"
+    source.write_bytes(b"not a STEP file")
+
+    with pytest.raises(DFMError) as exc_info:
+        InputRegistrar(workspace, DFMConfig()).register(project_id, source)
+
+    assert exc_info.value.code == "step_format_invalid"
+    assert not list((workspace.project_dir(project_id) / "inputs").iterdir())
 
 
 def test_streaming_copy_enforces_limit_even_if_initial_stat_is_stale(project, monkeypatch):

@@ -27,6 +27,7 @@ from ..contracts import (
     ensure_run_transition,
 )
 from ..errors import DFMError
+from ..findings import materialize_findings
 from ..project.manifest import ManifestStore
 from ..project.workspace import DFMWorkspace
 
@@ -295,10 +296,13 @@ class JobManager:
             if not found:
                 raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
             known = {item.artifact_id for item in current.artifacts}
+            findings = materialize_findings(self.workspace.project_dir(project_id), artifacts)
+            finding_ids = {item.finding_id for item in findings}
             return replace(
                 current,
                 runs=runs,
                 artifacts=[*current.artifacts, *[item for item in artifacts if item.artifact_id not in known]],
+                findings=[item for item in current.findings if item.finding_id not in finding_ids] + findings,
                 updated_at=now,
             )
 

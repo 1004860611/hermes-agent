@@ -16,7 +16,14 @@ from hermes_constants import get_hermes_home
 from .analyzers.base import AnalyzerContext
 from .analyzers.registry import AnalyzerRegistry, build_default_registry
 from .config import DFMConfig, load_dfm_config
-from .contracts import FactRecord, PlanRecord, ProjectManifest, RunRecord, RunStatus
+from .contracts import (
+    ClarificationRecord,
+    FactRecord,
+    PlanRecord,
+    ProjectManifest,
+    RunRecord,
+    RunStatus,
+)
 from .errors import DFMError
 from .project.inputs import InputRegistrar
 from .project.manifest import ManifestStore
@@ -44,6 +51,23 @@ def _resolve_input_path(raw_path: object, working_dir: object = None) -> Path:
 
 
 class DFMService:
+    _STEP_REQUIRED_FACTS = {
+        "material": "What resin/material grade will be used for this part?",
+        "pull_dir": "What is the confirmed mold pull direction as [x, y, z]?",
+        "model_units": "What length unit was used to author the STEP model?",
+    }
+    _FACTS_REQUIRING_NORMALIZATION = {"pull_dir"}
+    _FACT_ALIASES = {
+        "unit": "model_units",
+        "units": "model_units",
+        "model_unit": "model_units",
+        "model_units": "model_units",
+        "pull_direction": "pull_dir",
+        "mold_pull_direction": "pull_dir",
+        "pull_dir": "pull_dir",
+        "material": "material",
+    }
+    
     def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, process_registry: ProcessAdapterRegistry | None = None, reconcile_jobs: bool = True) -> None:
         self.config = config or load_dfm_config()
         self.workspace = workspace or DFMWorkspace()
@@ -58,9 +82,136 @@ class DFMService:
     def _context(self, manifest: ProjectManifest) -> AnalyzerContext:
         return AnalyzerContext(manifest.project_id, self.workspace.project_dir(manifest.project_id), manifest.input_mode, manifest.inputs)
 
+    @staticmethod
+    def _canonical_fact_name(fact_name: str) -> str:
+        normalized = str(fact_name or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return DFMService._FACT_ALIASES.get(normalized, normalized)
+
+    @staticmethod
+    def _normalize_fact_value(fact_name: str, raw_value: Any) -> Any:
+        """Normalize fact values that may be serialized as JSON strings.
+        
+        Some facts (like pull_dir) require array values, but tool parameters
+        are JSON-serialized. This method parses them back to proper types.
+        
+        Args:
+            fact_name: The name of the fact being confirmed.
+            raw_value: The raw value from the tool call (may be a JSON string).
+            
+        Returns:
+            The normalized value (parsed if necessary).
+        """
+        if fact_name not in DFMService._FACTS_REQUIRING_NORMALIZATION:
+            return raw_value
+            
+        # If already a list/tuple, return as-is
+        if isinstance(raw_value, (list, tuple)):
+            return raw_value
+            
+        # If a string, try to parse as JSON
+        if isinstance(raw_value, str):
+            try:
+                import json
+                parsed = json.loads(raw_value)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+                
+        return raw_value
+
+    @staticmethod
+    def _active_inputs(manifest: ProjectManifest):
+        superseded = {item.supersedes_input_id for item in manifest.inputs if item.supersedes_input_id}
+        return [item for item in manifest.inputs if item.input_id not in superseded]
+
+    @staticmethod
+    def _operation_closure(operations, affected_ids: list[str]):
+        if not affected_ids:
+            return list(operations)
+        by_id = {item.operation_id: item for item in operations}
+        required = set()
+
+        def include(operation_id: str) -> None:
+            if operation_id in required or operation_id not in by_id:
+                return
+            required.add(operation_id)
+            for dependency in by_id[operation_id].depends_on:
+                include(dependency)
+
+        for operation_id in affected_ids:
+            include(operation_id)
+        return [item for item in operations if item.operation_id in required]
+
     def _capabilities(self, manifest: ProjectManifest) -> dict[str, dict[str, Any]]:
         context = self._context(manifest)
         return {key: self.registry.get(key).capability(context).to_dict() for key in self.registry.keys()}
+
+    def _open_clarifications(self, manifest: ProjectManifest) -> list[ClarificationRecord]:
+        if manifest.input_mode not in {"step", "fusion"}:
+            return []
+        confirmed = {
+            self._canonical_fact_name(fact.name)
+            for fact in manifest.facts
+            if fact.status == "confirmed"
+        }
+        existing = {item.clarification_id: item for item in manifest.clarifications}
+        result = []
+        for name, question in self._STEP_REQUIRED_FACTS.items():
+            if name in confirmed:
+                continue
+            clarification_id = f"clarification_{name}"
+            item = existing.get(clarification_id)
+            if item is None or item.status == "open":
+                result.append(item or ClarificationRecord(clarification_id, question, "open"))
+        return result
+
+    def _reconcile_clarifications(self, project_id: str) -> ProjectManifest:
+        """Close old open clarification rows when an alias fact already exists."""
+        store = self._store(project_id)
+
+        def reconcile(current: ProjectManifest) -> ProjectManifest:
+            confirmed = {
+                self._canonical_fact_name(fact.name): fact
+                for fact in current.facts
+                if fact.status == "confirmed"
+            }
+            changed = False
+            rows = []
+            for item in current.clarifications:
+                canonical = self._canonical_fact_name(
+                    item.clarification_id.removeprefix("clarification_")
+                )
+                fact = confirmed.get(canonical)
+                if fact is not None and item.status != "answered":
+                    item = replace(item, status="answered", answer=fact.value)
+                    changed = True
+                rows.append(item)
+            return replace(current, clarifications=rows) if changed else current
+
+        return store.update(reconcile)
+
+    def _ensure_clarifications(self, project_id: str) -> ProjectManifest:
+        store = self._store(project_id)
+
+        def ensure(current: ProjectManifest) -> ProjectManifest:
+            pending = self._open_clarifications(current)
+            known = {item.clarification_id for item in current.clarifications}
+            additions = [item for item in pending if item.clarification_id not in known]
+            if not additions:
+                return current
+            return replace(
+                current,
+                clarifications=[*current.clarifications, *additions],
+                updated_at=_utc_now(),
+            )
+
+        return store.update(ensure)
+
+    def _project_payload(self, manifest: ProjectManifest) -> dict[str, Any]:
+        payload = manifest.to_dict()
+        payload["open_clarifications"] = [item.to_dict() for item in self._open_clarifications(manifest)]
+        return payload
 
     def project(self, action: str, **params: Any) -> dict[str, Any]:
         if action == "create":
@@ -80,27 +231,71 @@ class DFMService:
         if action == "add_input":
             source_path = _resolve_input_path(params.get("path"), params.get("working_dir"))
             record = self.inputs.register(project_id, source_path)
-            return {"ok": True, "project_id": project_id, "input": record.to_dict()}
+            manifest = self._ensure_clarifications(project_id)
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "input": record.to_dict(),
+                "open_clarifications": [item.to_dict() for item in self._open_clarifications(manifest)],
+            }
         if action == "confirm_fact":
-            name = str(params.get("fact_name") or "").strip()
+            name = self._canonical_fact_name(str(params.get("fact_name") or ""))
             if not name:
                 raise DFMError("fact_invalid", "fact_name is required.")
-            fact = FactRecord(f"fact_{uuid4().hex[:16]}", name, params.get("fact_value"), "user", "confirmed")
-            manifest = self._store(project_id).update(lambda current: replace(current, facts=[*current.facts, fact], updated_at=_utc_now()))
+            
+            # Normalize fact_value: parse JSON strings for known array parameters
+            raw_value = params.get("fact_value")
+            normalized_value = self._normalize_fact_value(name, raw_value)
+            
+            fact = FactRecord(f"fact_{uuid4().hex[:16]}", name, normalized_value, "user", "confirmed")
+            manifest = self._store(project_id).update(
+                lambda current: replace(
+                    current,
+                    facts=[*current.facts, fact],
+                    clarifications=[
+                        replace(item, status="answered", answer=fact.value)
+                        if item.clarification_id == f"clarification_{name}"
+                        else item
+                        for item in current.clarifications
+                    ],
+                    plans=[
+                        replace(
+                            plan,
+                            status="invalidated",
+                            invalidated_by=f"fact:{name}",
+                            affected_operation_ids=(
+                                ["step.draft", "step.undercut"]
+                                if name == "pull_dir"
+                                else [item.operation_id for item in plan.operations]
+                            ),
+                        )
+                        for plan in current.plans
+                    ],
+                    updated_at=_utc_now(),
+                )
+            )
             return {"ok": True, "project_id": project_id, "fact": fact.to_dict(), "revision": manifest.revision}
         if action == "status":
-            manifest = self._store(project_id).load()
-            return {"ok": True, "project": manifest.to_dict(), "capabilities": self._capabilities(manifest)}
+            manifest = self._reconcile_clarifications(project_id)
+            return {"ok": True, "project": self._project_payload(manifest), "capabilities": self._capabilities(manifest)}
         raise DFMError("action_invalid", f"Unsupported dfm_project action: {action}")
 
     def analysis(self, action: str, **params: Any) -> dict[str, Any]:
         project_id = params.get("project_id") or ""
         if action == "plan":
             store = self._store(project_id)
-            manifest = store.load()
+            manifest = self._reconcile_clarifications(project_id)
             analyzer_key = params.get("analyzer_key") or manifest.input_mode
             if not analyzer_key:
                 raise DFMError("input_required", "Register a DFM input before planning analysis.")
+            open_clarifications = self._open_clarifications(manifest)
+            if open_clarifications:
+                return {
+                    "ok": False,
+                    "project_id": project_id,
+                    "status": "clarification_required",
+                    "clarifications": [item.to_dict() for item in open_clarifications],
+                }
             analyzer = self.registry.get(str(analyzer_key))
             context = self._context(manifest)
             capability = analyzer.capability(context)
@@ -115,6 +310,19 @@ class DFMService:
                     if fact.status == "confirmed" and fact.name in defaults.parameters
                 }
                 process_plan = adapter.compile(context, raw_parameters)
+            parent_plan_id = str(params.get("base_plan_id") or "") or None
+            parent_plan = next(
+                (item for item in manifest.plans if item.plan_id == parent_plan_id), None
+            )
+            if parent_plan_id and parent_plan is None:
+                raise DFMError("plan_not_found", "Base DFM analysis plan was not found.", {"plan_id": parent_plan_id})
+            if parent_plan is not None and parent_plan.status != "invalidated":
+                raise DFMError("plan_not_rebuildable", "Only an invalidated plan can be rebuilt incrementally.", {"plan_id": parent_plan_id, "status": parent_plan.status})
+            operations = self._operation_closure(
+                process_plan.operations if process_plan else [],
+                parent_plan.affected_operation_ids if parent_plan else [],
+            )
+            active_inputs = self._active_inputs(manifest)
             now = _utc_now()
             plan = PlanRecord(
                 f"plan_{uuid4().hex[:16]}",
@@ -126,10 +334,11 @@ class DFMService:
                 process_adapter_version=process_plan.adapter_version if process_plan else "",
                 scope_id=process_plan.scope_id if process_plan else "",
                 scope_version=process_plan.scope_version if process_plan else "",
-                input_ids=[item.input_id for item in manifest.inputs],
-                input_hashes={item.input_id: item.sha256 for item in manifest.inputs},
+                input_ids=[item.input_id for item in active_inputs],
+                input_hashes={item.input_id: item.sha256 for item in active_inputs},
                 parameters=process_plan.parameters if process_plan else {},
-                operations=process_plan.operations if process_plan else [],
+                operations=operations,
+                parent_plan_id=parent_plan_id,
             )
             store.update(lambda current: replace(current, plans=[*current.plans, plan], updated_at=_utc_now()))
             return {"ok": True, "project_id": project_id, "plan": plan.to_dict(), "capability": capability.to_dict()}
@@ -139,6 +348,15 @@ class DFMService:
             plan = next((item for item in manifest.plans if item.plan_id == plan_id), None)
             if plan is None:
                 raise DFMError("plan_not_found", "DFM analysis plan was not found.", {"plan_id": plan_id})
+            # A capability-blocked plan is still useful for surfacing the
+            # analyzer's explicit dependency error. Only changed project state
+            # makes a saved plan stale and unsafe to execute.
+            if plan.status == "invalidated":
+                raise DFMError(
+                    "plan_not_ready",
+                    "DFM analysis plan is no longer executable; create a new plan.",
+                    {"plan_id": plan.plan_id, "status": plan.status},
+                )
             progress_callback = params.get("_tool_progress_callback")
             tool_call_id = str(params.get("_tool_call_id") or "")
 

@@ -1,15 +1,15 @@
 ---
 title: "单次 DFM 分析数据说明"
 status: active
-milestone: M1.2
-last_updated: 2026-07-20
+milestone: M2
+last_updated: 2026-07-21
 type: living-runbook
 owners: DFM 工程团队
 ---
 
 # 单次 DFM 分析数据说明
 
-本文说明当前 M1.2 版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
+本文说明当前 M2 开发版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
 
 本文是随 DFM 里程碑持续更新的活文档。这里描述的是**当前已实现行为**；长期目标、尚未实现的输入模式和演进路线参见 [DFM Hermes Agent 开发目标与路线图](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)。
 
@@ -139,8 +139,9 @@ Desktop 上传或选择的文件只是 intake 来源，不是 DFM 项目的权�
 1. 检查扩展名和文件大小；
 2. 流式计算 SHA-256；
 3. 复制到项目 `inputs/`；
-4. 以内容哈希命名；
-5. 将 InputRecord 写入 `project_manifest.json`。
+4. 校验 ISO 10303-21 格式、B-Rep 声明并记录实体复杂度摘要；
+5. 以内容哈希命名；
+6. 将 InputRecord 写入 `project_manifest.json`。预检失败不会保留项目输入副本。
 
 InputRecord 主要字段：
 
@@ -152,9 +153,19 @@ InputRecord 主要字段：
   "relative_path": "inputs/input_<sha256前16位>.stp",
   "size_bytes": 123456,
   "sha256": "...",
-  "created_at": "..."
+  "created_at": "...",
+  "preflight": {
+    "status": "passed",
+    "format": "iso-10303-21",
+    "brep_representation": "declared",
+    "complexity": {"entity_count": 1234}
+  }
 }
 ```
+
+STEP 项目在生成可执行 Plan 前必须确认 `material`、`pull_dir` 和 `model_units`。未确认项以稳定 clarification ID 写入 Manifest；`confirm_fact` 保存回答并关闭对应问题。新增输入或确认事实会把既有 Plan 标记为 `invalidated`，需要重新规划。
+
+同名同类型的新输入会以 `supersedes_input_id` 指向旧版本；后续 Plan 仅引用未被替代的活动输入。失效 Plan 会保存 `invalidated_by` 和 `affected_operation_ids`。调用 `dfm_analysis(plan, base_plan_id=...)` 可以从失效 Plan 生成仅包含受影响检查及其依赖的重跑 Plan；例如仅修改拔模方向时，重跑范围为 STEP 加载、拓扑、拔模和倒扣检查，而不是完整检查族。
 
 相同类型且哈希相同的输入会复用既有记录。分析追溯以项目输入副本和哈希为准，不依赖原始附件路径持续存在。
 
@@ -174,13 +185,13 @@ InputRecord 主要字段：
 
 ### M1.2 边界
 
-`facts`、`clarifications`、`features` 和 `findings` 契约已经存在。M1.2 已增加独立的 Measurement/Evaluation 中间结果，但尚未把它们提升为项目级 Finding 唯一来源：
+`facts`、`clarifications`、`features` 和 `findings` 契约已经存在。M2 将 STEP `measurements.json` 中 `outcome=fail` 的 Evaluation 归一化为项目级 Finding：
 
 - 已确认工艺参数可以写入 `facts` 并参与 Plan 编译；
 - 每次 STEP Run 都生成 `measurements.json`，保存输入哈希、算法版本、实际 operations、客观模型测量、问题测量及规则 Evaluation；
 - 原始兼容问题仍保存在 `dfm_report.json` 和最终报告中，旧报告格式没有被改写；
-- `ProjectManifest.findings` 当前不应被视为全部问题明细的唯一来源；
-- M2 完成 Finding/evidence 项目级归一化后，应再次更新本节和数据读取优先级。
+- Finding ID 由输入哈希和稳定 Evaluation ID 派生，包含版本化 rule 引用，并引用测量、报告及同次运行的证据制品；
+- `ProjectManifest.findings` 是项目级风险浏览入口，精确测量仍以被引用的 `measurements.json` 为准。
 
 ## 7. 分析计划与 worker 请求
 

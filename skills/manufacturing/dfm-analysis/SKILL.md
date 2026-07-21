@@ -23,7 +23,7 @@ worker.
 1. Call `dfm_project` with `create`, unless continuing a known `project_id`.
 2. Call `dfm_project` with `add_input` for every STEP/STP or drawing `@file:` reference.
 3. Call project `status`. Inspect the input mode and every analyzer `capability`.
-4. Ask only for missing facts that affect valid checks: material, molding process, units, nominal wall, or pull direction. Record answers with `confirm_fact`; keep them `confirmed`, not inferred.
+4. Ask only for missing facts that affect valid checks: material, molding process, model units, nominal wall, or pull direction. Record answers with `confirm_fact`; use canonical names `material`, `model_units`, and `pull_dir` (the service also accepts `units` and `pull_direction` aliases); keep them `confirmed`, not inferred.
 5. Call `dfm_analysis` with `plan`. In M1, omitted process selection means the
    built-in `injection` adapter and its default `injection.legacy-baseline`
    scope. Inspect the returned process, scope version, input hashes, operations,

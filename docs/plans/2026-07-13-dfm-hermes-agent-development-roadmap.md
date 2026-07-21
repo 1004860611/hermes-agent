@@ -873,7 +873,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | M0 Hermes 内建 DFM 基础架构       | 已完成 | `tests/tools/dfm/test_m0_e2e.py`；M0 聚焦套件 98 passed；静态编译与 Skill 校验通过 |
 | M1 现有行为基线与 STEP 分析器适配 | 已完成 | `tests/tools/dfm/test_m1_baseline.py`、`test_m1_e2e.py`；OCC 矩阵 130 passed；无 OCC 矩阵 128 passed、2 dependency-gated skipped；合成样件与 profile 位于 `tests/fixtures/dfm/step/` |
 | M1.2 STEP 指标拆解与检查族模块化 | 已完成 | `tests/tools/dfm/test_m12_measurements.py`、`test_m1_baseline.py`、`test_m1_e2e.py`；检查族物理模块、共享 STEP 索引、版本化 issue catalog、真实 Plan 门控、`measurements.json`、evidence/reporting 分层和完整 DFM 矩阵 |
-| M2 STEP DFM Hermes 端到端闭环     | 未开始 |           |
+| M2 STEP DFM Hermes 端到端闭环     | 已完成 | [M2 实施记录](2026-07-21-dfm-m2-end-to-end.md)；STEP 预检、持久化澄清、Finding/Artifacts、输入版本/增量重跑、CLI/部署与 Desktop Artifacts 验收已覆盖 |
 | M3 2D 图纸文本理解与指标提取      | 未开始 |           |
 | M4 2D 工程特征识别                | 未开始 |           |
 | M5 事实融合、分析规划与工具编排   | 未开始 |           |

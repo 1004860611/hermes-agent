@@ -1,6 +1,10 @@
 import json
+from pathlib import Path
 
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+
+STEP_FIXTURE = Path("tests/fixtures/dfm/step/injection_plate_with_hole.step").resolve()
 
 
 def test_dfm_tools_are_discovered_with_stable_schemas_and_dispatch(tmp_path):
@@ -33,7 +37,7 @@ def test_dfm_project_resolves_quoted_desktop_ref_from_task_cwd(tmp_path):
     workspace = tmp_path / "session workspace"
     attachment = workspace / ".hermes" / "desktop-attachments" / "mold bracket.step"
     attachment.parent.mkdir(parents=True)
-    attachment.write_bytes(b"opaque-step")
+    attachment.write_bytes(STEP_FIXTURE.read_bytes())
     task_id = "desktop-session"
     token = set_hermes_home_override(tmp_path / "home")
     register_task_env_overrides(task_id, {"cwd": str(workspace)})

@@ -43,6 +43,7 @@ DFM_ANALYSIS_SCHEMA = {
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["plan", "start", "status", "cancel", "result"]},
         "project_id": {"type": "string"}, "plan_id": {"type": "string"}, "run_id": {"type": "string"},
+        "base_plan_id": {"type": "string", "description": "Invalidated plan to rebuild with only affected operations."},
         "analyzer_key": {"type": "string", "enum": ["step", "drawing", "fusion"]},
         "idempotency_key": {"type": "string"},
     }, "required": ["action", "project_id"]},
