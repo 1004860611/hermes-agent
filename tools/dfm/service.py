@@ -213,6 +213,30 @@ class DFMService:
         payload["open_clarifications"] = [item.to_dict() for item in self._open_clarifications(manifest)]
         return payload
 
+    @staticmethod
+    def _resolve_run_id(manifest: ProjectManifest, requested: object, action: str) -> str:
+        """Recover an omitted run id without guessing across concurrent runs."""
+        run_id = str(requested or "").strip()
+        if run_id:
+            return run_id
+        if len(manifest.runs) == 1:
+            return manifest.runs[0].run_id
+        active = [
+            run
+            for run in manifest.runs
+            if run.status in {RunStatus.QUEUED, RunStatus.RUNNING}
+        ]
+        if len(active) == 1:
+            return active[0].run_id
+        raise DFMError(
+            "run_id_required",
+            f"dfm_analysis {action} requires run_id when this project has multiple runs.",
+            {
+                "action": action,
+                "run_ids": [run.run_id for run in manifest.runs[-5:]],
+            },
+        )
+
     def project(self, action: str, **params: Any) -> dict[str, Any]:
         if action == "create":
             manifest = self.workspace.create_project(params.get("name") or "Untitled DFM project", params.get("idempotency_key"))
@@ -294,6 +318,9 @@ class DFMService:
                     "ok": False,
                     "project_id": project_id,
                     "status": "clarification_required",
+                    "requires_user_response": True,
+                    "next_action": "clarify",
+                    "do_not_infer": True,
                     "clarifications": [item.to_dict() for item in open_clarifications],
                 }
             analyzer = self.registry.get(str(analyzer_key))
@@ -406,7 +433,9 @@ class DFMService:
                 on_update=on_update,
             )
             return {"ok": True, "project_id": project_id, "run": self._run_dict(project_id, run)}
-        run_id = params.get("run_id") or ""
+        run_id = self._resolve_run_id(
+            self._store(project_id).load(), params.get("run_id"), action
+        )
         if action == "status":
             run = self.jobs.status(project_id, run_id)
         elif action == "cancel":

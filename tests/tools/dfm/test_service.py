@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,6 +110,30 @@ def test_fact_alias_units_closes_model_units_clarification(service):
     assert row["status"] == "answered"
 
 
+def test_missing_run_id_is_recovered_only_when_unambiguous():
+    one = SimpleNamespace(run_id="run_only", status="running")
+    manifest = SimpleNamespace(runs=[one])
+    assert DFMService._resolve_run_id(manifest, None, "status") == "run_only"
+
+    many = SimpleNamespace(
+        runs=[
+            SimpleNamespace(run_id="run_a", status="succeeded"),
+            SimpleNamespace(run_id="run_b", status="running"),
+        ]
+    )
+    assert DFMService._resolve_run_id(many, None, "status") == "run_b"
+
+    ambiguous = SimpleNamespace(
+        runs=[
+            SimpleNamespace(run_id="run_a", status="running"),
+            SimpleNamespace(run_id="run_b", status="running"),
+        ]
+    )
+    with pytest.raises(DFMError) as exc_info:
+        DFMService._resolve_run_id(ambiguous, None, "status")
+    assert exc_info.value.code == "run_id_required"
+
+
 def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(service):
     dfm, temp = service
     project_id = dfm.project("create", name="Bracket")["project_id"]
@@ -118,6 +143,9 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
 
     blocked = dfm.analysis("plan", project_id=project_id)
     assert blocked["status"] == "clarification_required"
+    assert blocked["requires_user_response"] is True
+    assert blocked["next_action"] == "clarify"
+    assert blocked["do_not_infer"] is True
     assert len(blocked["clarifications"]) == 3
     confirm_step_facts(dfm, project_id)
     plan = dfm.analysis("plan", project_id=project_id)

@@ -28,12 +28,12 @@ def _call(kind: str, args: dict, **context) -> str:
 
 DFM_PROJECT_SCHEMA = {
     "name": "dfm_project",
-    "description": "Manage durable DFM projects and register STEP or drawing inputs. Use status before analysis to inspect capabilities.",
+    "description": "Manage durable DFM projects and register STEP or drawing inputs. Use status before analysis to inspect capabilities. confirm_fact may be called only after the user explicitly answers a clarification; never infer material, units, or pull direction from the STEP geometry.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["create", "add_input", "status", "confirm_fact", "list"]},
         "project_id": {"type": "string"}, "name": {"type": "string"},
         "path": {"type": "string", "description": "Local path or Desktop @file: reference"},
-        "fact_name": {"type": "string"}, "fact_value": {}, "idempotency_key": {"type": "string"},
+        "fact_name": {"type": "string", "description": "Canonical names: material, model_units, pull_dir. Use only the user's explicit answer."}, "fact_value": {"description": "The user's explicit answer; never a model-inferred value."}, "idempotency_key": {"type": "string"},
     }, "required": ["action"]},
 }
 
@@ -42,7 +42,7 @@ DFM_ANALYSIS_SCHEMA = {
     "description": "Plan and manage non-blocking DFM runs. Unavailable analyzers fail explicitly; never infer engineering findings from that status.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["plan", "start", "status", "cancel", "result"]},
-        "project_id": {"type": "string"}, "plan_id": {"type": "string"}, "run_id": {"type": "string"},
+        "project_id": {"type": "string"}, "plan_id": {"type": "string"}, "run_id": {"type": "string", "description": "Run ID returned by start. Always pass it to status, result, or cancel; if omitted, the service can infer it only when unambiguous."},
         "base_plan_id": {"type": "string", "description": "Invalidated plan to rebuild with only affected operations."},
         "analyzer_key": {"type": "string", "enum": ["step", "drawing", "fusion"]},
         "idempotency_key": {"type": "string"},

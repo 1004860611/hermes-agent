@@ -23,14 +23,14 @@ worker.
 1. Call `dfm_project` with `create`, unless continuing a known `project_id`.
 2. Call `dfm_project` with `add_input` for every STEP/STP or drawing `@file:` reference.
 3. Call project `status`. Inspect the input mode and every analyzer `capability`.
-4. Ask only for missing facts that affect valid checks: material, molding process, model units, nominal wall, or pull direction. Record answers with `confirm_fact`; use canonical names `material`, `model_units`, and `pull_dir` (the service also accepts `units` and `pull_direction` aliases); keep them `confirmed`, not inferred.
+4. Ask only for missing facts that affect valid checks: material, molding process, model units, nominal wall, or pull direction. If `dfm_analysis(plan)` returns `status=clarification_required`, it is a hard stop: do **not** answer the questions yourself and do **not** call `confirm_fact` in the same turn. Call the Hermes `clarify` tool for each open question so Desktop shows its blocking question panel; wait for the user's response, then call `confirm_fact` with exactly that response. Use canonical names `material`, `model_units`, and `pull_dir` (the service also accepts `units` and `pull_direction` aliases); keep them `confirmed`, not inferred.
 5. Call `dfm_analysis` with `plan`. In M1, omitted process selection means the
    built-in `injection` adapter and its default `injection.legacy-baseline`
    scope. Inspect the returned process, scope version, input hashes, operations,
    and parameter provenance. Explain blocked checks and assumptions before
    execution.
 6. Call `start` only when the selected capability is `available`. Preserve its `run_id`.
-7. `start` is non-blocking. The run publishes background stage, percentage,
+7. `start` is non-blocking. Immediately save the returned `run_id` and pass that exact ID to every subsequent `status`, `result`, or `cancel` call; never omit it or invent a replacement. The run publishes background stage, percentage,
    heartbeat, and incremental artifact updates to supported clients. Return
    control to the user after starting; do not spend Agent turns on terminal
    sleep loops or rapid status polling. Use `status` when the user asks, after
