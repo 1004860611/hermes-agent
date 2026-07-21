@@ -63,3 +63,32 @@ def test_manifest_update_increments_revision_and_rejects_stale_writer(tmp_path):
     with pytest.raises(DFMError) as exc_info:
         store.update(lambda current: current, expected_revision=0)
     assert exc_info.value.code == "manifest_conflict"
+
+
+def test_manifest_replace_retries_transient_windows_permission_error(
+    tmp_path, monkeypatch
+):
+    from tools.dfm.project import manifest as manifest_module
+
+    source = tmp_path / "source.tmp"
+    target = tmp_path / "target.json"
+    source.write_text("new", encoding="utf-8")
+    target.write_text("old", encoding="utf-8")
+    real_replace = manifest_module.os.replace
+    attempts = 0
+
+    def flaky_replace(raw_source, raw_target):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("transient reader lock")
+        real_replace(raw_source, raw_target)
+
+    monkeypatch.setattr(manifest_module.os, "name", "nt")
+    monkeypatch.setattr(manifest_module.os, "replace", flaky_replace)
+    monkeypatch.setattr(manifest_module.time, "sleep", lambda _seconds: None)
+
+    manifest_module._replace_manifest(source, target)
+
+    assert attempts == 3
+    assert target.read_text(encoding="utf-8") == "new"

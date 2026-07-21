@@ -14,9 +14,14 @@ from typing import Any
 from ..contracts import WORKER_SCHEMA_VERSION, WorkerEvent, WorkerRequest, WorkerResult
 from ..errors import DFMError
 from ..runtime.events import encode_worker_event
+from ..geometry.step.measurements import (
+    MEASUREMENT_SCHEMA_VERSION,
+    normalize_legacy_issues,
+)
+from ..geometry.step.pipeline import validate_operations
 
 
-WORKER_VERSION = "legacy-step-v1"
+WORKER_VERSION = "step-m12-v1"
 
 
 def _emit(event_type: str, **values: Any) -> None:
@@ -77,13 +82,17 @@ def _load_request(path: Path) -> WorkerRequest:
 
 def _artifact_metadata(path: Path, output_dir: Path) -> dict[str, str]:
     suffix = path.suffix.lower()
-    if path.name == "dfm_report.json":
+    if path.name == "measurements.json":
+        kind, media_type = "measurements", "application/json"
+    elif path.name == "dfm_report.json":
         kind, media_type = "report_json", "application/json"
     elif path.name == "dfm_report.md":
         kind, media_type = "report_markdown", "text/markdown"
     elif path.name == "dfm_report.pptx":
         kind = "report_presentation"
-        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        media_type = (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
     elif suffix in {".step", ".stp"}:
         kind, media_type = "highlighted_step", "model/step"
     elif suffix == ".png":
@@ -128,6 +137,8 @@ def _execute(request: WorkerRequest) -> WorkerResult:
             {"dependency": "python-pptx", "install_extra": "hermes-agent[dfm]"},
         )
 
+    operations = validate_operations(request.operations)
+
     input_path = Path(request.input_path).expanduser().resolve()
     output_dir = Path(request.output_dir).expanduser().resolve()
     if not input_path.is_file() or input_path.suffix.lower() not in {".step", ".stp"}:
@@ -163,19 +174,20 @@ def _execute(request: WorkerRequest) -> WorkerResult:
 
     legacy_analyzer.emit_dfm_event = bridge_legacy_event
     _emit("progress", stage="legacy_analysis", percent=5)
-    returncode = legacy_analyzer.main(
-        [
-            str(input_path),
-            "--out",
-            str(output_dir),
-            "--config",
-            str(profile_path),
-            "--process",
-            "injection",
-            "--highlight-step-name",
-            "dfm_highlighted.step",
-        ]
-    )
+    legacy_argv = [
+        str(input_path),
+        "--out",
+        str(output_dir),
+        "--config",
+        str(profile_path),
+        "--process",
+        "injection",
+        "--highlight-step-name",
+        "dfm_highlighted.step",
+    ]
+    for operation in operations:
+        legacy_argv.extend(["--operation", operation])
+    returncode = legacy_analyzer.main(legacy_argv)
     if returncode != 0:
         raise DFMError(
             "analyzer_failed",
@@ -197,6 +209,40 @@ def _execute(request: WorkerRequest) -> WorkerResult:
             "The DFM JSON report must contain an object.",
         )
 
+    input_sha256 = _input_sha256(input_path)
+    measurements, evaluations = normalize_legacy_issues(
+        list(report_result.get("issues") or []),
+        input_sha256=input_sha256,
+        algorithm_version=WORKER_VERSION,
+        stats=report_result.get("stats")
+        if isinstance(report_result.get("stats"), dict)
+        else {},
+        thresholds=report_result.get("thresholds")
+        if isinstance(report_result.get("thresholds"), dict)
+        else {},
+    )
+    measurement_path = output_dir / "measurements.json"
+    measurement_path.write_text(
+        json.dumps(
+            {
+                "schema_version": MEASUREMENT_SCHEMA_VERSION,
+                "run_id": request.run_id,
+                "input_sha256": input_sha256,
+                "algorithm_version": WORKER_VERSION,
+                "operations": operations,
+                "parameters": {
+                    key: value.to_dict() for key, value in request.parameters.items()
+                },
+                "measurements": [item.to_dict() for item in measurements],
+                "evaluations": [item.to_dict() for item in evaluations],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _emit("artifact", kind="measurements", path=measurement_path.name)
+
     from ..reporting import render_default_reports
 
     _emit("progress", stage="render_presentation", percent=97)
@@ -215,17 +261,17 @@ def _execute(request: WorkerRequest) -> WorkerResult:
     artifacts = [
         _artifact_metadata(path, output_dir)
         for path in sorted(output_dir.iterdir())
-        if path.is_file()
-        and path.name not in {profile_path.name, "worker_result.json"}
+        if path.is_file() and path.name not in {profile_path.name, "worker_result.json"}
     ]
     result = WorkerResult(
         schema_version=WORKER_SCHEMA_VERSION,
         worker_version=WORKER_VERSION,
-        input_sha256=_input_sha256(input_path),
+        input_sha256=input_sha256,
         process=request.process,
         scope_id=request.scope_id,
         parameters=request.parameters,
         result_path="worker_result.json",
+        measurement_path=measurement_path.name,
         artifacts=artifacts,
     )
     result_path = output_dir / result.result_path
@@ -259,7 +305,9 @@ def run_request(request_path: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run an isolated Hermes STEP DFM worker.")
+    parser = argparse.ArgumentParser(
+        description="Run an isolated Hermes STEP DFM worker."
+    )
     parser.add_argument("--request", type=Path, required=True)
     args = parser.parse_args(argv)
     return run_request(args.request)

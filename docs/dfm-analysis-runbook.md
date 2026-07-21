@@ -1,19 +1,19 @@
 ---
 title: "单次 DFM 分析数据说明"
 status: active
-milestone: M1
-last_updated: 2026-07-17
+milestone: M1.2
+last_updated: 2026-07-20
 type: living-runbook
 owners: DFM 工程团队
 ---
 
 # 单次 DFM 分析数据说明
 
-本文说明当前 M1 版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
+本文说明当前 M1.2 版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
 
 本文是随 DFM 里程碑持续更新的活文档。这里描述的是**当前已实现行为**；长期目标、尚未实现的输入模式和演进路线参见 [DFM Hermes Agent 开发目标与路线图](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)。
 
-## 1. M1 适用范围
+## 1. M1.2 适用范围
 
 | 能力 | M1 状态 |
 | --- | --- |
@@ -22,9 +22,9 @@ owners: DFM 工程团队
 | 2D 图纸/OCR | 接口预留，尚未形成生产分析闭环 |
 | 混合输入融合 | 接口预留，尚未形成生产分析闭环 |
 | 几何计算 | OpenCascade / `pythonocc-core` |
-| 工艺规则 | `injection` ProcessAdapter，默认范围 `injection.legacy-baseline@1.0.0` |
+| 工艺规则 | `injection` ProcessAdapter，默认范围 `injection.legacy-baseline@1.1.0` |
 | 执行方式 | Hermes 主进程管理 Run，STEP worker 隔离子进程执行 |
-| 结果 | JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
+| 结果 | Measurement/Evaluation JSON、兼容报告 JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
 | Desktop | 复用附件上传、聊天进度和 Artifacts 展示 |
 
 M1 不分析模具设计模型，也不分析型芯、型腔、滑块、顶针、浇注系统或冷却系统。
@@ -172,14 +172,15 @@ InputRecord 主要字段：
 
 每次写入会增加 `revision`，并通过锁和原子替换降低并发写坏风险。
 
-### M1 边界
+### M1.2 边界
 
-`facts`、`clarifications`、`features` 和 `findings` 契约已经存在，但 M1 尚未完成全部领域归一化：
+`facts`、`clarifications`、`features` 和 `findings` 契约已经存在。M1.2 已增加独立的 Measurement/Evaluation 中间结果，但尚未把它们提升为项目级 Finding 唯一来源：
 
 - 已确认工艺参数可以写入 `facts` 并参与 Plan 编译；
-- 原始几何问题主要位于 `worker_result.json`、`dfm_report.json` 和最终报告；
+- 每次 STEP Run 都生成 `measurements.json`，保存输入哈希、算法版本、实际 operations、客观模型测量、问题测量及规则 Evaluation；
+- 原始兼容问题仍保存在 `dfm_report.json` 和最终报告中，旧报告格式没有被改写；
 - `ProjectManifest.findings` 当前不应被视为全部问题明细的唯一来源；
-- 后续完成 Measurement/Finding 归一化后，应更新本节和数据读取优先级。
+- M2 完成 Finding/evidence 项目级归一化后，应再次更新本节和数据读取优先级。
 
 ## 7. 分析计划与 worker 请求
 
@@ -274,6 +275,7 @@ RunRecord 同时保存：
 | 文件 | 类型/用途 | 主要使用者 |
 | --- | --- | --- |
 | `worker_result.json` | worker 原始结果、输入哈希、参数、artifact 元数据 | Analyzer、开发诊断 |
+| `measurements.json` | 版本化 Measurement、Evaluation、实际 operations 和几何引用 | 后续 Finding 归一化、系统集成、开发诊断 |
 | `dfm_report.json` | 结构化 DFM 分析结果 | 系统集成、后续归一化 |
 | `dfm_report.md` | 可读文本报告和兼容交付 | Agent、开发者 |
 | `dfm_report.pptx` | 当前主要用户交付报告 | Desktop 用户 |
@@ -282,7 +284,7 @@ RunRecord 同时保存：
 | `overview.png` | 问题总览 | 报告摘要 |
 | `DFM-*.png` | 具体问题证据图 | 问题详情、PPTX |
 
-M1 中每个进入重点证据范围的问题最多生成：
+M1.2 中只有 Plan 包含 `render_evidence` 时才生成证据图片和高亮 STEP。每个进入重点证据范围的问题最多生成：
 
 - 正视图 `front`；
 - 斜视图 `oblique`；

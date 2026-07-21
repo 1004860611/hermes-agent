@@ -105,7 +105,10 @@ class StepAnalyzer:
             self.key,
             CapabilityStatus.AVAILABLE,
             "The isolated STEP analyzer is available.",
-            details={"worker_version": self.version, "supported_processes": ["injection"]},
+            details={
+                "worker_version": self.version,
+                "supported_processes": ["injection"],
+            },
         )
 
     def run(
@@ -122,7 +125,9 @@ class StepAnalyzer:
                 capability.details,
             )
         if context.plan is None:
-            raise DFMError("plan_required", "A persisted DFM execution plan is required.")
+            raise DFMError(
+                "plan_required", "A persisted DFM execution plan is required."
+            )
         if context.plan.process != "injection":
             raise DFMError(
                 "unsupported_capability",
@@ -138,7 +143,9 @@ class StepAnalyzer:
             None,
         )
         if input_record is None:
-            raise DFMError("input_required", "The DFM plan does not reference a STEP input.")
+            raise DFMError(
+                "input_required", "The DFM plan does not reference a STEP input."
+            )
 
         run_dir = context.project_dir / "runs" / context.run_id
         output_dir = run_dir / "artifacts"
@@ -146,12 +153,15 @@ class StepAnalyzer:
         request = WorkerRequest(
             schema_version=WORKER_SCHEMA_VERSION,
             run_id=context.run_id,
-            input_path=str((context.project_dir / input_record.relative_path).resolve()),
+            input_path=str(
+                (context.project_dir / input_record.relative_path).resolve()
+            ),
             output_dir=str(output_dir.resolve()),
             process=context.plan.process,
             scope_id=context.plan.scope_id,
             analyzer_version=self.version,
             parameters=context.plan.parameters,
+            operations=context.plan.operations,
             max_evidence_findings=self.max_evidence_findings,
         )
         request_path = run_dir / "request.json"
@@ -182,10 +192,14 @@ class StepAnalyzer:
             run_dir / "worker.stderr.log",
         )
         if process_result.returncode != 0:
-            error = next((event for event in reversed(events) if event.type == "error"), None)
+            error = next(
+                (event for event in reversed(events) if event.type == "error"), None
+            )
             raise DFMError(
                 error.code if error and error.code else "analyzer_failed",
-                error.message if error and error.message else "The STEP analyzer failed.",
+                error.message
+                if error and error.message
+                else "The STEP analyzer failed.",
             )
         completed = [event for event in events if event.type == "completed"]
         if len(completed) != 1 or not completed[0].path:
@@ -213,6 +227,17 @@ class StepAnalyzer:
             raise DFMError(
                 "worker_result_invalid",
                 "The STEP worker result does not match its persisted plan.",
+            )
+        measurement_artifacts = [
+            item
+            for item in result.artifacts
+            if item.get("kind") == "measurements"
+            and item.get("path") == result.measurement_path
+        ]
+        if not result.measurement_path or len(measurement_artifacts) != 1:
+            raise DFMError(
+                "worker_result_invalid",
+                "The STEP worker result must reference exactly one measurements artifact.",
             )
 
         raw_artifacts = [

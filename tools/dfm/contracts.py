@@ -150,7 +150,9 @@ class PlanRecord:
             "scope_version": self.scope_version,
             "input_ids": list(self.input_ids),
             "input_hashes": dict(self.input_hashes),
-            "parameters": {key: value.to_dict() for key, value in self.parameters.items()},
+            "parameters": {
+                key: value.to_dict() for key, value in self.parameters.items()
+            },
             "operations": [operation.to_dict() for operation in self.operations],
         }
 
@@ -172,6 +174,7 @@ class EffectiveParameter:
     value: Any
     unit: str | None
     source: str
+    kind: str = "rule"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -196,6 +199,75 @@ class PlanOperation:
 
 
 @dataclass(frozen=True)
+class GeometryRef:
+    """A topology reference valid for one immutable STEP input/version."""
+
+    kind: str
+    index: int
+    input_sha256: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "GeometryRef":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class MeasurementRecord:
+    """Deterministic geometry output, intentionally independent of a rule verdict."""
+
+    measurement_id: str
+    check_id: str
+    metric: str
+    value: Any
+    unit: str | None
+    status: str
+    geometry_refs: list[GeometryRef]
+    method: str
+    algorithm_version: str
+    input_sha256: str
+    quality: dict[str, Any] = field(default_factory=dict)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "geometry_refs": [item.to_dict() for item in self.geometry_refs],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "MeasurementRecord":
+        values = dict(payload)
+        values["geometry_refs"] = [
+            GeometryRef.from_dict(item) for item in values.get("geometry_refs", [])
+        ]
+        return cls(**values)
+
+
+@dataclass(frozen=True)
+class EvaluationRecord:
+    """A versioned comparison between measurements and an effective parameter."""
+
+    evaluation_id: str
+    check_id: str
+    measurement_refs: list[str]
+    parameter_ref: str
+    operator: str
+    expected: Any
+    actual: Any
+    outcome: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "EvaluationRecord":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
 class WorkerRequest:
     schema_version: int
     run_id: str
@@ -205,12 +277,15 @@ class WorkerRequest:
     scope_id: str
     analyzer_version: str
     parameters: dict[str, EffectiveParameter] = field(default_factory=dict)
+    operations: list[PlanOperation] = field(default_factory=list)
     max_evidence_findings: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
-            "parameters": {key: value.to_dict() for key, value in self.parameters.items()},
+            "parameters": {
+                key: value.to_dict() for key, value in self.parameters.items()
+            },
         }
 
     @classmethod
@@ -220,6 +295,9 @@ class WorkerRequest:
             key: EffectiveParameter.from_dict(value)
             for key, value in values.get("parameters", {}).items()
         }
+        values["operations"] = [
+            PlanOperation.from_dict(value) for value in values.get("operations", [])
+        ]
         return cls(**values)
 
 
@@ -242,7 +320,9 @@ class WorkerEvent:
         try:
             event = cls(**payload)
         except (TypeError, ValueError) as exc:
-            raise DFMError("worker_event_invalid", "DFM worker event is invalid.") from exc
+            raise DFMError(
+                "worker_event_invalid", "DFM worker event is invalid."
+            ) from exc
         if event.schema_version != WORKER_SCHEMA_VERSION:
             raise DFMError(
                 "worker_event_invalid",
@@ -275,11 +355,14 @@ class WorkerResult:
     parameters: dict[str, EffectiveParameter]
     result_path: str
     artifacts: list[dict[str, str]] = field(default_factory=list)
+    measurement_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
-            "parameters": {key: value.to_dict() for key, value in self.parameters.items()},
+            "parameters": {
+                key: value.to_dict() for key, value in self.parameters.items()
+            },
         }
 
     @classmethod
@@ -462,7 +545,9 @@ class ProjectManifest:
         values["inputs"] = [
             InputRecord.from_dict(item) for item in values.get("inputs", [])
         ]
-        values["facts"] = [FactRecord.from_dict(item) for item in values.get("facts", [])]
+        values["facts"] = [
+            FactRecord.from_dict(item) for item in values.get("facts", [])
+        ]
         values["clarifications"] = [
             ClarificationRecord.from_dict(item)
             for item in values.get("clarifications", [])
@@ -470,7 +555,9 @@ class ProjectManifest:
         values["features"] = [
             FeatureRecord.from_dict(item) for item in values.get("features", [])
         ]
-        values["plans"] = [PlanRecord.from_dict(item) for item in values.get("plans", [])]
+        values["plans"] = [
+            PlanRecord.from_dict(item) for item in values.get("plans", [])
+        ]
         values["runs"] = [RunRecord.from_dict(item) for item in values.get("runs", [])]
         values["findings"] = [
             FindingRecord.from_dict(item) for item in values.get("findings", [])

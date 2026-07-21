@@ -13,6 +13,7 @@ from tools.dfm.contracts import (
     WorkerResult,
 )
 from tools.dfm.runtime.process import ProcessResult
+from tools.dfm.workers.step_worker import WORKER_VERSION
 
 
 class SuccessfulRunner:
@@ -43,15 +44,29 @@ class SuccessfulRunner:
         output.mkdir(parents=True, exist_ok=True)
         report = output / "dfm_report.json"
         report.write_text('{"issue_count": 0}', encoding="utf-8")
+        measurements = output / "measurements.json"
+        measurements.write_text('{"measurements": []}', encoding="utf-8")
         result = WorkerResult(
             1,
-            "legacy-step-v1",
+            WORKER_VERSION,
             "a" * 64,
             "injection",
             "injection.legacy-baseline",
             self.request.parameters,
             "worker_result.json",
-            [{"kind": "report_json", "path": report.name, "media_type": "application/json"}],
+            [
+                {
+                    "kind": "report_json",
+                    "path": report.name,
+                    "media_type": "application/json",
+                },
+                {
+                    "kind": "measurements",
+                    "path": measurements.name,
+                    "media_type": "application/json",
+                },
+            ],
+            measurements.name,
         )
         (output / result.result_path).write_text(
             json.dumps(result.to_dict()), encoding="utf-8"
@@ -111,5 +126,9 @@ def test_step_analyzer_runs_persisted_plan_and_returns_contained_artifacts(tmp_p
     assert runner.cwd == Path(__file__).resolve().parents[3]
     assert runner.timeout_seconds == 123
     assert runner.request.max_evidence_findings == 12
-    assert {artifact.kind for artifact in artifacts} == {"report_json", "worker_result"}
+    assert {artifact.kind for artifact in artifacts} == {
+        "report_json",
+        "measurements",
+        "worker_result",
+    }
     assert all((tmp_path / artifact.relative_path).is_file() for artifact in artifacts)

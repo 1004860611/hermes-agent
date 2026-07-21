@@ -863,6 +863,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | 2026-07-15 | M1 对外只启用 `injection` ProcessAdapter，并以 `injection.legacy-baseline@1.0.0` 作为默认分析范围；Run 只执行已持久化的 Plan 快照。 | 保留未来新增工艺适配器的注册边界，同时保证当前参数来源、检查操作、输入哈希和版本可审计，避免模型临时输出直接驱动几何计算。 |
 | 2026-07-15 | STEP 几何分析通过版本化 JSON/JSON Lines 协议在可终止子进程中运行；`dfm.runtime.python` 可选择当前解释器或已安装 OCC 的独立运行时。 | Hermes 主进程不必加载 OpenCascade；本地多环境和 Docker 单环境都使用同一 Analyzer/worker 契约。 |
 | 2026-07-15 | M1 使用合成、非敏感的 30×20×6 mm 通孔板 STEP 固定 Django/Hermes 行为基线。 | 真实 OCC 对比验证测量、issue 关系和 artifact 闭环，不依赖客户业务文件，也不把 issue 总数冻结为脆弱快照。 |
+| 2026-07-20 | M1.2 将默认范围升级为 `injection.legacy-baseline@1.1.0`，worker 升级为 `step-m12-v1`；Plan operation 成为真实执行白名单，检查族、Measurement/Evaluation、evidence 和兼容报告入口分层。 | 保持 M1 工程行为与交付兼容，同时建立后续 Finding 归一化和版本化规则计算需要的稳定中间边界。 |
 
 ## 16. 状态跟踪
 
@@ -871,6 +872,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | ----------------------------------- | -------- | ----------- |
 | M0 Hermes 内建 DFM 基础架构       | 已完成 | `tests/tools/dfm/test_m0_e2e.py`；M0 聚焦套件 98 passed；静态编译与 Skill 校验通过 |
 | M1 现有行为基线与 STEP 分析器适配 | 已完成 | `tests/tools/dfm/test_m1_baseline.py`、`test_m1_e2e.py`；OCC 矩阵 130 passed；无 OCC 矩阵 128 passed、2 dependency-gated skipped；合成样件与 profile 位于 `tests/fixtures/dfm/step/` |
+| M1.2 STEP 指标拆解与检查族模块化 | 已完成 | `tests/tools/dfm/test_m12_measurements.py`、`test_m1_baseline.py`、`test_m1_e2e.py`；检查族物理模块、共享 STEP 索引、版本化 issue catalog、真实 Plan 门控、`measurements.json`、evidence/reporting 分层和完整 DFM 矩阵 |
 | M2 STEP DFM Hermes 端到端闭环     | 未开始 |           |
 | M3 2D 图纸文本理解与指标提取      | 未开始 |           |
 | M4 2D 工程特征识别                | 未开始 |           |
@@ -886,7 +888,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 
 1. 为 STEP 输入增加真实格式/magic、B-Rep 可读性和复杂度预检，在进入重型 worker 前返回可恢复错误。
 2. 建立材料、拔模方向、单位和关键注塑参数的澄清门控，把用户确认事实映射到 Plan 参数 provenance。
-3. 把 M1 保留的 raw legacy issue 适配为稳定 Measurement、Finding 和 evidence 引用，不改写原始报告制品。
+3. 基于 M1.2 的 Measurement/Evaluation 和版本化 issue catalog，把兼容 issue 适配为稳定 Finding 和 evidence 引用，不改写原始报告制品。
 4. 完成项目继续、输入新版本、Plan 失效传播和受影响步骤重跑语义。
 5. 验证 Desktop 附件到 DFM intake、运行状态、Artifacts 发现和报告打开的真实交互闭环。
 6. 补齐安装/容器配置、`dfm.runtime.python`、OpenCascade 依赖和故障排查文档。

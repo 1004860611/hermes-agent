@@ -35,7 +35,7 @@ def test_injection_default_scope_has_versioned_parameter_provenance(context):
 
     assert plan.process == "injection"
     assert plan.scope_id == "injection.legacy-baseline"
-    assert plan.scope_version == "1.0.0"
+    assert plan.scope_version == "1.1.0"
     assert plan.parameters["min_draft_deg"].value == 1.0
     assert plan.parameters["min_draft_deg"].source == "injection_legacy_default"
     assert plan.parameters["min_draft_deg"].unit == "degree"

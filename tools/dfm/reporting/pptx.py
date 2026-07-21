@@ -421,4 +421,3 @@ class PythonPptxReportRenderer(ReportRenderer):
             y = 2.08 + (index - 1) * 0.86
             _text(slide, f"0{index}", 1.25, y, 0.65, 0.42, size=16, color="5ED0D9", bold=True)
             _text(slide, note, 2.15, y - 0.04, 9.55, 0.58, size=13, color="E7ECF3", valign="top")
-

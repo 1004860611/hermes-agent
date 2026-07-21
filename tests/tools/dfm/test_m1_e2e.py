@@ -30,14 +30,18 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         }
         assert {"dfm_project", "dfm_analysis"} <= enabled
 
-        project = _dispatch(registry, "dfm_project", {"action": "create", "name": "M1 E2E"})
+        project = _dispatch(
+            registry, "dfm_project", {"action": "create", "name": "M1 E2E"}
+        )
         project_id = project["project_id"]
-        _dispatch(
+        added = _dispatch(
             registry,
             "dfm_project",
             {"action": "add_input", "project_id": project_id, "path": str(FIXTURE)},
         )
-        plan = _dispatch(registry, "dfm_analysis", {"action": "plan", "project_id": project_id})
+        plan = _dispatch(
+            registry, "dfm_analysis", {"action": "plan", "project_id": project_id}
+        )
         assert plan["plan"]["process"] == "injection"
         assert plan["plan"]["scope_id"] == "injection.legacy-baseline"
         assert plan["capability"]["status"] == "available"
@@ -59,7 +63,12 @@ def test_m1_real_tool_vertical_slice(tmp_path):
                 "dfm_analysis",
                 {"action": "status", "project_id": project_id, "run_id": run_id},
             )
-            if status["run"]["status"] in {"succeeded", "failed", "blocked", "cancelled"}:
+            if status["run"]["status"] in {
+                "succeeded",
+                "failed",
+                "blocked",
+                "cancelled",
+            }:
                 break
             time.sleep(0.1)
         else:
@@ -76,9 +85,36 @@ def test_m1_real_tool_vertical_slice(tmp_path):
             "report_json",
             "report_markdown",
             "report_presentation",
+            "measurements",
             "worker_result",
         }
         assert all(Path(item["path"]).is_file() for item in result["run"]["artifacts"])
+        measurement_artifact = next(
+            item
+            for item in result["run"]["artifacts"]
+            if item["kind"] == "measurements"
+        )
+        measurement_payload = json.loads(
+            Path(measurement_artifact["path"]).read_text(encoding="utf-8")
+        )
+        assert measurement_payload["schema_version"] == 1
+        assert measurement_payload["input_sha256"] == added["input"]["sha256"]
+        assert measurement_payload["operations"] == [
+            operation["operation"] for operation in plan["plan"]["operations"]
+        ]
+        assert measurement_payload["parameters"] == plan["plan"]["parameters"]
+        assert measurement_payload["measurements"]
+        assert all(
+            item["method"] != "llm" for item in measurement_payload["measurements"]
+        )
+        measurement_ids = {
+            item["measurement_id"] for item in measurement_payload["measurements"]
+        }
+        assert all(
+            set(item["measurement_refs"]) <= measurement_ids
+            and item["outcome"] in {"pass", "fail", "indeterminate"}
+            for item in measurement_payload["evaluations"]
+        )
     finally:
         get_dfm_service().close()
         reset_hermes_home_override(token)

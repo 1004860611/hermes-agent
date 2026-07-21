@@ -57,6 +57,7 @@ class InjectionProcessAdapter:
                 self._normalize_value(key, definition["value"]),
                 definition.get("unit"),
                 "injection_legacy_default",
+                str(definition.get("kind") or "rule"),
             )
             for key, definition in defaults.items()
         }
@@ -75,6 +76,7 @@ class InjectionProcessAdapter:
                 self._normalize_value(key, value),
                 defaults[key].get("unit"),
                 source,
+                str(defaults[key].get("kind") or "rule"),
             )
 
         return ProcessPlan(
@@ -97,7 +99,7 @@ class InjectionProcessAdapter:
             ) from exc
         if (
             scope.get("scope_id") != "injection.legacy-baseline"
-            or scope.get("version") != "1.0.0"
+            or scope.get("version") != "1.1.0"
             or scope.get("process") != self.key
             or not isinstance(scope.get("parameters"), dict)
             or not isinstance(scope.get("operations"), list)

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from tools.dfm.geometry.step import legacy_analyzer
+from tools.dfm.geometry.step.evidence import rendering
 
 
 def test_evidence_budget_does_not_truncate_findings(monkeypatch, tmp_path):
@@ -16,12 +17,15 @@ def test_evidence_budget_does_not_truncate_findings(monkeypatch, tmp_path):
     ]
     rendered = []
     events = []
-    monkeypatch.setattr(legacy_analyzer, "shape_bbox", lambda *_args: (0, 0, 0, 1, 1, 1))
+    monkeypatch.setattr(
+        legacy_analyzer, "shape_bbox", lambda *_args: (0, 0, 0, 1, 1, 1)
+    )
     monkeypatch.setattr(
         legacy_analyzer,
         "render_issue_with_vtk",
-        lambda _shape, _occ, issue, *_args: rendered.append(issue.id)
-        or [f"{issue.id}.png"],
+        lambda _shape, _occ, issue, *_args: (
+            rendered.append(issue.id) or [f"{issue.id}.png"]
+        ),
     )
     monkeypatch.setattr(
         legacy_analyzer,
@@ -36,7 +40,7 @@ def test_evidence_budget_does_not_truncate_findings(monkeypatch, tmp_path):
         mesh_deflection_mm=0.5,
     )
 
-    rendered_count = legacy_analyzer.render_issue_evidence(
+    rendered_count = rendering.render_issue_evidence(
         object(), object(), issues, tmp_path, args
     )
 

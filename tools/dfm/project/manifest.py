@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -17,6 +18,7 @@ from ..errors import DFMError
 
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[Path, threading.RLock] = {}
+_WINDOWS_REPLACE_ATTEMPTS = 6
 
 
 def _lock_for(path: Path) -> threading.RLock:
@@ -25,11 +27,25 @@ def _lock_for(path: Path) -> threading.RLock:
         return _LOCKS.setdefault(resolved, threading.RLock())
 
 
+def _replace_manifest(source: Path, target: Path) -> None:
+    """Tolerate short-lived Windows reader/AV locks without hiding real failures."""
+    for attempt in range(_WINDOWS_REPLACE_ATTEMPTS):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == _WINDOWS_REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(0.01 * (2**attempt))
+
+
 class ManifestStore:
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = Path(project_dir)
         self.path = self.project_dir / "project_manifest.json"
-        self.lock_path = self.project_dir.parent / ".locks" / f"{self.project_dir.name}.lock"
+        self.lock_path = (
+            self.project_dir.parent / ".locks" / f"{self.project_dir.name}.lock"
+        )
         self._lock = _lock_for(self.path)
 
     @contextmanager
@@ -73,7 +89,7 @@ class ManifestStore:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
+            _replace_manifest(temporary, self.path)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -117,7 +133,10 @@ class ManifestStore:
         with self._lock:
             with self._process_lock():
                 current = self._load_unlocked()
-                if expected_revision is not None and current.revision != expected_revision:
+                if (
+                    expected_revision is not None
+                    and current.revision != expected_revision
+                ):
                     raise DFMError(
                         "manifest_conflict",
                         "The DFM project changed since it was read.",
@@ -125,7 +144,9 @@ class ManifestStore:
                     )
                 updated = transform(current)
                 if updated.project_id != current.project_id:
-                    raise DFMError("manifest_invalid", "Project id cannot change during update.")
+                    raise DFMError(
+                        "manifest_invalid", "Project id cannot change during update."
+                    )
                 updated = replace(updated, revision=current.revision + 1)
                 self._save_unlocked(updated)
                 return updated

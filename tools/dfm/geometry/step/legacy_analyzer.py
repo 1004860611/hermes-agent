@@ -9,6 +9,7 @@ Keep geometry measurement and rule changes out of this module until approved
 by the M1 comparison baseline. Runtime progress and bounded evidence scheduling
 remain covered by parity tests; process orchestration belongs in the worker.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,6 +28,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterable
+
+from ...reporting.legacy_reports import write_json_report, write_markdown_report
+from .model import LoadedStepModel
+from .evidence import EvidenceResult, render_evidence_bundle
+from .checks import (
+    continuity,
+    cylindrical,
+    face_quality,
+    indexed_features,
+    planar_spacing,
+    thickness,
+    undercut,
+)
 
 
 Vec3 = tuple[float, float, float]
@@ -154,7 +168,9 @@ def dir_to_tuple(direction: Any) -> Vec3:
 def parse_vec3(value: str) -> Vec3:
     parts = [part.strip() for part in value.split(",")]
     if len(parts) != 3:
-        raise argparse.ArgumentTypeError("Expected three comma-separated values, e.g. 0,0,1")
+        raise argparse.ArgumentTypeError(
+            "Expected three comma-separated values, e.g. 0,0,1"
+        )
     try:
         return unit((float(parts[0]), float(parts[1]), float(parts[2])))
     except ValueError as exc:
@@ -169,7 +185,9 @@ def parse_vec3_config(value: Any) -> Vec3:
             return unit((float(value[0]), float(value[1]), float(value[2])))
         except ValueError as exc:
             raise argparse.ArgumentTypeError(str(exc)) from exc
-    raise argparse.ArgumentTypeError("Expected a vector string like '0,0,1' or a three-number list.")
+    raise argparse.ArgumentTypeError(
+        "Expected a vector string like '0,0,1' or a three-number list."
+    )
 
 
 @contextmanager
@@ -207,19 +225,37 @@ def import_occ() -> SimpleNamespace:
         from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
         from OCC.Core.BRepTools import BRepTools_WireExplorer, breptools
         from OCC.Core.GProp import GProp_GProps
-        from OCC.Core.GeomAbs import GeomAbs_Circle, GeomAbs_Cylinder, GeomAbs_Line, GeomAbs_Plane
+        from OCC.Core.GeomAbs import (
+            GeomAbs_Circle,
+            GeomAbs_Cylinder,
+            GeomAbs_Line,
+            GeomAbs_Plane,
+        )
         from OCC.Core.gp import gp_Pnt
         from OCC.Core.IFSelect import IFSelect_RetDone
         from OCC.Core.Quantity import Quantity_Color, Quantity_TOC_RGB
         from OCC.Core.STEPCAFControl import STEPCAFControl_Writer
         from OCC.Core.STEPControl import STEPControl_Reader
         from OCC.Core.TDocStd import TDocStd_Document
-        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_VERTEX
+        from OCC.Core.TopAbs import (
+            TopAbs_EDGE,
+            TopAbs_FACE,
+            TopAbs_REVERSED,
+            TopAbs_VERTEX,
+        )
         from OCC.Core.TopExp import TopExp_Explorer, topexp
         from OCC.Core.TopLoc import TopLoc_Location
-        from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListIteratorOfListOfShape
+        from OCC.Core.TopTools import (
+            TopTools_IndexedDataMapOfShapeListOfShape,
+            TopTools_ListIteratorOfListOfShape,
+        )
         from OCC.Core.TopoDS import topods
-        from OCC.Core.XCAFDoc import XCAFDoc_ColorCurv, XCAFDoc_ColorGen, XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
+        from OCC.Core.XCAFDoc import (
+            XCAFDoc_ColorCurv,
+            XCAFDoc_ColorGen,
+            XCAFDoc_ColorSurf,
+            XCAFDoc_DocumentTool,
+        )
     except ImportError as exc:
         raise RuntimeError(
             "pythonOCC/OpenCascade is not importable in the current Django Python environment. "
@@ -237,7 +273,9 @@ def read_step(path: Path, occ: SimpleNamespace) -> Any:
         raise RuntimeError(f"OpenCascade failed to read STEP file: {path}")
     transferred = reader.TransferRoots()
     if transferred <= 0:
-        raise RuntimeError(f"OpenCascade read the file but transferred no roots: {path}")
+        raise RuntimeError(
+            f"OpenCascade read the file but transferred no roots: {path}"
+        )
     return reader.OneShape()
 
 
@@ -252,7 +290,14 @@ def shape_bbox(shape: Any, occ: SimpleNamespace) -> BBox:
     box = occ.Bnd_Box()
     occ.brepbndlib.Add(shape, box)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-    return (float(xmin), float(ymin), float(zmin), float(xmax), float(ymax), float(zmax))
+    return (
+        float(xmin),
+        float(ymin),
+        float(zmin),
+        float(xmax),
+        float(ymax),
+        float(zmax),
+    )
 
 
 def bbox_size(bbox: BBox) -> Vec3:
@@ -260,17 +305,29 @@ def bbox_size(bbox: BBox) -> Vec3:
 
 
 def bbox_center(bbox: BBox) -> Vec3:
-    return ((bbox[0] + bbox[3]) / 2.0, (bbox[1] + bbox[4]) / 2.0, (bbox[2] + bbox[5]) / 2.0)
+    return (
+        (bbox[0] + bbox[3]) / 2.0,
+        (bbox[1] + bbox[4]) / 2.0,
+        (bbox[2] + bbox[5]) / 2.0,
+    )
 
 
 def bbox_dimensions(bbox: BBox) -> Vec3:
-    return (max(0.0, bbox[3] - bbox[0]), max(0.0, bbox[4] - bbox[1]), max(0.0, bbox[5] - bbox[2]))
+    return (
+        max(0.0, bbox[3] - bbox[0]),
+        max(0.0, bbox[4] - bbox[1]),
+        max(0.0, bbox[5] - bbox[2]),
+    )
 
 
 def bbox_extent_along_dir(bbox: BBox, direction: Vec3) -> float:
     direction = unit(direction)
     size = bbox_dimensions(bbox)
-    return abs(direction[0]) * size[0] + abs(direction[1]) * size[1] + abs(direction[2]) * size[2]
+    return (
+        abs(direction[0]) * size[0]
+        + abs(direction[1]) * size[1]
+        + abs(direction[2]) * size[2]
+    )
 
 
 def dominant_axis_index(direction: Vec3) -> int:
@@ -291,7 +348,9 @@ def principal_axis(index: int, sign: float = 1.0) -> Vec3:
     return (values[0], values[1], values[2])
 
 
-def bbox_overlap_on_axes(a: BBox, b: BBox, axes: list[int], tolerance: float = 1e-6) -> bool:
+def bbox_overlap_on_axes(
+    a: BBox, b: BBox, axes: list[int], tolerance: float = 1e-6
+) -> bool:
     mins_a = (a[0], a[1], a[2])
     maxs_a = (a[3], a[4], a[5])
     mins_b = (b[0], b[1], b[2])
@@ -304,7 +363,9 @@ def bbox_overlap_on_axes(a: BBox, b: BBox, axes: list[int], tolerance: float = 1
     return True
 
 
-def bbox_overlap_lengths_on_axes(a: BBox, b: BBox, axes: list[int], tolerance: float = 1e-6) -> list[float]:
+def bbox_overlap_lengths_on_axes(
+    a: BBox, b: BBox, axes: list[int], tolerance: float = 1e-6
+) -> list[float]:
     mins_a = (a[0], a[1], a[2])
     maxs_a = (a[3], a[4], a[5])
     mins_b = (b[0], b[1], b[2])
@@ -452,7 +513,9 @@ def probe_backends() -> dict[str, Any]:
         "cadquery": cadquery_version,
         "ocp": bool(importlib.util.find_spec("OCP")),
         "vtk": bool(importlib.util.find_spec("vtk")),
-        "freecadcmd": str(freecad_cmd) if freecad_cmd.exists() else shutil.which("freecadcmd"),
+        "freecadcmd": str(freecad_cmd)
+        if freecad_cmd.exists()
+        else shutil.which("freecadcmd"),
     }
 
 
@@ -486,19 +549,22 @@ def make_issue(
     )
 
 
-def analyze_shape(shape: Any, occ: SimpleNamespace, args: argparse.Namespace, out_dir: Path | None = None) -> tuple[list[Issue], dict[str, Any]]:
+def operation_enabled(args: argparse.Namespace, *operations: str) -> bool:
+    selected = set(getattr(args, "operation", None) or [])
+    return not selected or bool(selected.intersection(operations))
+
+
+def analyze_shape(
+    shape: Any,
+    occ: SimpleNamespace,
+    args: argparse.Namespace,
+    out_dir: Path | None = None,
+) -> tuple[list[Issue], dict[str, Any]]:
     issues: list[Issue] = []
     counters: dict[str, int] = {}
-    bbox = shape_bbox(shape, occ)
-    stats = {
-        "bbox": bbox,
-        "bbox_size_mm": bbox_size(bbox),
-        "bbox_center": bbox_center(bbox),
-        "topology": count_topology(shape, occ),
-        "area_mm2": shape_area(shape, occ),
-        "volume_mm3": shape_volume(shape, occ),
-        "valid_brep": is_valid_shape(shape, occ),
-    }
+    model = LoadedStepModel.build(shape, occ)
+    bbox = model.bbox
+    stats = dict(model.stats)
 
     emit_model_summary(stats)
 
@@ -519,384 +585,127 @@ def analyze_shape(shape: Any, occ: SimpleNamespace, args: argparse.Namespace, ou
             args.max_issues_per_code,
         )
 
-    plane_faces: list[PlaneFace] = []
-    face_infos: list[FaceInfo] = []
-    pull_dir = unit(args.pull_dir)
+    plane_faces: list[PlaneFace] = list(model.plane_faces)
+    face_infos: list[FaceInfo] = [entry.info for entry in model.faces]
+    indexed_features.run(model, occ, args, issues, counters)
 
-    for face_index, raw_face in enumerate(iter_shapes(shape, occ.TopAbs_FACE, occ), start=1):
-        face = occ.topods.Face(raw_face)
-        try:
-            area, center = face_props(face, occ)
-            surf = occ.BRepAdaptor_Surface(face)
-            surf_type = surf.GetType()
-            face_bbox = shape_bbox(face, occ)
-        except Exception:
-            continue
-
-        face_infos.append(face_surface_info(face, surf, surf_type, face_index, area, center, face_bbox, occ))
-
-        if surf_type == occ.GeomAbs_Cylinder:
-            cylinder = surf.Cylinder()
-            cylinder_axis = dir_to_tuple(cylinder.Axis().Direction())
-            radius = float(cylinder.Radius())
-            if radius <= args.model_tolerance_mm:
-                continue
-            diameter = radius * 2.0
-            if diameter < args.min_hole_diameter_mm:
-                make_issue(
-                    issues,
-                    counters,
-                    "small_cylindrical_feature",
-                    "孔径/圆柱特征过小",
-                    "medium",
-                    f"检测到直径约 {diameter:.3f} mm 的圆柱/孔类特征，低于阈值 {args.min_hole_diameter_mm:.3f} mm。",
-                    center,
-                    {"face": face_index, "diameter_mm": diameter, "threshold_mm": args.min_hole_diameter_mm},
-                    args.max_issues_per_code,
-                    refs=[{"kind": "face", "index": face_index}],
-                    view_dir=cylinder_axis,
-                )
-            if radius < args.min_tool_radius_mm:
-                make_issue(
-                    issues,
-                    counters,
-                    "small_tool_radius",
-                    "刀具半径风险",
-                    "medium",
-                    f"检测到半径约 {radius:.3f} mm 的圆柱/圆角特征，低于刀具半径阈值 {args.min_tool_radius_mm:.3f} mm。",
-                    center,
-                    {"face": face_index, "radius_mm": radius, "threshold_mm": args.min_tool_radius_mm},
-                    args.max_issues_per_code,
-                    refs=[{"kind": "face", "index": face_index}],
-                    view_dir=cylinder_axis,
-                )
-
-        elif surf_type == occ.GeomAbs_Plane:
-            plane = surf.Plane()
-            normal = dir_to_tuple(plane.Axis().Direction())
-            if face.Orientation() == occ.TopAbs_REVERSED:
-                normal = mul(normal, -1.0)
-            point = gp_to_tuple(plane.Location())
-            offset = dot(normal, point)
-            plane_faces.append(PlaneFace(face_index, normal, point, offset, area, face_bbox, center))
-
-            draft_angle = math.degrees(math.asin(min(1.0, abs(dot(normal, pull_dir)))))
-            is_side_face = draft_angle < 45.0
-            if args.min_draft_deg > 0 and is_side_face and area >= args.min_draft_area_mm2:
-                if draft_angle + args.angle_tolerance_deg < args.min_draft_deg:
-                    make_issue(
-                        issues,
-                        counters,
-                        "low_draft",
-                        "拔模角不足",
-                        "medium",
-                        f"平面侧壁相对拔模方向 {pull_dir} 的拔模角约 {draft_angle:.2f}°，低于阈值 {args.min_draft_deg:.2f}°。",
-                        center,
-                        {
-                            "face": face_index,
-                            "draft_angle_deg": draft_angle,
-                            "threshold_deg": args.min_draft_deg,
-                            "area_mm2": area,
-                            "pull_dir": pull_dir,
-                        },
-                        args.max_issues_per_code,
-                        refs=[{"kind": "face", "index": face_index}],
-                        view_dir=normal,
-                    )
-
-    seen_circular_edges: set[tuple[float, float, float, float]] = set()
-    tiny_edge_centers: list[Vec3] = []
-    for edge_index, raw_edge in enumerate(iter_shapes(shape, occ.TopAbs_EDGE, occ), start=1):
-        edge = occ.topods.Edge(raw_edge)
-        try:
-            edge_length, edge_center = edge_props(edge, occ)
-            curve = occ.BRepAdaptor_Curve(edge)
-            curve_type = curve.GetType()
-        except Exception:
-            continue
-
-        if 0.0 < edge_length < args.min_edge_mm:
-            tiny_cluster_distance = max(args.min_edge_mm * 2.0, args.model_tolerance_mm * 10.0)
-            if any(distance(edge_center, existing) <= tiny_cluster_distance for existing in tiny_edge_centers):
-                continue
-            tiny_edge_centers.append(edge_center)
-            make_issue(
-                issues,
-                counters,
-                "tiny_edge",
-                "细碎短边",
-                "low",
-                f"检测到长度约 {edge_length:.4f} mm 的短边，低于阈值 {args.min_edge_mm:.4f} mm，可能是导出碎面或制造微小特征。",
-                edge_center,
-                {"edge": edge_index, "length_mm": edge_length, "threshold_mm": args.min_edge_mm},
-                args.max_issues_per_code,
-                refs=[{"kind": "edge", "index": edge_index}],
-            )
-
-        if curve_type == occ.GeomAbs_Circle:
-            circle = curve.Circle()
-            radius = float(circle.Radius())
-            if radius <= args.model_tolerance_mm:
-                continue
-            circle_center = gp_to_tuple(circle.Location())
-            circle_axis = dir_to_tuple(circle.Axis().Direction())
-            circle_key = (
-                round(circle_center[0], 3),
-                round(circle_center[1], 3),
-                round(circle_center[2], 3),
-                round(radius, 3),
-            )
-            if circle_key in seen_circular_edges:
-                continue
-            seen_circular_edges.add(circle_key)
-            diameter = radius * 2.0
-            if diameter < args.min_hole_diameter_mm:
-                make_issue(
-                    issues,
-                    counters,
-                    "small_circular_edge",
-                    "圆形边/孔径过小",
-                    "medium",
-                    f"检测到直径约 {diameter:.3f} mm 的圆形边，低于阈值 {args.min_hole_diameter_mm:.3f} mm。",
-                    circle_center,
-                    {"edge": edge_index, "diameter_mm": diameter, "threshold_mm": args.min_hole_diameter_mm},
-                    args.max_issues_per_code,
-                    refs=[{"kind": "edge", "index": edge_index}],
-                    view_dir=circle_axis,
-                )
-
-    emit_stage_result(stage_title, issues[stage_issue_start:], shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=bbox)
+    emit_stage_result(
+        stage_title,
+        issues[stage_issue_start:],
+        shape=shape,
+        occ=occ,
+        out_dir=out_dir,
+        args=args,
+        global_bbox=bbox,
+    )
 
     stage_title = "平面台阶与加工间隙"
     emit_stage_start(stage_title)
     stage_issue_start = len(issues)
-    analyze_plane_pairs(shape, occ, plane_faces, issues, counters, args)
-    emit_stage_result(stage_title, issues[stage_issue_start:], shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=bbox)
+    if operation_enabled(args, "measure_planar_spacing"):
+        planar_spacing.run(shape, occ, plane_faces, issues, counters, args)
+    emit_stage_result(
+        stage_title,
+        issues[stage_issue_start:],
+        shape=shape,
+        occ=occ,
+        out_dir=out_dir,
+        args=args,
+        global_bbox=bbox,
+    )
 
     stage_title = "面质量与碎面"
     emit_stage_start(stage_title)
     stage_issue_start = len(issues)
-    stats["face_quality"] = analyze_face_quality(face_infos, issues, counters, args)
-    emit_stage_result(stage_title, issues[stage_issue_start:], shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=bbox)
+    stats["face_quality"] = (
+        face_quality.run(face_infos, issues, counters, args)
+        if operation_enabled(args, "inspect_face_quality")
+        else {"enabled": False, "small_face_count": 0, "sliver_face_count": 0}
+    )
+    emit_stage_result(
+        stage_title,
+        issues[stage_issue_start:],
+        shape=shape,
+        occ=occ,
+        out_dir=out_dir,
+        args=args,
+        global_bbox=bbox,
+    )
 
     stage_title = "孔、圆柱与孔边距"
     emit_stage_start(stage_title)
     stage_issue_start = len(issues)
-    stats["cylindrical_dfm"] = analyze_cylindrical_dfm(shape, occ, face_infos, bbox, issues, counters, args)
-    emit_stage_result(stage_title, issues[stage_issue_start:], shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=bbox)
+    stats["cylindrical_dfm"] = (
+        cylindrical.run(shape, occ, face_infos, bbox, issues, counters, args)
+        if operation_enabled(args, "inspect_cylindrical_features")
+        else {"enabled": False}
+    )
+    emit_stage_result(
+        stage_title,
+        issues[stage_issue_start:],
+        shape=shape,
+        occ=occ,
+        out_dir=out_dir,
+        args=args,
+        global_bbox=bbox,
+    )
 
-    if args.enable_thickness_field:
+    if (
+        operation_enabled(args, "measure_wall_thickness")
+        and args.enable_thickness_field
+    ):
         stage_title = "壁厚场与厚薄突变"
         emit_stage_start(stage_title)
         stage_issue_start = len(issues)
-        stats["thickness_field"] = analyze_thickness_field(shape, occ, issues, counters, args)
-        emit_stage_result(stage_title, issues[stage_issue_start:], shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=bbox)
-    if args.enable_surface_continuity:
+        stats["thickness_field"] = thickness.run(shape, occ, issues, counters, args)
+        emit_stage_result(
+            stage_title,
+            issues[stage_issue_start:],
+            shape=shape,
+            occ=occ,
+            out_dir=out_dir,
+            args=args,
+            global_bbox=bbox,
+        )
+    if (
+        operation_enabled(args, "inspect_surface_continuity")
+        and args.enable_surface_continuity
+    ):
         stage_title = "曲面连续性"
         emit_stage_start(stage_title)
         stage_issue_start = len(issues)
-        stats["surface_continuity"] = analyze_surface_continuity(shape, occ, face_infos, issues, counters, args)
-        emit_stage_result(stage_title, issues[stage_issue_start:], shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=bbox)
-    if args.enable_undercut_slider:
+        stats["surface_continuity"] = continuity.run(
+            shape, occ, face_infos, issues, counters, args
+        )
+        emit_stage_result(
+            stage_title,
+            issues[stage_issue_start:],
+            shape=shape,
+            occ=occ,
+            out_dir=out_dir,
+            args=args,
+            global_bbox=bbox,
+        )
+    if operation_enabled(args, "inspect_undercut") and args.enable_undercut_slider:
         stage_title = "倒扣、拔模与侧抽"
         emit_stage_start(stage_title)
         stage_issue_start = len(issues)
-        stats["undercut_slider"] = analyze_undercut_slider(shape, occ, face_infos, issues, counters, args)
-        emit_stage_result(stage_title, issues[stage_issue_start:], shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=bbox)
-    issues.sort(key=lambda issue: {"high": 0, "medium": 1, "low": 2}.get(issue.severity, 3))
+        stats["undercut_slider"] = undercut.run(
+            shape, occ, face_infos, issues, counters, args
+        )
+        emit_stage_result(
+            stage_title,
+            issues[stage_issue_start:],
+            shape=shape,
+            occ=occ,
+            out_dir=out_dir,
+            args=args,
+            global_bbox=bbox,
+        )
+    issues.sort(
+        key=lambda issue: {"high": 0, "medium": 1, "low": 2}.get(issue.severity, 3)
+    )
     return issues, stats
-
-
-def analyze_plane_pairs(
-    shape: Any,
-    occ: SimpleNamespace,
-    planes: list[PlaneFace],
-    issues: list[Issue],
-    counters: dict[str, int],
-    args: argparse.Namespace,
-) -> None:
-    if not planes:
-        return
-    max_pair_distance = max(args.min_wall_mm, args.max_planar_step_mm, args.min_slot_width_mm, args.max_local_boss_span_mm)
-    if max_pair_distance <= 0:
-        return
-
-    plane_by_index = {plane.face_index: plane for plane in planes}
-    adjacent_by_face: dict[int, set[int]] = {plane.face_index: set() for plane in planes}
-    for first_index, second_index, _edge_index in adjacent_face_pairs(shape, occ, []):
-        adjacent_by_face.setdefault(first_index, set()).add(second_index)
-        adjacent_by_face.setdefault(second_index, set()).add(first_index)
-
-    wall_probe = build_wall_thickness_probe(shape, occ, args) if args.local_boss_thickness_ratio > 0 else None
-
-    for index, first in enumerate(planes):
-        for second in planes[index + 1 :]:
-            parallel_dot = dot(first.normal, second.normal)
-            parallel_limit = math.cos(math.radians(args.parallel_tolerance_deg))
-            if abs(parallel_dot) < parallel_limit:
-                continue
-            same_direction = parallel_dot >= parallel_limit
-            opposite_direction = parallel_dot <= -parallel_limit
-
-            normal = first.normal
-            signed_distance = abs(dot(normal, second.point) - dot(normal, first.point))
-            if signed_distance <= args.model_tolerance_mm:
-                continue
-            if signed_distance > max_pair_distance:
-                continue
-
-            dominant_axis = max(range(3), key=lambda axis: abs(normal[axis]))
-            plane_axes = [axis for axis in range(3) if axis != dominant_axis]
-            if not bbox_overlap_on_axes(first.bbox, second.bbox, plane_axes, args.model_tolerance_mm):
-                continue
-            overlap_lengths = bbox_overlap_lengths_on_axes(first.bbox, second.bbox, plane_axes, args.model_tolerance_mm)
-
-            anchor = mul(add(first.center, second.center), 0.5)
-            pair_metric = {
-                "face_a": first.face_index,
-                "face_b": second.face_index,
-                "distance_mm": signed_distance,
-                "pull_dir": args.pull_dir,
-            }
-            refs = [
-                {"kind": "face", "index": first.face_index},
-                {"kind": "face", "index": second.face_index},
-            ]
-            planar_step_parallel_limit = math.cos(math.radians(args.planar_step_parallel_tolerance_deg))
-            planar_step_candidate = (
-                bool(overlap_lengths)
-                and min(overlap_lengths) >= args.min_planar_step_overlap_mm
-                and parallel_dot >= planar_step_parallel_limit
-            )
-            machining_gap_reported = False
-            if (
-                opposite_direction
-                and args.min_machining_gap_mm > 0
-                and signed_distance < args.min_machining_gap_mm
-                and overlap_lengths
-                and min(overlap_lengths) >= args.min_machining_gap_overlap_mm
-            ):
-                machining_gap_reported = True
-                make_issue(
-                    issues,
-                    counters,
-                    "narrow_machining_gap",
-                    "方孔/加工间隙过小",
-                    "high",
-                    f"两处相对平面净距约 {signed_distance:.3f} mm，低于加工间隙阈值 {args.min_machining_gap_mm:.3f} mm，方孔/窄缝可能无法加工或无法保证强度。",
-                    anchor,
-                    {**pair_metric, "threshold_mm": args.min_machining_gap_mm, "overlap_lengths_mm": overlap_lengths},
-                    args.max_issues_per_code,
-                    refs=refs,
-                    view_dir=normal,
-                )
-
-            if not machining_gap_reported and opposite_direction and 0 < args.min_wall_mm and signed_distance < args.min_wall_mm:
-                make_issue(
-                    issues,
-                    counters,
-                    "thin_wall",
-                    "薄壁风险",
-                    "high",
-                    f"两处相对/平行平面间距约 {signed_distance:.3f} mm，低于壁厚阈值 {args.min_wall_mm:.3f} mm。",
-                    anchor,
-                    {**pair_metric, "threshold_mm": args.min_wall_mm},
-                    args.max_issues_per_code,
-                    refs=refs,
-                    view_dir=normal,
-                )
-            elif not machining_gap_reported and opposite_direction and 0 < args.min_slot_width_mm and signed_distance < args.min_slot_width_mm:
-                make_issue(
-                    issues,
-                    counters,
-                    "narrow_slot",
-                    "窄槽加工风险",
-                    "medium",
-                    f"两处相对/平行平面间距约 {signed_distance:.3f} mm，低于槽宽阈值 {args.min_slot_width_mm:.3f} mm。",
-                    anchor,
-                    {**pair_metric, "threshold_mm": args.min_slot_width_mm},
-                    args.max_issues_per_code,
-                    refs=refs,
-                    view_dir=normal,
-                )
-            elif not machining_gap_reported and same_direction and planar_step_candidate and 0 < args.max_planar_step_mm and signed_distance <= args.max_planar_step_mm:
-                make_issue(
-                    issues,
-                    counters,
-                    "planar_step",
-                    "A面与基准面疑似未对齐",
-                    "medium",
-                    f"检测到相邻/重叠平面存在约 {signed_distance:.3f} mm 的小台阶或错位，需确认 A 面与基板/基准面是否对齐。",
-                    anchor,
-                    {**pair_metric, "threshold_mm": args.max_planar_step_mm},
-                    args.max_issues_per_code,
-                    refs=refs,
-                    view_dir=normal,
-                )
-            elif (
-                opposite_direction
-                and args.local_boss_thickness_ratio > 0
-                and signed_distance <= args.max_local_boss_span_mm
-                and min(first.area, second.area) >= args.min_local_boss_side_area_mm2
-                and overlap_lengths
-                and min(overlap_lengths) >= args.min_local_boss_overlap_mm
-            ):
-                if wall_probe is None:
-                    continue
-                cap_face = local_boss_cap_face(first, second, plane_by_index, adjacent_by_face, pull_dir=args.pull_dir)
-                if cap_face is None or cap_face.normal is None:
-                    continue
-                thickness_hit = thickness_hit_from_surface(
-                    wall_probe["tree"],
-                    cap_face.center,
-                    cap_face.normal,
-                    float(wall_probe["ray_length"]),
-                    float(wall_probe["min_hit_distance"]),
-                )
-                if thickness_hit is None:
-                    continue
-                local_thickness = float(thickness_hit["thickness_mm"])
-                nominal_thickness = float(wall_probe["nominal_thickness_mm"])
-                thickness_ratio = local_thickness / nominal_thickness if nominal_thickness > 1e-9 else float("inf")
-                if thickness_ratio <= args.local_boss_thickness_ratio:
-                    continue
-                boss_refs = [
-                    {"kind": "face", "index": cap_face.face_index},
-                    {"kind": "face", "index": first.face_index},
-                    {"kind": "face", "index": second.face_index},
-                ]
-                make_issue(
-                    issues,
-                    counters,
-                    "local_boss_thick",
-                    "局部凸块/筋位过厚",
-                    "medium",
-                    f"局部凸块沿法向厚度约 {local_thickness:.3f} mm，名义壁厚约 {nominal_thickness:.3f} mm，厚度比约 {thickness_ratio:.2f}，可能造成壁厚差异、缩水或成型风险。",
-                    cap_face.center,
-                    {
-                        "face_a": first.face_index,
-                        "face_b": second.face_index,
-                        "side_span_mm": signed_distance,
-                        "pull_dir": args.pull_dir,
-                        "distance_mm": local_thickness,
-                        "local_thickness_mm": local_thickness,
-                        "nominal_thickness_mm": nominal_thickness,
-                        "thickness_ratio": thickness_ratio,
-                        "threshold_ratio": args.local_boss_thickness_ratio,
-                        "cap_face": cap_face.face_index,
-                        "cap_area_mm2": cap_face.area,
-                        "measurement_start": thickness_hit["start"],
-                        "measurement_end": thickness_hit["end"],
-                        "overlap_lengths_mm": overlap_lengths,
-                        "measurement_dir": thickness_hit["direction"],
-                        "nominal_thickness_p25_mm": wall_probe.get("p25_thickness_mm"),
-                        "nominal_thickness_p75_mm": wall_probe.get("p75_thickness_mm"),
-                        "nominal_sample_count": wall_probe.get("sample_count"),
-                    },
-                    args.max_issues_per_code,
-                    refs=boss_refs,
-                    view_dir=cap_face.normal,
-                )
 
 
 def local_boss_cap_face(
@@ -906,7 +715,9 @@ def local_boss_cap_face(
     adjacent_by_face: dict[int, set[int]],
     pull_dir: Vec3,
 ) -> PlaneFace | None:
-    common = adjacent_by_face.get(first.face_index, set()) & adjacent_by_face.get(second.face_index, set())
+    common = adjacent_by_face.get(first.face_index, set()) & adjacent_by_face.get(
+        second.face_index, set()
+    )
     pull = unit(pull_dir)
     candidates: list[PlaneFace] = []
     for face_index in common:
@@ -915,7 +726,13 @@ def local_boss_cap_face(
             continue
         if abs(dot(face.normal, pull)) < 0.75:
             continue
-        if max(abs(dot(face.normal, first.normal)), abs(dot(face.normal, second.normal))) > 0.35:
+        if (
+            max(
+                abs(dot(face.normal, first.normal)),
+                abs(dot(face.normal, second.normal)),
+            )
+            > 0.35
+        ):
             continue
         candidates.append(face)
     if not candidates:
@@ -923,7 +740,9 @@ def local_boss_cap_face(
     return max(candidates, key=lambda face: face.area)
 
 
-def build_wall_thickness_probe(shape: Any, occ: SimpleNamespace, args: argparse.Namespace) -> dict[str, Any] | None:
+def build_wall_thickness_probe(
+    shape: Any, occ: SimpleNamespace, args: argparse.Namespace
+) -> dict[str, Any] | None:
     try:
         import vtk
 
@@ -937,8 +756,12 @@ def build_wall_thickness_probe(shape: Any, occ: SimpleNamespace, args: argparse.
         ray_length = bounds_diag(bbox) * 2.5
         min_hit_distance = max(args.thickness_min_hit_mm, args.model_tolerance_mm * 5.0)
         values: list[float] = []
-        for center, normal, _area in iter_triangle_samples(polydata, args.thickness_samples):
-            thickness = estimate_thickness_at_point(tree, center, normal, ray_length, min_hit_distance)
+        for center, normal, _area in iter_triangle_samples(
+            polydata, args.thickness_samples
+        ):
+            thickness = estimate_thickness_at_point(
+                tree, center, normal, ray_length, min_hit_distance
+            )
             if thickness is not None and thickness > min_hit_distance:
                 values.append(thickness)
         values.sort()
@@ -968,17 +791,17 @@ def thickness_hit_from_surface(
     normal = unit(normal)
     candidates: list[dict[str, Any]] = []
     for direction in (normal, mul(normal, -1.0)):
-        hit_distance = first_hit_distance_along(tree, point, direction, ray_length, min_hit_distance)
+        hit_distance = first_hit_distance_along(
+            tree, point, direction, ray_length, min_hit_distance
+        )
         if hit_distance is None:
             continue
-        candidates.append(
-            {
-                "thickness_mm": hit_distance,
-                "direction": direction,
-                "start": point,
-                "end": add(point, mul(direction, hit_distance)),
-            }
-        )
+        candidates.append({
+            "thickness_mm": hit_distance,
+            "direction": direction,
+            "start": point,
+            "end": add(point, mul(direction, hit_distance)),
+        })
     if not candidates:
         return None
     return min(candidates, key=lambda item: float(item["thickness_mm"]))
@@ -994,78 +817,24 @@ def face_long_span_and_width(face: FaceInfo) -> tuple[float, float, float]:
     return long_span, inferred_width, aspect
 
 
-def analyze_face_quality(
-    face_infos: list[FaceInfo],
-    issues: list[Issue],
-    counters: dict[str, int],
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    summary: dict[str, Any] = {
-        "enabled": True,
-        "small_face_count": 0,
-        "sliver_face_count": 0,
-    }
-    for face in face_infos:
-        if face.area <= args.model_tolerance_mm * args.model_tolerance_mm:
-            continue
-
-        reported_small = False
-        if args.min_face_area_mm2 > 0 and face.area < args.min_face_area_mm2:
-            summary["small_face_count"] += 1
-            reported_small = True
-            make_issue(
-                issues,
-                counters,
-                "small_face",
-                "碎小面/微小面",
-                "low",
-                f"检测到面积约 {face.area:.4f} mm² 的微小面，低于阈值 {args.min_face_area_mm2:.4f} mm²，可能是导出碎面或不可制造微特征。",
-                face.center,
-                {"face": face.face_index, "area_mm2": face.area, "threshold_mm2": args.min_face_area_mm2},
-                args.max_issues_per_code,
-                refs=[{"kind": "face", "index": face.face_index}],
-                view_dir=face.normal,
-            )
-
-        long_span, width, aspect = face_long_span_and_width(face)
-        if (
-            not reported_small
-            and args.max_sliver_face_width_mm > 0
-            and args.sliver_face_aspect_ratio > 0
-            and long_span >= args.min_sliver_face_length_mm
-            and width < args.max_sliver_face_width_mm
-            and aspect > args.sliver_face_aspect_ratio
-        ):
-            summary["sliver_face_count"] += 1
-            make_issue(
-                issues,
-                counters,
-                "sliver_face",
-                "狭长碎面/窄面",
-                "low",
-                f"检测到狭长面，估算宽度约 {width:.4f} mm、长宽比约 {aspect:.1f}，可能导致加工/网格/模具细节风险。",
-                face.center,
-                {
-                    "face": face.face_index,
-                    "estimated_width_mm": width,
-                    "long_span_mm": long_span,
-                    "aspect_ratio": aspect,
-                    "width_threshold_mm": args.max_sliver_face_width_mm,
-                    "aspect_threshold": args.sliver_face_aspect_ratio,
-                },
-                args.max_issues_per_code,
-                refs=[{"kind": "face", "index": face.face_index}],
-                view_dir=face.normal,
-            )
-    return summary
-
-
 def cylinder_faces(face_infos: list[FaceInfo]) -> list[FaceInfo]:
-    return [face for face in face_infos if face.kind == "cylinder" and face.axis is not None and face.radius is not None and face.radius > 1e-9]
+    return [
+        face
+        for face in face_infos
+        if face.kind == "cylinder"
+        and face.axis is not None
+        and face.radius is not None
+        and face.radius > 1e-9
+    ]
 
 
 def cylinder_gap(first: FaceInfo, second: FaceInfo) -> tuple[float, Vec3] | None:
-    if first.axis is None or second.axis is None or first.radius is None or second.radius is None:
+    if (
+        first.axis is None
+        or second.axis is None
+        or first.radius is None
+        or second.radius is None
+    ):
         return None
     first_axis = unit(first.axis)
     second_axis = unit(second.axis)
@@ -1124,7 +893,9 @@ def edge_is_in_list(edge: Any, edges: list[Any]) -> bool:
     return False
 
 
-def adjacent_face_indices_for_edge(edge: Any, edge_face_map: Any, shape_faces: list[Any], occ: SimpleNamespace) -> list[int]:
+def adjacent_face_indices_for_edge(
+    edge: Any, edge_face_map: Any, shape_faces: list[Any], occ: SimpleNamespace
+) -> list[int]:
     try:
         face_list = edge_face_map.FindFromKey(edge)
     except Exception:
@@ -1149,7 +920,9 @@ def adjacent_face_indices_for_edge(edge: Any, edge_face_map: Any, shape_faces: l
     return sorted(set(indices))
 
 
-def edge_exact_distance(first: Any, second: Any, occ: SimpleNamespace) -> tuple[float, Vec3, Vec3] | None:
+def edge_exact_distance(
+    first: Any, second: Any, occ: SimpleNamespace
+) -> tuple[float, Vec3, Vec3] | None:
     try:
         distance_tool = occ.BRepExtrema_DistShapeShape(first, second)
         distance_tool.Perform()
@@ -1182,7 +955,11 @@ def cylinder_mouth_edge_clearances(
     occ: SimpleNamespace,
     args: argparse.Namespace,
 ) -> list[dict[str, Any]]:
-    if cylinder.radius is None or cylinder.face_index <= 0 or cylinder.face_index > len(shape_faces):
+    if (
+        cylinder.radius is None
+        or cylinder.face_index <= 0
+        or cylinder.face_index > len(shape_faces)
+    ):
         return []
 
     cylinder_face = shape_faces[cylinder.face_index - 1]
@@ -1201,11 +978,15 @@ def cylinder_mouth_edge_clearances(
         if abs(hole_radius - cylinder.radius) > radius_tolerance:
             continue
 
-        adjacent_indices = adjacent_face_indices_for_edge(hole_edge, edge_face_map, shape_faces, occ)
+        adjacent_indices = adjacent_face_indices_for_edge(
+            hole_edge, edge_face_map, shape_faces, occ
+        )
         mouth_face_indices = [
             index
             for index in adjacent_indices
-            if index != cylinder.face_index and info_by_index.get(index) is not None and info_by_index[index].kind == "plane"
+            if index != cylinder.face_index
+            and info_by_index.get(index) is not None
+            and info_by_index[index].kind == "plane"
         ]
         hole_edge_index = shape_to_edge_index(hole_edge, shape_edges)
 
@@ -1240,142 +1021,6 @@ def cylinder_mouth_edge_clearances(
     return results
 
 
-def analyze_cylindrical_dfm(
-    shape: Any,
-    occ: SimpleNamespace,
-    face_infos: list[FaceInfo],
-    global_bbox: BBox,
-    issues: list[Issue],
-    counters: dict[str, int],
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    shape_faces = [occ.topods.Face(raw_face) for raw_face in iter_shapes(shape, occ.TopAbs_FACE, occ)]
-    shape_edges = [occ.topods.Edge(raw_edge) for raw_edge in iter_shapes(shape, occ.TopAbs_EDGE, occ)]
-    edge_face_map = occ.TopTools_IndexedDataMapOfShapeListOfShape()
-    occ.topexp.MapShapesAndAncestors(shape, occ.TopAbs_EDGE, occ.TopAbs_FACE, edge_face_map)
-    info_by_index = face_info_by_index(face_infos)
-    cylinders = cylinder_faces(face_infos)
-    mouth_clearances_by_face = {
-        face.face_index: cylinder_mouth_edge_clearances(face, shape_faces, shape_edges, edge_face_map, info_by_index, occ, args)
-        for face in cylinders
-    }
-    hole_like_cylinders = [face for face in cylinders if mouth_clearances_by_face.get(face.face_index)]
-    summary: dict[str, Any] = {
-        "enabled": True,
-        "cylinder_count": len(cylinders),
-        "hole_like_cylinder_count": len(hole_like_cylinders),
-        "hole_edge_clearance_count": 0,
-        "hole_web_count": 0,
-        "deep_hole_count": 0,
-    }
-
-    for face in hole_like_cylinders:
-        assert face.axis is not None and face.radius is not None
-        diameter = face.radius * 2.0
-
-        if args.min_hole_edge_distance_mm > 0:
-            mouth_clearances = mouth_clearances_by_face.get(face.face_index, [])
-            if mouth_clearances:
-                nearest = min(mouth_clearances, key=lambda item: float(item["clearance_mm"]))
-                clearance = float(nearest["clearance_mm"])
-                if clearance < args.min_hole_edge_distance_mm:
-                    hole_point = tuple(float(value) for value in nearest["hole_point"])
-                    outer_point = tuple(float(value) for value in nearest["outer_point"])
-                    anchor = mul(add(hole_point, outer_point), 0.5)
-                    clearance_direction = unit(sub(outer_point, hole_point), perpendicular_vector(face.axis))
-                    refs = [{"kind": "face", "index": face.face_index}]
-                    if nearest.get("hole_edge") is not None:
-                        refs.append({"kind": "edge", "index": int(nearest["hole_edge"])})
-                    if nearest.get("outer_edge") is not None:
-                        refs.append({"kind": "edge", "index": int(nearest["outer_edge"])})
-                    summary["hole_edge_clearance_count"] += 1
-                    make_issue(
-                        issues,
-                        counters,
-                        "hole_edge_clearance",
-                        "孔到外边距离不足",
-                        "medium" if clearance > args.model_tolerance_mm else "high",
-                        f"圆柱/孔特征到外轮廓最近距离约 {clearance:.3f} mm，低于阈值 {args.min_hole_edge_distance_mm:.3f} mm。",
-                        anchor,
-                        {
-                            "face": face.face_index,
-                            "clearance_mm": clearance,
-                            "threshold_mm": args.min_hole_edge_distance_mm,
-                            "diameter_mm": diameter,
-                            "mouth_face": nearest.get("mouth_face"),
-                            "hole_edge": nearest.get("hole_edge"),
-                            "outer_edge": nearest.get("outer_edge"),
-                            "hole_point": hole_point,
-                            "outer_point": outer_point,
-                            "clearance_direction": clearance_direction,
-                        },
-                        args.max_issues_per_code,
-                        refs=refs,
-                        view_dir=face.axis,
-                    )
-
-        if args.max_hole_depth_ratio > 0 and diameter > args.model_tolerance_mm:
-            depth = bbox_extent_along_dir(face.bbox, face.axis)
-            ratio = depth / diameter
-            diameter_ok = args.deep_hole_max_diameter_mm <= 0 or diameter <= args.deep_hole_max_diameter_mm
-            if diameter_ok and ratio > args.max_hole_depth_ratio:
-                summary["deep_hole_count"] += 1
-                make_issue(
-                    issues,
-                    counters,
-                    "deep_hole_ratio",
-                    "深孔/长细圆柱风险",
-                    "medium",
-                    f"圆柱/孔特征深度约 {depth:.3f} mm、直径约 {diameter:.3f} mm，长径比约 {ratio:.2f}，超过阈值 {args.max_hole_depth_ratio:.2f}。",
-                    face.center,
-                    {
-                        "face": face.face_index,
-                        "depth_mm": depth,
-                        "diameter_mm": diameter,
-                        "depth_diameter_ratio": ratio,
-                        "threshold_ratio": args.max_hole_depth_ratio,
-                        "axis": face.axis,
-                    },
-                    args.max_issues_per_code,
-                    refs=[{"kind": "face", "index": face.face_index}],
-                    view_dir=perpendicular_vector(face.axis),
-                )
-
-    if args.min_hole_web_mm > 0:
-        for first_index, first in enumerate(hole_like_cylinders):
-            for second in hole_like_cylinders[first_index + 1 :]:
-                gap_info = cylinder_gap(first, second)
-                if gap_info is None:
-                    continue
-                gap, direction = gap_info
-                if -args.model_tolerance_mm <= gap < args.min_hole_web_mm:
-                    assert first.radius is not None and second.radius is not None
-                    anchor = add(first.center, mul(direction, first.radius + max(gap, 0.0) / 2.0))
-                    summary["hole_web_count"] += 1
-                    make_issue(
-                        issues,
-                        counters,
-                        "hole_web_thin",
-                        "孔间薄桥/间距不足",
-                        "medium" if gap > args.model_tolerance_mm else "high",
-                        f"相邻圆柱/孔特征之间净距约 {gap:.3f} mm，低于阈值 {args.min_hole_web_mm:.3f} mm。",
-                        anchor,
-                        {
-                            "face_a": first.face_index,
-                            "face_b": second.face_index,
-                            "web_mm": gap,
-                            "threshold_mm": args.min_hole_web_mm,
-                            "radius_a_mm": first.radius,
-                            "radius_b_mm": second.radius,
-                            "direction": direction,
-                        },
-                        args.max_issues_per_code,
-                        refs=[{"kind": "face", "index": first.face_index}, {"kind": "face", "index": second.face_index}],
-                        view_dir=first.axis,
-                    )
-    return summary
-
-
 def safe_acos_deg(value: float) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, value))))
 
@@ -1386,7 +1031,10 @@ def vtk_intersections(tree: Any, start: Vec3, end: Vec3) -> list[Vec3]:
     points = vtk.vtkPoints()
     ids = vtk.vtkIdList()
     tree.IntersectWithLine(start, end, points, ids)
-    return [tuple(float(v) for v in points.GetPoint(index)) for index in range(points.GetNumberOfPoints())]
+    return [
+        tuple(float(v) for v in points.GetPoint(index))
+        for index in range(points.GetNumberOfPoints())
+    ]
 
 
 def estimate_thickness_at_point(
@@ -1410,7 +1058,9 @@ def estimate_thickness_at_point(
     return min(hits)
 
 
-def iter_triangle_samples(polydata: Any, max_samples: int) -> Iterable[tuple[Vec3, Vec3, float]]:
+def iter_triangle_samples(
+    polydata: Any, max_samples: int
+) -> Iterable[tuple[Vec3, Vec3, float]]:
     cell_count = polydata.GetNumberOfCells()
     if cell_count <= 0:
         return
@@ -1419,7 +1069,10 @@ def iter_triangle_samples(polydata: Any, max_samples: int) -> Iterable[tuple[Vec
         cell = polydata.GetCell(cell_id)
         if cell is None or cell.GetNumberOfPoints() < 3:
             continue
-        points = [tuple(float(v) for v in polydata.GetPoint(cell.GetPointId(i))) for i in range(3)]
+        points = [
+            tuple(float(v) for v in polydata.GetPoint(cell.GetPointId(i)))
+            for i in range(3)
+        ]
         edge_a = sub(points[1], points[0])
         edge_b = sub(points[2], points[0])
         normal = unit(cross(edge_a, edge_b))
@@ -1430,151 +1083,18 @@ def iter_triangle_samples(polydata: Any, max_samples: int) -> Iterable[tuple[Vec
         yield center, normal, area
 
 
-def spatially_distinct_samples(samples: list[dict[str, Any]], min_distance_mm: float) -> list[dict[str, Any]]:
+def spatially_distinct_samples(
+    samples: list[dict[str, Any]], min_distance_mm: float
+) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     for sample in samples:
         point = sample["point"]
-        if all(distance(point, existing["point"]) >= min_distance_mm for existing in selected):
+        if all(
+            distance(point, existing["point"]) >= min_distance_mm
+            for existing in selected
+        ):
             selected.append(sample)
     return selected
-
-
-def analyze_thickness_field(
-    shape: Any,
-    occ: SimpleNamespace,
-    issues: list[Issue],
-    counters: dict[str, int],
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    import vtk
-
-    polydata = triangulate_shape(shape, occ, args.thickness_mesh_deflection_mm)
-    summary: dict[str, Any] = {
-        "enabled": True,
-        "sample_count": 0,
-        "valid_sample_count": 0,
-        "min_thickness_mm": None,
-        "max_thickness_mm": None,
-        "avg_thickness_mm": None,
-    }
-    if polydata.GetNumberOfCells() <= 0:
-        summary["warning"] = "No mesh cells available for thickness sampling."
-        return summary
-
-    tree = vtk.vtkOBBTree()
-    tree.SetDataSet(polydata)
-    tree.BuildLocator()
-
-    bbox = shape_bbox(shape, occ)
-    ray_length = bounds_diag(bbox) * 2.5
-    min_hit_distance = max(args.thickness_min_hit_mm, args.model_tolerance_mm * 5.0)
-    samples: list[dict[str, Any]] = []
-    for center, normal, area in iter_triangle_samples(polydata, args.thickness_samples):
-        summary["sample_count"] += 1
-        thickness = estimate_thickness_at_point(tree, center, normal, ray_length, min_hit_distance)
-        if thickness is None or not math.isfinite(thickness):
-            continue
-        samples.append({"point": center, "normal": normal, "thickness_mm": thickness, "area_mm2": area})
-
-    summary["valid_sample_count"] = len(samples)
-    if not samples:
-        summary["warning"] = "No valid ray intersections found for thickness sampling."
-        return summary
-
-    samples.sort(key=lambda item: item["thickness_mm"])
-    thickness_values = [float(item["thickness_mm"]) for item in samples]
-    min_sample = samples[0]
-    max_sample = samples[-1]
-    summary.update(
-        {
-            "min_thickness_mm": min(thickness_values),
-            "max_thickness_mm": max(thickness_values),
-            "avg_thickness_mm": sum(thickness_values) / len(thickness_values),
-            "min_point": min_sample["point"],
-            "max_point": max_sample["point"],
-        }
-    )
-
-    thin_samples = [sample for sample in samples if sample["thickness_mm"] < args.min_wall_mm]
-    cluster_distance = args.thickness_issue_cluster_mm
-    if cluster_distance <= 0:
-        cluster_distance = max(args.min_wall_mm * 3.0, 2.0)
-    selected_thin_samples = spatially_distinct_samples(thin_samples, cluster_distance)
-    summary["thin_wall_candidate_count"] = len(thin_samples)
-    summary["thin_wall_report_count"] = len(selected_thin_samples)
-    summary["thin_wall_cluster_mm"] = cluster_distance
-    for sample in selected_thin_samples:
-        thickness = float(sample["thickness_mm"])
-        make_issue(
-            issues,
-            counters,
-            "thin_wall_field",
-            "厚度场薄壁风险",
-            "high",
-            f"厚度场采样检测到局部厚度约 {thickness:.3f} mm，低于壁厚阈值 {args.min_wall_mm:.3f} mm。",
-            sample["point"],
-            {"thickness_mm": thickness, "threshold_mm": args.min_wall_mm, "normal": sample["normal"]},
-            args.max_issues_per_code,
-            view_dir=sample["normal"],
-        )
-
-    if args.max_wall_mm > 0:
-        thick_samples = [sample for sample in reversed(samples) if sample["thickness_mm"] > args.max_wall_mm]
-        for sample in thick_samples:
-            thickness = float(sample["thickness_mm"])
-            make_issue(
-                issues,
-                counters,
-                "thick_section",
-                "厚壁/缩水风险",
-                "medium",
-                f"厚度场采样检测到局部厚度约 {thickness:.3f} mm，高于厚壁阈值 {args.max_wall_mm:.3f} mm。",
-                sample["point"],
-                {"thickness_mm": thickness, "threshold_mm": args.max_wall_mm, "normal": sample["normal"]},
-                args.max_issues_per_code,
-                view_dir=sample["normal"],
-            )
-
-    if (
-        args.thickness_variation_ratio > 0
-        and summary["min_thickness_mm"]
-        and summary["max_thickness_mm"]
-        and summary["min_thickness_mm"] > args.model_tolerance_mm
-    ):
-        ratio = summary["max_thickness_mm"] / summary["min_thickness_mm"]
-        summary["variation_ratio"] = ratio
-        nominal_limit = max(args.thickness_variation_nominal_max_mm, args.min_wall_mm * 3.0)
-        nominal_wall_seen = args.thickness_variation_nominal_max_mm <= 0 or summary["min_thickness_mm"] <= nominal_limit
-        summary["variation_nominal_limit_mm"] = nominal_limit
-        if ratio > args.thickness_variation_ratio and nominal_wall_seen and (not selected_thin_samples or args.report_thickness_variation_with_thin_wall):
-            make_issue(
-                issues,
-                counters,
-                "thickness_variation",
-                "壁厚变化过大",
-                "medium",
-                f"厚度场最大/最小厚度比约 {ratio:.2f}，超过阈值 {args.thickness_variation_ratio:.2f}。",
-                min_sample["point"],
-                {
-                    "min_thickness_mm": summary["min_thickness_mm"],
-                    "max_thickness_mm": summary["max_thickness_mm"],
-                    "ratio": ratio,
-                    "threshold_ratio": args.thickness_variation_ratio,
-                    "normal": min_sample["normal"],
-                },
-                args.max_issues_per_code,
-                view_dir=min_sample["normal"],
-            )
-        elif ratio > args.thickness_variation_ratio:
-            if selected_thin_samples and not args.report_thickness_variation_with_thin_wall:
-                summary["variation_suppressed_reason"] = "Thin-wall evidence already reports the controlling minimum-thickness region."
-            else:
-                summary["variation_suppressed_reason"] = (
-                    "Minimum sampled thickness is above the nominal-wall guard; "
-                    "use --thickness-variation-nominal-max-mm 0 or set --max-wall-mm for thick-section review."
-                )
-
-    return summary
 
 
 def shape_to_face_index(face_shape: Any, shape_faces: list[Any]) -> int | None:
@@ -1587,10 +1107,17 @@ def shape_to_face_index(face_shape: Any, shape_faces: list[Any]) -> int | None:
     return None
 
 
-def adjacent_face_pairs(shape: Any, occ: SimpleNamespace, face_infos: list[FaceInfo]) -> list[tuple[int, int, int]]:
-    shape_faces = [occ.topods.Face(raw_face) for raw_face in iter_shapes(shape, occ.TopAbs_FACE, occ)]
+def adjacent_face_pairs(
+    shape: Any, occ: SimpleNamespace, face_infos: list[FaceInfo]
+) -> list[tuple[int, int, int]]:
+    shape_faces = [
+        occ.topods.Face(raw_face)
+        for raw_face in iter_shapes(shape, occ.TopAbs_FACE, occ)
+    ]
     edge_face_map = occ.TopTools_IndexedDataMapOfShapeListOfShape()
-    occ.topexp.MapShapesAndAncestors(shape, occ.TopAbs_EDGE, occ.TopAbs_FACE, edge_face_map)
+    occ.topexp.MapShapesAndAncestors(
+        shape, occ.TopAbs_EDGE, occ.TopAbs_FACE, edge_face_map
+    )
     pairs: set[tuple[int, int, int]] = set()
     for edge_map_index in range(1, edge_face_map.Size() + 1):
         face_list = edge_face_map.FindFromIndex(edge_map_index)
@@ -1632,112 +1159,6 @@ def continuity_pair_is_relevant(
     return True, None
 
 
-def analyze_surface_continuity(
-    shape: Any,
-    occ: SimpleNamespace,
-    face_infos: list[FaceInfo],
-    issues: list[Issue],
-    counters: dict[str, int],
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    info_by_index = face_info_by_index(face_infos)
-    pairs = adjacent_face_pairs(shape, occ, face_infos)
-    summary: dict[str, Any] = {
-        "enabled": True,
-        "adjacent_pair_count": len(pairs),
-        "skipped_plane_plane_pair_count": 0,
-        "skipped_plane_cylinder_pair_count": 0,
-        "skipped_plane_other_pair_count": 0,
-        "skipped_cylinder_other_pair_count": 0,
-        "skipped_hard_edge_pair_count": 0,
-        "g1_break_count": 0,
-        "g2_jump_count": 0,
-    }
-
-    for first_index, second_index, edge_index in pairs:
-        first = info_by_index.get(first_index)
-        second = info_by_index.get(second_index)
-        if first is None or second is None or first.normal is None or second.normal is None:
-            continue
-        relevant, skipped_reason = continuity_pair_is_relevant(
-            first,
-            second,
-            args.continuity_include_plane_plane,
-            args.continuity_include_plane_cylinder,
-            args.continuity_include_plane_other,
-            args.continuity_include_cylinder_other,
-        )
-        if not relevant:
-            if skipped_reason == "plane_cylinder":
-                summary["skipped_plane_cylinder_pair_count"] += 1
-            elif skipped_reason == "plane_other":
-                summary["skipped_plane_other_pair_count"] += 1
-            elif skipped_reason == "cylinder_other":
-                summary["skipped_cylinder_other_pair_count"] += 1
-            else:
-                summary["skipped_plane_plane_pair_count"] += 1
-            continue
-
-        angle = safe_acos_deg(dot(first.normal, second.normal))
-        if angle > 90.0:
-            angle = 180.0 - angle
-        if angle > args.continuity_max_smooth_break_angle_deg and not args.continuity_include_hard_edges:
-            summary["skipped_hard_edge_pair_count"] += 1
-            continue
-        anchor = mul(add(first.center, second.center), 0.5)
-        refs = [{"kind": "face", "index": first.face_index}, {"kind": "face", "index": second.face_index}]
-        view = unit(add(first.normal, second.normal), first.normal)
-
-        if angle > args.continuity_g1_angle_deg:
-            summary["g1_break_count"] += 1
-            make_issue(
-                issues,
-                counters,
-                "surface_g1_break",
-                "曲面/面片切向不连续",
-                "medium" if angle > args.continuity_g1_high_angle_deg else "low",
-                f"相邻面法向夹角约 {angle:.2f}°，超过 G1 连续性阈值 {args.continuity_g1_angle_deg:.2f}°。",
-                anchor,
-                {
-                    "face_a": first.face_index,
-                    "face_b": second.face_index,
-                    "shared_edge_map_index": edge_index,
-                    "normal_angle_deg": angle,
-                    "threshold_deg": args.continuity_g1_angle_deg,
-                },
-                args.max_issues_per_code,
-                refs=refs,
-                view_dir=view,
-            )
-            continue
-
-        if first.curvature is not None and second.curvature is not None:
-            curvature_jump = abs(first.curvature - second.curvature)
-            if curvature_jump > args.continuity_g2_curvature_jump:
-                summary["g2_jump_count"] += 1
-                make_issue(
-                    issues,
-                    counters,
-                    "surface_g2_jump",
-                    "曲率连续性突变",
-                    "low",
-                    f"相邻面曲率代理差约 {curvature_jump:.4f}，超过 G2 曲率跳变阈值 {args.continuity_g2_curvature_jump:.4f}。",
-                    anchor,
-                    {
-                        "face_a": first.face_index,
-                        "face_b": second.face_index,
-                        "shared_edge_map_index": edge_index,
-                        "curvature_jump": curvature_jump,
-                        "threshold": args.continuity_g2_curvature_jump,
-                    },
-                    args.max_issues_per_code,
-                    refs=refs,
-                    view_dir=view,
-                )
-
-    return summary
-
-
 def first_hit_distance_along(
     tree: Any,
     point: Vec3,
@@ -1763,9 +1184,13 @@ def choose_release_direction_by_visibility(
     ray_length: float,
     min_hit_distance: float,
 ) -> tuple[Vec3, float | None, float | None]:
-    positive = first_hit_distance_along(tree, point, pull_dir, ray_length, min_hit_distance)
+    positive = first_hit_distance_along(
+        tree, point, pull_dir, ray_length, min_hit_distance
+    )
     negative_dir = mul(pull_dir, -1.0)
-    negative = first_hit_distance_along(tree, point, negative_dir, ray_length, min_hit_distance)
+    negative = first_hit_distance_along(
+        tree, point, negative_dir, ray_length, min_hit_distance
+    )
     positive_score = positive if positive is not None else float("inf")
     negative_score = negative if negative is not None else float("inf")
     if negative_score > positive_score:
@@ -1773,7 +1198,9 @@ def choose_release_direction_by_visibility(
     return pull_dir, positive, negative
 
 
-def is_pocket_cap_face(face: FaceInfo, adjacent: FaceInfo, pull_dir: Vec3, args: argparse.Namespace) -> bool:
+def is_pocket_cap_face(
+    face: FaceInfo, adjacent: FaceInfo, pull_dir: Vec3, args: argparse.Namespace
+) -> bool:
     if face.normal is None or adjacent.normal is None:
         return False
     cap_alignment = abs(dot(face.normal, pull_dir))
@@ -1783,7 +1210,9 @@ def is_pocket_cap_face(face: FaceInfo, adjacent: FaceInfo, pull_dir: Vec3, args:
     if wall_alignment > math.cos(math.radians(25.0)):
         return False
     into_cap_normal = dot(face.normal, sub(adjacent.center, face.center))
-    return into_cap_normal > max(args.model_tolerance_mm * 5.0, bbox_extent_along_dir(face.bbox, pull_dir) * 0.1)
+    return into_cap_normal > max(
+        args.model_tolerance_mm * 5.0, bbox_extent_along_dir(face.bbox, pull_dir) * 0.1
+    )
 
 
 def face_boundary_metrics(face_shape: Any, occ: SimpleNamespace) -> dict[str, Any]:
@@ -1853,21 +1282,21 @@ def analyze_hole_pocket_draft(
         ray_length,
         min_hit_distance,
     )
-    reverse_threshold = -math.sin(math.radians(max(args.undercut_negative_draft_deg, args.angle_tolerance_deg)))
+    reverse_threshold = -math.sin(
+        math.radians(max(args.undercut_negative_draft_deg, args.angle_tolerance_deg))
+    )
     wall_checks: list[dict[str, Any]] = []
     for wall in pocket_walls:
         assert wall.normal is not None
         projection = dot(wall.normal, release_dir)
         signed_draft = math.degrees(math.asin(max(-1.0, min(1.0, projection))))
         if projection < reverse_threshold:
-            wall_checks.append(
-                {
-                    "face": wall.face_index,
-                    "wall_projection": projection,
-                    "reverse_draft_deg": abs(signed_draft),
-                    "wall_kind": wall.kind,
-                }
-            )
+            wall_checks.append({
+                "face": wall.face_index,
+                "wall_projection": projection,
+                "reverse_draft_deg": abs(signed_draft),
+                "wall_kind": wall.kind,
+            })
 
     return {
         "release_dir": release_dir,
@@ -1877,177 +1306,6 @@ def analyze_hole_pocket_draft(
         "pocket_wall_faces": [wall.face_index for wall in pocket_walls],
         "bad_walls": wall_checks,
     }
-
-
-def analyze_undercut_slider(
-    shape: Any,
-    occ: SimpleNamespace,
-    face_infos: list[FaceInfo],
-    issues: list[Issue],
-    counters: dict[str, int],
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    import vtk
-
-    pull_dir = unit(args.pull_dir)
-    summary: dict[str, Any] = {
-        "enabled": True,
-        "negative_draft_face_count": 0,
-        "side_action_candidate_count": 0,
-        "hole_draft_undercut_count": 0,
-        "hole_draft_pocket_candidate_count": 0,
-        "hole_draft_neutral_or_ok_count": 0,
-        "pull_dir": pull_dir,
-    }
-    negative_threshold = -math.sin(math.radians(args.undercut_negative_draft_deg))
-    info_by_index = face_info_by_index(face_infos)
-    adjacent_by_face: dict[int, set[int]] = {face.face_index: set() for face in face_infos}
-    for first_index, second_index, _edge_index in adjacent_face_pairs(shape, occ, face_infos):
-        adjacent_by_face.setdefault(first_index, set()).add(second_index)
-        adjacent_by_face.setdefault(second_index, set()).add(first_index)
-
-    bbox = shape_bbox(shape, occ)
-    ray_length = bounds_diag(bbox) * 2.5
-    min_hit_distance = max(args.model_tolerance_mm * 8.0, bounds_diag(bbox) * 0.0005)
-    polydata = triangulate_shape(shape, occ, args.mesh_deflection_mm)
-    tree = vtk.vtkOBBTree()
-    tree.SetDataSet(polydata)
-    tree.BuildLocator()
-    shape_faces = [occ.topods.Face(raw_face) for raw_face in iter_shapes(shape, occ.TopAbs_FACE, occ)]
-    boundary_metrics_by_face = {
-        index: face_boundary_metrics(face_shape, occ)
-        for index, face_shape in enumerate(shape_faces, start=1)
-    }
-    hole_undercut_wall_faces: set[int] = set()
-
-    for face in face_infos:
-        if face.normal is None:
-            continue
-        pull_projection = dot(face.normal, pull_dir)
-        signed_angle = math.degrees(math.asin(max(-1.0, min(1.0, pull_projection))))
-        adjacent_infos = [info_by_index[index] for index in adjacent_by_face.get(face.face_index, set()) if index in info_by_index]
-        pocket = analyze_hole_pocket_draft(
-            face,
-            adjacent_infos,
-            boundary_metrics_by_face.get(face.face_index),
-            pull_dir,
-            tree,
-            ray_length,
-            min_hit_distance,
-            args,
-        )
-        if pocket is not None:
-            summary["hole_draft_pocket_candidate_count"] += 1
-            bad_walls = pocket["bad_walls"]
-            if not bad_walls:
-                summary["hole_draft_neutral_or_ok_count"] += 1
-                continue
-
-            worst_wall = min(bad_walls, key=lambda item: float(item["wall_projection"]))
-            release_dir = tuple(float(value) for value in pocket["release_dir"])
-            hole_undercut_wall_faces.update(int(item["face"]) for item in bad_walls)
-            summary["hole_draft_undercut_count"] += 1
-            make_issue(
-                issues,
-                counters,
-                "hole_draft_undercut",
-                "孔拔模后倒扣风险",
-                "high",
-                f"孔/凹位底面 {face.face_index} 沿可释放方向 {format_vec(release_dir)} 检查时，邻接孔壁存在约 {float(worst_wall['reverse_draft_deg']):.2f}° 的反向拔模，形成倒扣风险。",
-                face.center,
-                {
-                    "face": face.face_index,
-                    "release_dir": release_dir,
-                    "pull_dir": pull_dir,
-                    "cap_pull_projection": pull_projection,
-                    "opening_first_hit_mm": pocket["opening_first_hit_mm"],
-                    "opposite_first_hit_mm": pocket["opposite_first_hit_mm"],
-                    "cap_boundary": pocket["cap_boundary"],
-                    "pocket_wall_faces": pocket["pocket_wall_faces"],
-                    "bad_wall_faces": [item["face"] for item in bad_walls],
-                    "wall_draft_checks": bad_walls,
-                    "worst_reverse_draft_deg": worst_wall["reverse_draft_deg"],
-                },
-                args.max_issues_per_code,
-                refs=[{"kind": "face", "index": face.face_index}]
-                + [{"kind": "face", "index": int(item["face"])} for item in bad_walls[:2]],
-                view_dir=release_dir,
-            )
-            continue
-
-        if (
-            face.kind == "cylinder"
-            and face.axis is not None
-            and face.area >= args.undercut_min_area_mm2
-            and is_hole_like_cylinder(face, args.max_side_action_diameter_mm)
-        ):
-            axis_pull_alignment = abs(dot(unit(face.axis), pull_dir))
-            side_action_surface = abs(pull_projection) <= args.side_action_surface_pull_abs_dot_max
-            if axis_pull_alignment < args.side_core_axis_pull_abs_dot_max and side_action_surface:
-                slider_dir = unit(face.axis)
-                anchor = cylinder_axis_center(face)
-                summary["side_action_candidate_count"] += 1
-                make_issue(
-                    issues,
-                    counters,
-                    "side_action_cylinder",
-                    "侧向抽芯/滑块候选",
-                    "medium",
-                    f"圆柱特征轴线与主拔模方向近似垂直，轴线夹角指标 {axis_pull_alignment:.3f}，可能需要侧向抽芯或滑块方向确认。",
-                    anchor,
-                    {
-                        "face": face.face_index,
-                        "radius_mm": face.radius,
-                        "axis_pull_alignment": axis_pull_alignment,
-                        "pull_dir": pull_dir,
-                        "candidate_slider_dir": slider_dir,
-                    },
-                    args.max_issues_per_code,
-                    refs=[{"kind": "face", "index": face.face_index}],
-                    view_dir=slider_dir,
-                )
-                continue
-
-        release_dir, release_hit, opposite_hit = choose_release_direction_by_visibility(
-            tree,
-            face.center,
-            pull_dir,
-            ray_length,
-            min_hit_distance,
-        )
-        if face.face_index in hole_undercut_wall_faces:
-            continue
-        release_projection = dot(face.normal, release_dir)
-        release_signed_angle = math.degrees(math.asin(max(-1.0, min(1.0, release_projection))))
-        side_face = abs(release_projection) < args.undercut_side_face_abs_dot_max
-        if side_face and release_projection < negative_threshold and face.area >= args.undercut_min_area_mm2 and face.kind != "cylinder":
-            slider_dir = unit(sub(face.normal, mul(release_dir, dot(face.normal, release_dir))), face.normal)
-            summary["negative_draft_face_count"] += 1
-            make_issue(
-                issues,
-                counters,
-                "undercut_negative_draft",
-                "倒扣/负拔模风险",
-                "high",
-                f"面 {face.face_index} 按局部可释放方向 {format_vec(release_dir)} 检查时存在约 {release_signed_angle:.2f}° 的负拔模趋势，可能需要改拔模或侧向机构。",
-                face.center,
-                {
-                    "face": face.face_index,
-                    "signed_draft_deg": release_signed_angle,
-                    "pull_projection": pull_projection,
-                    "release_projection": release_projection,
-                    "pull_dir": pull_dir,
-                    "release_dir": release_dir,
-                    "release_first_hit_mm": release_hit,
-                    "opposite_first_hit_mm": opposite_hit,
-                    "candidate_slider_dir": slider_dir,
-                },
-                args.max_issues_per_code,
-                refs=[{"kind": "face", "index": face.face_index}],
-                view_dir=slider_dir,
-            )
-
-    return summary
 
 
 def triangulate_shape(shape: Any, occ: SimpleNamespace, deflection: float) -> Any:
@@ -2143,7 +1401,9 @@ def render_with_vtk(
     )
     camera = renderer.GetActiveCamera()
     camera.SetFocalPoint(*center)
-    camera.SetPosition(center[0] + diag * 0.95, center[1] - diag * 1.25, center[2] + diag * 0.75)
+    camera.SetPosition(
+        center[0] + diag * 0.95, center[1] - diag * 1.25, center[2] + diag * 0.75
+    )
     camera.SetViewUp(0.0, 0.0, 1.0)
     renderer.ResetCamera()
     camera.Zoom(1.2)
@@ -2154,17 +1414,31 @@ def render_with_vtk(
     screen_annotations: dict[str, ScreenAnnotation] = {}
     for issue in issues:
         ref_shapes = ref_shapes_for_issue(shape, occ, issue)
-        ref_bounds = [(ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes]
+        ref_bounds = [
+            (ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes
+        ]
         annotation_point = issue_annotation_world_point(shape, occ, issue, ref_shapes)
         local_bbox = union_bounds([bbox for _ref, bbox in ref_bounds]) or global_bbox
         target = annotation_point or issue.anchor or bbox_center(local_bbox)
-        evidence_bbox = issue_evidence_bbox(issue, ref_bounds, global_diag, target, max(bounds_diag(local_bbox), global_diag * 0.035))
+        evidence_bbox = issue_evidence_bbox(
+            issue,
+            ref_bounds,
+            global_diag,
+            target,
+            max(bounds_diag(local_bbox), global_diag * 0.035),
+        )
         if target is None and evidence_bbox is None:
             continue
         fallback_world = target or bbox_center(evidence_bbox)  # type: ignore[arg-type]
         fallback_point = project_world_point(renderer, width, height, fallback_world)
-        target_rect = projected_bbox_rect(renderer, width, height, evidence_bbox) if evidence_bbox is not None else None
-        annotation = build_screen_annotation(issue, fallback_point, width, height, target_rect)
+        target_rect = (
+            projected_bbox_rect(renderer, width, height, evidence_bbox)
+            if evidence_bbox is not None
+            else None
+        )
+        annotation = build_screen_annotation(
+            issue, fallback_point, width, height, target_rect
+        )
         screen_annotations[issue.id] = annotation
         store_render_check(issue, "overview", annotation)
 
@@ -2188,11 +1462,15 @@ def get_ref_shape(shape: Any, occ: SimpleNamespace, ref: dict[str, int]) -> Any 
         return None
 
     if kind == "face":
-        for current_index, raw_face in enumerate(iter_shapes(shape, occ.TopAbs_FACE, occ), start=1):
+        for current_index, raw_face in enumerate(
+            iter_shapes(shape, occ.TopAbs_FACE, occ), start=1
+        ):
             if current_index == index:
                 return occ.topods.Face(raw_face)
     elif kind == "edge":
-        for current_index, raw_edge in enumerate(iter_shapes(shape, occ.TopAbs_EDGE, occ), start=1):
+        for current_index, raw_edge in enumerate(
+            iter_shapes(shape, occ.TopAbs_EDGE, occ), start=1
+        ):
             if current_index == index:
                 return occ.topods.Edge(raw_edge)
     return None
@@ -2230,7 +1508,9 @@ def marker_radius_for_issue(issue: Issue, global_diag: float) -> float:
     if issue.code in {"small_face", "sliver_face"}:
         return max(global_diag * 0.003, 0.05)
     if issue.code == "side_action_cylinder" and "radius_mm" in issue.metric:
-        return max(min(float(issue.metric["radius_mm"]) * 0.45, global_diag * 0.006), 0.15)
+        return max(
+            min(float(issue.metric["radius_mm"]) * 0.45, global_diag * 0.006), 0.15
+        )
     return max(global_diag * 0.012, 0.8)
 
 
@@ -2238,7 +1518,9 @@ def show_3d_marker_for_issue(issue: Issue) -> bool:
     return False
 
 
-def make_poly_actor(polydata: Any, color: tuple[float, float, float], opacity: float, edge: bool) -> Any | None:
+def make_poly_actor(
+    polydata: Any, color: tuple[float, float, float], opacity: float, edge: bool
+) -> Any | None:
     if polydata.GetNumberOfPoints() == 0:
         return None
 
@@ -2335,7 +1617,9 @@ def write_vtk_png(render_window: Any, path: Path) -> None:
     writer.Write()
 
 
-def project_world_point(renderer: Any, width: int, height: int, point: Vec3) -> tuple[int, int]:
+def project_world_point(
+    renderer: Any, width: int, height: int, point: Vec3
+) -> tuple[int, int]:
     import vtk
 
     coordinate = vtk.vtkCoordinate()
@@ -2363,8 +1647,12 @@ def projected_bbox_rect_with(projector: Any, bbox: BBox) -> ScreenBBox:
     return (int(min_x), int(min_y), int(max_x), int(max_y))
 
 
-def projected_bbox_rect(renderer: Any, width: int, height: int, bbox: BBox) -> ScreenBBox:
-    return projected_bbox_rect_with(lambda point: project_world_point(renderer, width, height, point), bbox)
+def projected_bbox_rect(
+    renderer: Any, width: int, height: int, bbox: BBox
+) -> ScreenBBox:
+    return projected_bbox_rect_with(
+        lambda point: project_world_point(renderer, width, height, point), bbox
+    )
 
 
 def projected_bbox_radius(renderer: Any, width: int, height: int, bbox: BBox) -> int:
@@ -2376,20 +1664,30 @@ def screen_bbox_center(rect: ScreenBBox) -> tuple[int, int]:
     return ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
 
 
-def point_inside_screen_bbox(point: tuple[int, int], rect: ScreenBBox, padding: float = 0.0) -> bool:
+def point_inside_screen_bbox(
+    point: tuple[int, int], rect: ScreenBBox, padding: float = 0.0
+) -> bool:
     return (
         rect[0] - padding <= point[0] <= rect[2] + padding
         and rect[1] - padding <= point[1] <= rect[3] + padding
     )
 
 
-def annotation_radius_for_issue(issue: Issue, rect: ScreenBBox | None, default: int = 42) -> int:
+def annotation_radius_for_issue(
+    issue: Issue, rect: ScreenBBox | None, default: int = 42
+) -> int:
     if rect is None:
         return default
     span = max(rect[2] - rect[0], rect[3] - rect[1])
     if issue.code == "hole_draft_undercut":
         return max(34, min(72, int(span / 2.0) + 22))
-    if issue.code in {"narrow_machining_gap", "thin_wall", "narrow_slot", "planar_step", "local_boss_thick"}:
+    if issue.code in {
+        "narrow_machining_gap",
+        "thin_wall",
+        "narrow_slot",
+        "planar_step",
+        "local_boss_thick",
+    }:
         return max(36, min(78, int(span / 2.0) + 10))
     if issue.code in {
         "small_cylindrical_feature",
@@ -2405,8 +1703,13 @@ def annotation_radius_for_issue(issue: Issue, rect: ScreenBBox | None, default: 
     return max(34, min(100, int(span / 2.0) + 14))
 
 
-def clamp_screen_point(point: tuple[int, int], width: int, height: int, margin: int = 20) -> tuple[int, int]:
-    return (clamp(point[0], margin, width - margin), clamp(point[1], margin, height - margin))
+def clamp_screen_point(
+    point: tuple[int, int], width: int, height: int, margin: int = 20
+) -> tuple[int, int]:
+    return (
+        clamp(point[0], margin, width - margin),
+        clamp(point[1], margin, height - margin),
+    )
 
 
 def build_screen_annotation(
@@ -2427,7 +1730,9 @@ def build_screen_annotation(
     clamped = clamp_screen_point(point, width, height)
     if clamped != point:
         adjusted = True
-    return ScreenAnnotation(point=clamped, radius=radius, target_bbox=target_rect, adjusted=adjusted)
+    return ScreenAnnotation(
+        point=clamped, radius=radius, target_bbox=target_rect, adjusted=adjusted
+    )
 
 
 def metric_vec3(value: Any) -> Vec3 | None:
@@ -2455,7 +1760,9 @@ def points_bbox(points: list[Vec3], margin: float = 0.0) -> BBox | None:
     )
 
 
-def issue_metric_points(issue: Issue, target: Vec3 | None, local_diag: float) -> list[Vec3]:
+def issue_metric_points(
+    issue: Issue, target: Vec3 | None, local_diag: float
+) -> list[Vec3]:
     points: list[Vec3] = []
     for key in (
         "measurement_start",
@@ -2470,19 +1777,40 @@ def issue_metric_points(issue: Issue, target: Vec3 | None, local_diag: float) ->
         if point is not None:
             points.append(point)
 
-    if target is not None and issue.code in {"thin_wall_field", "thick_section"} and "thickness_mm" in issue.metric:
-        normal = metric_vec3(issue.metric.get("normal")) or unit(issue.view_dir or (1.0, 0.0, 0.0))
+    if (
+        target is not None
+        and issue.code in {"thin_wall_field", "thick_section"}
+        and "thickness_mm" in issue.metric
+    ):
+        normal = metric_vec3(issue.metric.get("normal")) or unit(
+            issue.view_dir or (1.0, 0.0, 0.0)
+        )
         thickness = max(float(issue.metric.get("thickness_mm", 0.0)), 0.0)
         half = max(thickness / 2.0, local_diag * 0.015)
         points.extend([sub(target, mul(normal, half)), add(target, mul(normal, half))])
 
-    if target is not None and issue.code == "hole_web_thin" and "web_mm" in issue.metric:
-        direction = metric_vec3(issue.metric.get("direction")) or unit(issue.view_dir or (1.0, 0.0, 0.0))
+    if (
+        target is not None
+        and issue.code == "hole_web_thin"
+        and "web_mm" in issue.metric
+    ):
+        direction = metric_vec3(issue.metric.get("direction")) or unit(
+            issue.view_dir or (1.0, 0.0, 0.0)
+        )
         half = max(float(issue.metric.get("web_mm", 0.0)) / 2.0, local_diag * 0.02)
-        points.extend([sub(target, mul(direction, half)), add(target, mul(direction, half))])
+        points.extend([
+            sub(target, mul(direction, half)),
+            add(target, mul(direction, half)),
+        ])
 
-    if target is not None and issue.code == "deep_hole_ratio" and "depth_mm" in issue.metric:
-        axis = metric_vec3(issue.metric.get("axis")) or unit(issue.view_dir or (0.0, 0.0, 1.0))
+    if (
+        target is not None
+        and issue.code == "deep_hole_ratio"
+        and "depth_mm" in issue.metric
+    ):
+        axis = metric_vec3(issue.metric.get("axis")) or unit(
+            issue.view_dir or (0.0, 0.0, 1.0)
+        )
         half = max(float(issue.metric.get("depth_mm", 0.0)) / 2.0, local_diag * 0.03)
         points.extend([sub(target, mul(axis, half)), add(target, mul(axis, half))])
 
@@ -2512,7 +1840,9 @@ def issue_evidence_bbox(
     if preferred is not None:
         return preferred
     if issue.anchor is not None:
-        return expand_bbox_around(issue.anchor, marker_radius_for_issue(issue, global_diag))
+        return expand_bbox_around(
+            issue.anchor, marker_radius_for_issue(issue, global_diag)
+        )
     return union_bounds([bbox for _ref, bbox in ref_bounds])
 
 
@@ -2565,7 +1895,12 @@ def issue_candidate_view_dirs(issue: Issue) -> list[Vec3]:
                 unique.append(candidate)
         return unique
 
-    if issue.code in {"narrow_machining_gap", "undercut_negative_draft", "side_action_cylinder", "hole_draft_undercut"}:
+    if issue.code in {
+        "narrow_machining_gap",
+        "undercut_negative_draft",
+        "side_action_cylinder",
+        "hole_draft_undercut",
+    }:
         if issue.code == "undercut_negative_draft" and "release_dir" in issue.metric:
             pull = unit(tuple(float(value) for value in issue.metric["release_dir"]))
         else:
@@ -2608,12 +1943,18 @@ def issue_candidate_view_dirs(issue: Issue) -> list[Vec3]:
 def oblique_view_dir(front_dir: Vec3) -> Vec3:
     tangent = perpendicular_vector(front_dir)
     bitangent = unit(cross(front_dir, tangent), (0.0, 0.0, 1.0))
-    return unit(add(add(mul(front_dir, 0.82), mul(tangent, 0.38)), mul(bitangent, 0.28)))
+    return unit(
+        add(add(mul(front_dir, 0.82), mul(tangent, 0.38)), mul(bitangent, 0.28))
+    )
 
 
 def section_plane_normal(issue: Issue, camera_dir: Vec3) -> Vec3:
     base = unit(issue.view_dir or camera_dir)
-    if issue.code in {"small_cylindrical_feature", "small_tool_radius", "small_circular_edge"}:
+    if issue.code in {
+        "small_cylindrical_feature",
+        "small_tool_radius",
+        "small_circular_edge",
+    }:
         return perpendicular_vector(base)
     if issue.code in {
         "small_face",
@@ -2639,11 +1980,15 @@ def section_plane_normal(issue: Issue, camera_dir: Vec3) -> Vec3:
     return camera_dir
 
 
-def clipping_plane_for_issue(issue: Issue, camera_dir: Vec3, target: Vec3) -> tuple[Vec3, Vec3]:
+def clipping_plane_for_issue(
+    issue: Issue, camera_dir: Vec3, target: Vec3
+) -> tuple[Vec3, Vec3]:
     return target, section_plane_normal(issue, camera_dir)
 
 
-def ref_shapes_for_issue(shape: Any, occ: SimpleNamespace, issue: Issue) -> list[tuple[dict[str, int], Any]]:
+def ref_shapes_for_issue(
+    shape: Any, occ: SimpleNamespace, issue: Issue
+) -> list[tuple[dict[str, int], Any]]:
     refs = []
     for ref in issue.refs:
         ref_shape = get_ref_shape(shape, occ, ref)
@@ -2652,14 +1997,18 @@ def ref_shapes_for_issue(shape: Any, occ: SimpleNamespace, issue: Issue) -> list
     return refs
 
 
-def ref_centers(ref_shapes: list[tuple[dict[str, int], Any]], occ: SimpleNamespace) -> list[Vec3]:
+def ref_centers(
+    ref_shapes: list[tuple[dict[str, int], Any]], occ: SimpleNamespace
+) -> list[Vec3]:
     centers = []
     for _ref, ref_shape in ref_shapes:
         centers.append(bbox_center(shape_bbox(ref_shape, occ)))
     return centers
 
 
-def ref_bounds_for_issue(shape: Any, occ: SimpleNamespace, issue: Issue) -> list[tuple[dict[str, int], BBox]]:
+def ref_bounds_for_issue(
+    shape: Any, occ: SimpleNamespace, issue: Issue
+) -> list[tuple[dict[str, int], BBox]]:
     bounds = []
     for ref in issue.refs:
         ref_shape = get_ref_shape(shape, occ, ref)
@@ -2668,7 +2017,9 @@ def ref_bounds_for_issue(shape: Any, occ: SimpleNamespace, issue: Issue) -> list
     return bounds
 
 
-def preferred_annotation_bbox(issue: Issue, ref_bounds: list[tuple[dict[str, int], BBox]]) -> BBox | None:
+def preferred_annotation_bbox(
+    issue: Issue, ref_bounds: list[tuple[dict[str, int], BBox]]
+) -> BBox | None:
     if not ref_bounds:
         return None
     if issue.code == "local_boss_thick" and "cap_face" in issue.metric:
@@ -2676,7 +2027,12 @@ def preferred_annotation_bbox(issue: Issue, ref_bounds: list[tuple[dict[str, int
         for ref, bbox in ref_bounds:
             if ref.get("kind") == "face" and int(ref.get("index", 0)) == cap_face:
                 return bbox
-    if issue.code in {"narrow_machining_gap", "thin_wall", "narrow_slot", "planar_step"}:
+    if issue.code in {
+        "narrow_machining_gap",
+        "thin_wall",
+        "narrow_slot",
+        "planar_step",
+    }:
         return min((bbox for _ref, bbox in ref_bounds), key=bounds_diag)
     return union_bounds([bbox for _ref, bbox in ref_bounds])
 
@@ -2687,14 +2043,20 @@ def issue_annotation_world_point(
     issue: Issue,
     ref_shapes: list[tuple[dict[str, int], Any]] | None = None,
 ) -> Vec3 | None:
-    if issue.code == "hole_edge_clearance" and "hole_point" in issue.metric and "outer_point" in issue.metric:
+    if (
+        issue.code == "hole_edge_clearance"
+        and "hole_point" in issue.metric
+        and "outer_point" in issue.metric
+    ):
         hole_point = tuple(float(value) for value in issue.metric["hole_point"])
         outer_point = tuple(float(value) for value in issue.metric["outer_point"])
         return mul(add(hole_point, outer_point), 0.5)
 
     ref_bounds: list[tuple[dict[str, int], BBox]] = []
     if ref_shapes is not None:
-        ref_bounds = [(ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes]
+        ref_bounds = [
+            (ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes
+        ]
     elif issue.refs:
         ref_bounds = ref_bounds_for_issue(shape, occ, issue)
     annotation_bbox = preferred_annotation_bbox(issue, ref_bounds)
@@ -2731,7 +2093,10 @@ def ensure_min_screen_span(
     cy = (start[1] + end[1]) / 2.0
     half_dx = dx * scale / 2.0
     half_dy = dy * scale / 2.0
-    return (int(cx - half_dx), int(cy - half_dy)), (int(cx + half_dx), int(cy + half_dy))
+    return (int(cx - half_dx), int(cy - half_dy)), (
+        int(cx + half_dx),
+        int(cy + half_dy),
+    )
 
 
 def limit_screen_span(
@@ -2749,7 +2114,10 @@ def limit_screen_span(
     cy = (start[1] + end[1]) / 2.0
     half_dx = dx * scale / 2.0
     half_dy = dy * scale / 2.0
-    return (int(cx - half_dx), int(cy - half_dy)), (int(cx + half_dx), int(cy + half_dy))
+    return (int(cx - half_dx), int(cy - half_dy)), (
+        int(cx + half_dx),
+        int(cy + half_dy),
+    )
 
 
 def build_issue_overlays(
@@ -2764,12 +2132,26 @@ def build_issue_overlays(
     overlays: list[dict[str, Any]] = []
     red_text_offset = (18, -52)
 
-    if issue.code in {"thin_wall", "planar_step", "narrow_slot", "local_boss_thick", "narrow_machining_gap"} and "distance_mm" in issue.metric:
-        measurement_dir = issue.metric.get("measurement_dir", issue.view_dir or (1.0, 0.0, 0.0))
+    if (
+        issue.code
+        in {
+            "thin_wall",
+            "planar_step",
+            "narrow_slot",
+            "local_boss_thick",
+            "narrow_machining_gap",
+        }
+        and "distance_mm" in issue.metric
+    ):
+        measurement_dir = issue.metric.get(
+            "measurement_dir", issue.view_dir or (1.0, 0.0, 0.0)
+        )
         normal = unit(tuple(float(value) for value in measurement_dir))
         distance_mm = float(issue.metric["distance_mm"])
         if "measurement_start" in issue.metric and "measurement_end" in issue.metric:
-            start_world = tuple(float(value) for value in issue.metric["measurement_start"])
+            start_world = tuple(
+                float(value) for value in issue.metric["measurement_start"]
+            )
             end_world = tuple(float(value) for value in issue.metric["measurement_end"])
         else:
             half = max(distance_mm / 2.0, local_diag * 0.015)
@@ -2793,8 +2175,13 @@ def build_issue_overlays(
             label = f"错位 {distance_mm:.3f} mm"
         overlays.append({"kind": "measure", "start": start, "end": end, "text": label})
 
-    if issue.code in {"thin_wall_field", "thick_section"} and "thickness_mm" in issue.metric:
-        normal = unit(tuple(issue.metric.get("normal", issue.view_dir or (1.0, 0.0, 0.0))))
+    if (
+        issue.code in {"thin_wall_field", "thick_section"}
+        and "thickness_mm" in issue.metric
+    ):
+        normal = unit(
+            tuple(issue.metric.get("normal", issue.view_dir or (1.0, 0.0, 0.0)))
+        )
         thickness = float(issue.metric["thickness_mm"])
         half = max(thickness / 2.0, local_diag * 0.015)
         start_world = sub(target, mul(normal, half))
@@ -2802,19 +2189,42 @@ def build_issue_overlays(
         start = project_world_point(renderer, width, height, start_world)
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end)
-        overlays.append({"kind": "measure", "start": start, "end": end, "text": f"厚度 {thickness:.3f} mm"})
+        overlays.append({
+            "kind": "measure",
+            "start": start,
+            "end": end,
+            "text": f"厚度 {thickness:.3f} mm",
+        })
 
     if issue.code == "thickness_variation" and "ratio" in issue.metric:
         text = f"厚度比 {float(issue.metric['ratio']):.2f}"
-        overlays.append({"kind": "line", "start": (24, 86), "end": (220, 86), "text": text, "label_at": (235, 68)})
+        overlays.append({
+            "kind": "line",
+            "start": (24, 86),
+            "end": (220, 86),
+            "text": text,
+            "label_at": (235, 68),
+        })
 
     if issue.code == "small_face" and "area_mm2" in issue.metric:
         text = f"面积 {float(issue.metric['area_mm2']):.4f} mm²"
-        overlays.append({"kind": "line", "start": (24, 86), "end": (220, 86), "text": text, "label_at": (235, 68)})
+        overlays.append({
+            "kind": "line",
+            "start": (24, 86),
+            "end": (220, 86),
+            "text": text,
+            "label_at": (235, 68),
+        })
 
     if issue.code == "sliver_face" and "estimated_width_mm" in issue.metric:
         text = f"窄面宽 {float(issue.metric['estimated_width_mm']):.4f} mm"
-        overlays.append({"kind": "line", "start": (24, 86), "end": (220, 86), "text": text, "label_at": (235, 68)})
+        overlays.append({
+            "kind": "line",
+            "start": (24, 86),
+            "end": (220, 86),
+            "text": text,
+            "label_at": (235, 68),
+        })
 
     if issue.code == "hole_edge_clearance" and "clearance_mm" in issue.metric:
         clearance = max(float(issue.metric["clearance_mm"]), 0.0)
@@ -2825,17 +2235,30 @@ def build_issue_overlays(
             axis_index = int(issue.metric.get("clearance_axis", 0))
             sign = float(issue.metric.get("clearance_sign", 1.0))
             direction = principal_axis(axis_index, sign)
-            radius = max(float(issue.metric.get("diameter_mm", 0.0)) / 2.0, local_diag * 0.015)
+            radius = max(
+                float(issue.metric.get("diameter_mm", 0.0)) / 2.0, local_diag * 0.015
+            )
             start_world = add(target, mul(direction, radius))
-            end_world = add(start_world, mul(direction, max(clearance, local_diag * 0.035)))
+            end_world = add(
+                start_world, mul(direction, max(clearance, local_diag * 0.035))
+            )
         start = project_world_point(renderer, width, height, start_world)
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end)
-        overlays.append({"kind": "measure", "start": start, "end": end, "text": f"边距 {clearance:.3f} mm"})
+        overlays.append({
+            "kind": "measure",
+            "start": start,
+            "end": end,
+            "text": f"边距 {clearance:.3f} mm",
+        })
 
     if issue.code == "hole_web_thin" and "web_mm" in issue.metric:
         direction_raw = issue.metric.get("direction", issue.view_dir or (1.0, 0.0, 0.0))
-        direction = unit((float(direction_raw[0]), float(direction_raw[1]), float(direction_raw[2])))
+        direction = unit((
+            float(direction_raw[0]),
+            float(direction_raw[1]),
+            float(direction_raw[2]),
+        ))
         web = max(float(issue.metric["web_mm"]), 0.0)
         half = max(web / 2.0, local_diag * 0.02)
         start_world = sub(target, mul(direction, half))
@@ -2843,7 +2266,12 @@ def build_issue_overlays(
         start = project_world_point(renderer, width, height, start_world)
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end)
-        overlays.append({"kind": "measure", "start": start, "end": end, "text": f"孔间净距 {web:.3f} mm"})
+        overlays.append({
+            "kind": "measure",
+            "start": start,
+            "end": end,
+            "text": f"孔间净距 {web:.3f} mm",
+        })
 
     if issue.code == "deep_hole_ratio" and "depth_mm" in issue.metric:
         axis_raw = issue.metric.get("axis", issue.view_dir or (0.0, 0.0, 1.0))
@@ -2856,7 +2284,12 @@ def build_issue_overlays(
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end)
         ratio = float(issue.metric.get("depth_diameter_ratio", 0.0))
-        overlays.append({"kind": "measure", "start": start, "end": end, "text": f"深度 {depth:.3f} mm / L/D {ratio:.2f}"})
+        overlays.append({
+            "kind": "measure",
+            "start": start,
+            "end": end,
+            "text": f"深度 {depth:.3f} mm / L/D {ratio:.2f}",
+        })
 
     if issue.code == "low_draft":
         pull_dir = tuple(issue.metric.get("pull_dir", (0.0, 0.0, 1.0)))
@@ -2869,20 +2302,27 @@ def build_issue_overlays(
         start, end = ensure_min_screen_span(start, end)
         angle = float(issue.metric.get("draft_angle_deg", 0.0))
         threshold = float(issue.metric.get("threshold_deg", 0.0))
-        label_at = (min(width - 260, max(10, end[0] + red_text_offset[0])), min(height - 45, max(60, end[1] + red_text_offset[1])))
-        overlays.append(
-            {
-                "kind": "arrow",
-                "start": start,
-                "end": end,
-                "text": f"拔模方向 角度 {angle:.2f}° < {threshold:.2f}°",
-                "label_at": label_at,
-            }
+        label_at = (
+            min(width - 260, max(10, end[0] + red_text_offset[0])),
+            min(height - 45, max(60, end[1] + red_text_offset[1])),
         )
+        overlays.append({
+            "kind": "arrow",
+            "start": start,
+            "end": end,
+            "text": f"拔模方向 角度 {angle:.2f}° < {threshold:.2f}°",
+            "label_at": label_at,
+        })
 
     if issue.code in {"undercut_negative_draft", "side_action_cylinder"}:
-        slider_dir_raw = issue.metric.get("candidate_slider_dir", issue.view_dir or (1.0, 0.0, 0.0))
-        slider_dir = unit((float(slider_dir_raw[0]), float(slider_dir_raw[1]), float(slider_dir_raw[2])))
+        slider_dir_raw = issue.metric.get(
+            "candidate_slider_dir", issue.view_dir or (1.0, 0.0, 0.0)
+        )
+        slider_dir = unit((
+            float(slider_dir_raw[0]),
+            float(slider_dir_raw[1]),
+            float(slider_dir_raw[2]),
+        ))
         span = max(local_diag * 0.60, 30.0)
         start_world = sub(target, mul(slider_dir, span * 0.35))
         end_world = add(target, mul(slider_dir, span * 0.35))
@@ -2890,20 +2330,27 @@ def build_issue_overlays(
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end)
         start, end = limit_screen_span(start, end, 240)
-        label_at = (min(width - 260, max(10, end[0] + 18)), min(height - 45, max(60, end[1] - 52)))
-        overlays.append(
-            {
-                "kind": "arrow",
-                "start": start,
-                "end": end,
-                "text": "候选滑块/抽芯方向",
-                "label_at": label_at,
-            }
+        label_at = (
+            min(width - 260, max(10, end[0] + 18)),
+            min(height - 45, max(60, end[1] - 52)),
         )
+        overlays.append({
+            "kind": "arrow",
+            "start": start,
+            "end": end,
+            "text": "候选滑块/抽芯方向",
+            "label_at": label_at,
+        })
 
     if issue.code in {"undercut_negative_draft", "hole_draft_undercut"}:
-        direction_raw = issue.metric.get("release_dir", issue.metric.get("pull_dir", (0.0, 0.0, 1.0)))
-        pull_dir = unit((float(direction_raw[0]), float(direction_raw[1]), float(direction_raw[2])))
+        direction_raw = issue.metric.get(
+            "release_dir", issue.metric.get("pull_dir", (0.0, 0.0, 1.0))
+        )
+        pull_dir = unit((
+            float(direction_raw[0]),
+            float(direction_raw[1]),
+            float(direction_raw[2]),
+        ))
         span = max(local_diag * 0.55, 30.0)
         start_world = sub(target, mul(pull_dir, span * 0.35))
         end_world = add(target, mul(pull_dir, span * 0.35))
@@ -2911,27 +2358,46 @@ def build_issue_overlays(
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end)
         start, end = limit_screen_span(start, end, 240)
-        signed_angle = float(issue.metric.get("worst_reverse_draft_deg" if issue.code == "hole_draft_undercut" else "signed_draft_deg", 0.0))
-        direction_label = "可释放方向" if "release_dir" in issue.metric else "主拔模方向"
-        label_at = (min(width - 260, max(10, end[0] + 18)), min(height - 45, max(60, end[1] + 18)))
-        overlays.append(
-            {
-                "kind": "arrow",
-                "start": start,
-                "end": end,
-                "text": f"{direction_label} 反向拔模 {signed_angle:.2f}°",
-                "label_at": label_at,
-            }
+        signed_angle = float(
+            issue.metric.get(
+                "worst_reverse_draft_deg"
+                if issue.code == "hole_draft_undercut"
+                else "signed_draft_deg",
+                0.0,
+            )
         )
+        direction_label = (
+            "可释放方向" if "release_dir" in issue.metric else "主拔模方向"
+        )
+        label_at = (
+            min(width - 260, max(10, end[0] + 18)),
+            min(height - 45, max(60, end[1] + 18)),
+        )
+        overlays.append({
+            "kind": "arrow",
+            "start": start,
+            "end": end,
+            "text": f"{direction_label} 反向拔模 {signed_angle:.2f}°",
+            "label_at": label_at,
+        })
 
     if issue.code in {"surface_g1_break", "surface_g2_jump"}:
         if "normal_angle_deg" in issue.metric:
             text = f"G1 夹角 {float(issue.metric['normal_angle_deg']):.2f}°"
         else:
             text = f"G2 曲率跳变 {float(issue.metric.get('curvature_jump', 0.0)):.4f}"
-        overlays.append({"kind": "line", "start": (24, 86), "end": (220, 86), "text": text, "label_at": (235, 68)})
+        overlays.append({
+            "kind": "line",
+            "start": (24, 86),
+            "end": (220, 86),
+            "text": text,
+            "label_at": (235, 68),
+        })
 
-    if issue.code in {"small_cylindrical_feature", "small_circular_edge"} and "diameter_mm" in issue.metric:
+    if (
+        issue.code in {"small_cylindrical_feature", "small_circular_edge"}
+        and "diameter_mm" in issue.metric
+    ):
         diameter = float(issue.metric["diameter_mm"])
         tangent = perpendicular_vector(issue.view_dir or (0.0, 0.0, 1.0))
         start_world = sub(target, mul(tangent, diameter / 2.0))
@@ -2939,7 +2405,12 @@ def build_issue_overlays(
         start = project_world_point(renderer, width, height, start_world)
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end)
-        overlays.append({"kind": "measure", "start": start, "end": end, "text": f"直径 {diameter:.3f} mm"})
+        overlays.append({
+            "kind": "measure",
+            "start": start,
+            "end": end,
+            "text": f"直径 {diameter:.3f} mm",
+        })
 
     if issue.code == "small_tool_radius" and "radius_mm" in issue.metric:
         radius = float(issue.metric["radius_mm"])
@@ -2949,18 +2420,21 @@ def build_issue_overlays(
         start = project_world_point(renderer, width, height, start_world)
         end = project_world_point(renderer, width, height, end_world)
         start, end = ensure_min_screen_span(start, end, min_span=70)
-        overlays.append({"kind": "measure", "start": start, "end": end, "text": f"半径 {radius:.3f} mm"})
+        overlays.append({
+            "kind": "measure",
+            "start": start,
+            "end": end,
+            "text": f"半径 {radius:.3f} mm",
+        })
 
     if mode == "section":
-        overlays.append(
-            {
-                "kind": "line",
-                "start": (24, height - 40),
-                "end": (220, height - 40),
-                "text": "局部剖视",
-                "label_at": (235, height - 58),
-            }
-        )
+        overlays.append({
+            "kind": "line",
+            "start": (24, height - 40),
+            "end": (220, height - 40),
+            "text": "局部剖视",
+            "label_at": (235, height - 58),
+        })
     return overlays
 
 
@@ -3049,7 +2523,12 @@ def render_single_issue_view(
 
     for ref, ref_shape in ref_shapes:
         if ref.get("kind") == "face":
-            actor = make_poly_actor(triangulate_shape(ref_shape, occ, max(deflection * 0.35, 0.05)), (1.0, 0.03, 0.02), 0.96, edge=True)
+            actor = make_poly_actor(
+                triangulate_shape(ref_shape, occ, max(deflection * 0.35, 0.05)),
+                (1.0, 0.03, 0.02),
+                0.96,
+                edge=True,
+            )
         elif ref.get("kind") == "edge":
             actor = make_edge_tube_actor(ref_shape, occ, tube_radius)
         else:
@@ -3057,7 +2536,11 @@ def render_single_issue_view(
         if actor is not None:
             highlight_actors.append(actor)
 
-    if issue.anchor is not None and issue.code not in {"small_face", "sliver_face"} and show_3d_marker_for_issue(issue):
+    if (
+        issue.anchor is not None
+        and issue.code not in {"small_face", "sliver_face"}
+        and show_3d_marker_for_issue(issue)
+    ):
         marker_radius = marker_radius_for_issue(issue, global_diag)
         marker_actor = make_marker_actor(issue.anchor, marker_radius)
         highlight_actors.append(marker_actor)
@@ -3091,20 +2574,32 @@ def render_single_issue_view(
     render_window.Render()
 
     ref_bounds = [(ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes]
-    evidence_bbox = issue_evidence_bbox(issue, ref_bounds, global_diag, target, local_diag)
+    evidence_bbox = issue_evidence_bbox(
+        issue, ref_bounds, global_diag, target, local_diag
+    )
     fallback_world = annotation_point or target
     fallback_point = project_world_point(renderer, width, height, fallback_world)
-    target_rect = projected_bbox_rect(renderer, width, height, evidence_bbox) if evidence_bbox is not None else None
-    annotation = build_screen_annotation(issue, fallback_point, width, height, target_rect)
+    target_rect = (
+        projected_bbox_rect(renderer, width, height, evidence_bbox)
+        if evidence_bbox is not None
+        else None
+    )
+    annotation = build_screen_annotation(
+        issue, fallback_point, width, height, target_rect
+    )
     store_render_check(issue, mode, annotation)
 
-    overlays = build_issue_overlays(issue, renderer, width, height, target, local_diag, mode)
+    overlays = build_issue_overlays(
+        issue, renderer, width, height, target, local_diag, mode
+    )
     stem = issue_file_stem(issue)
     raw_path = out_dir / f".{stem}_{mode}_raw.png"
     write_vtk_png(render_window, raw_path)
     final_name = f"{stem}_{mode}.png"
     final_path = out_dir / final_name
-    title_suffix = {"front": "正视", "oblique": "斜视", "section": "剖视"}.get(mode, mode)
+    title_suffix = {"front": "正视", "oblique": "斜视", "section": "剖视"}.get(
+        mode, mode
+    )
     annotate_png(
         raw_path,
         final_path,
@@ -3132,34 +2627,43 @@ def render_issue_with_vtk(
     annotation_point = issue_annotation_world_point(shape, occ, issue, ref_shapes)
     if issue.anchor is not None and issue.code not in {"small_face", "sliver_face"}:
         marker_radius = marker_radius_for_issue(issue, global_diag)
-        ref_bounds.append(
-            (
-                issue.anchor[0] - marker_radius,
-                issue.anchor[1] - marker_radius,
-                issue.anchor[2] - marker_radius,
-                issue.anchor[0] + marker_radius,
-                issue.anchor[1] + marker_radius,
-                issue.anchor[2] + marker_radius,
-            )
-        )
-    if annotation_point is not None and issue.code in {"narrow_machining_gap", "thin_wall", "narrow_slot", "planar_step", "local_boss_thick"}:
+        ref_bounds.append((
+            issue.anchor[0] - marker_radius,
+            issue.anchor[1] - marker_radius,
+            issue.anchor[2] - marker_radius,
+            issue.anchor[0] + marker_radius,
+            issue.anchor[1] + marker_radius,
+            issue.anchor[2] + marker_radius,
+        ))
+    if annotation_point is not None and issue.code in {
+        "narrow_machining_gap",
+        "thin_wall",
+        "narrow_slot",
+        "planar_step",
+        "local_boss_thick",
+    }:
         marker_radius = marker_radius_for_issue(issue, global_diag)
-        ref_bounds.append(
-            (
-                annotation_point[0] - marker_radius,
-                annotation_point[1] - marker_radius,
-                annotation_point[2] - marker_radius,
-                annotation_point[0] + marker_radius,
-                annotation_point[1] + marker_radius,
-                annotation_point[2] + marker_radius,
-            )
-        )
+        ref_bounds.append((
+            annotation_point[0] - marker_radius,
+            annotation_point[1] - marker_radius,
+            annotation_point[2] - marker_radius,
+            annotation_point[0] + marker_radius,
+            annotation_point[1] + marker_radius,
+            annotation_point[2] + marker_radius,
+        ))
     local_bbox = union_bounds(ref_bounds) or global_bbox
     target = annotation_point or issue.anchor or bbox_center(local_bbox)
     if issue.code == "hole_draft_undercut" and issue.anchor is not None:
-        diameter = float(issue.metric.get("diameter_mm") or issue.metric.get("estimated_diameter_mm") or 0.0)
+        diameter = float(
+            issue.metric.get("diameter_mm")
+            or issue.metric.get("estimated_diameter_mm")
+            or 0.0
+        )
         context_margin = max(diameter * 7.0, global_diag * 0.07)
-        local_bbox = union_bounds([local_bbox, expand_bbox_around(issue.anchor, context_margin)]) or local_bbox
+        local_bbox = (
+            union_bounds([local_bbox, expand_bbox_around(issue.anchor, context_margin)])
+            or local_bbox
+        )
 
     front_dir = choose_unobstructed_view_dir(issue, global_bbox, target)
     oblique_dir = oblique_view_dir(front_dir)
@@ -3216,13 +2720,18 @@ def render_issue_with_vtk(
                 )
             )
         except Exception as exc:
-            print(f"[warn] targeted {mode} render failed for {issue.id}: {exc}", file=sys.stderr)
+            print(
+                f"[warn] targeted {mode} render failed for {issue.id}: {exc}",
+                file=sys.stderr,
+            )
     if not images:
         raise RuntimeError(f"all targeted renders failed for {issue.id}")
     return images
 
 
-def sample_edge_points(edge: Any, occ: SimpleNamespace, samples: int = 24) -> list[Vec3]:
+def sample_edge_points(
+    edge: Any, occ: SimpleNamespace, samples: int = 24
+) -> list[Vec3]:
     curve = occ.BRepAdaptor_Curve(edge)
     first = float(curve.FirstParameter())
     last = float(curve.LastParameter())
@@ -3287,11 +2796,17 @@ def render_projection_pil(
     min_y = min(point[1] for point in projected)
     max_y = max(point[1] for point in projected)
     pad = 50
-    scale = min((width - pad * 2) / max(max_x - min_x, 1e-9), (height - pad * 2) / max(max_y - min_y, 1e-9))
+    scale = min(
+        (width - pad * 2) / max(max_x - min_x, 1e-9),
+        (height - pad * 2) / max(max_y - min_y, 1e-9),
+    )
 
     def to_screen(point: Vec3) -> tuple[int, int]:
         x, y = project_point(point, right, up)
-        return (int((x - min_x) * scale + pad), int(height - ((y - min_y) * scale + pad)))
+        return (
+            int((x - min_x) * scale + pad),
+            int(height - ((y - min_y) * scale + pad)),
+        )
 
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
@@ -3308,14 +2823,28 @@ def render_projection_pil(
     screen_annotations: dict[str, ScreenAnnotation] = {}
     for issue in issues:
         ref_shapes = ref_shapes_for_issue(shape, occ, issue)
-        ref_bounds = [(ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes]
+        ref_bounds = [
+            (ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes
+        ]
         annotation_point = issue_annotation_world_point(shape, occ, issue, ref_shapes)
         local_bbox = union_bounds([bbox for _ref, bbox in ref_bounds]) or global_bbox
         target = annotation_point or issue.anchor or bbox_center(local_bbox)
-        evidence_bbox = issue_evidence_bbox(issue, ref_bounds, global_diag, target, max(bounds_diag(local_bbox), global_diag * 0.035))
+        evidence_bbox = issue_evidence_bbox(
+            issue,
+            ref_bounds,
+            global_diag,
+            target,
+            max(bounds_diag(local_bbox), global_diag * 0.035),
+        )
         fallback_point = to_screen(target)
-        target_rect = projected_bbox_rect_with(to_screen, evidence_bbox) if evidence_bbox is not None else None
-        annotation = build_screen_annotation(issue, fallback_point, width, height, target_rect)
+        target_rect = (
+            projected_bbox_rect_with(to_screen, evidence_bbox)
+            if evidence_bbox is not None
+            else None
+        )
+        annotation = build_screen_annotation(
+            issue, fallback_point, width, height, target_rect
+        )
         screen_annotations[issue.id] = annotation
         store_render_check(issue, "overview", annotation)
     return screen_annotations
@@ -3350,21 +2879,37 @@ def clamp(value: int, lower: int, upper: int) -> int:
     return max(lower, min(upper, value))
 
 
-def draw_arrow(draw: Any, start: tuple[int, int], end: tuple[int, int], fill: tuple[int, int, int], width: int) -> None:
+def draw_arrow(
+    draw: Any,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    fill: tuple[int, int, int],
+    width: int,
+) -> None:
     draw.line([start, end], fill=fill, width=width)
     angle = math.atan2(end[1] - start[1], end[0] - start[0])
     size = 14
-    left = (end[0] - size * math.cos(angle - math.pi / 6), end[1] - size * math.sin(angle - math.pi / 6))
-    right = (end[0] - size * math.cos(angle + math.pi / 6), end[1] - size * math.sin(angle + math.pi / 6))
+    left = (
+        end[0] - size * math.cos(angle - math.pi / 6),
+        end[1] - size * math.sin(angle - math.pi / 6),
+    )
+    right = (
+        end[0] - size * math.cos(angle + math.pi / 6),
+        end[1] - size * math.sin(angle + math.pi / 6),
+    )
     draw.polygon([end, left, right], fill=fill)
 
 
-def draw_text_box(draw: Any, xy: tuple[int, int], text: str, font: Any, color: tuple[int, int, int]) -> None:
+def draw_text_box(
+    draw: Any, xy: tuple[int, int], text: str, font: Any, color: tuple[int, int, int]
+) -> None:
     bbox = draw.textbbox((0, 0), text, font=font)
     width = bbox[2] - bbox[0] + 18
     height = bbox[3] - bbox[1] + 12
     x, y = xy
-    draw.rectangle([x, y, x + width, y + height], fill=(255, 255, 255), outline=color, width=2)
+    draw.rectangle(
+        [x, y, x + width, y + height], fill=(255, 255, 255), outline=color, width=2
+    )
     draw.text((x + 9, y + 6), text, fill=color, font=font)
 
 
@@ -3392,8 +2937,23 @@ def draw_measure_line(
             width=3,
         )
     if arrowheads:
-        draw_arrow(draw, (start[0] + int(math.cos(angle) * 24), start[1] + int(math.sin(angle) * 24)), start, color, 3)
-        draw_arrow(draw, (end[0] - int(math.cos(angle) * 24), end[1] - int(math.sin(angle) * 24)), end, color, 3)
+        draw_arrow(
+            draw,
+            (
+                start[0] + int(math.cos(angle) * 24),
+                start[1] + int(math.sin(angle) * 24),
+            ),
+            start,
+            color,
+            3,
+        )
+        draw_arrow(
+            draw,
+            (end[0] - int(math.cos(angle) * 24), end[1] - int(math.sin(angle) * 24)),
+            end,
+            color,
+            3,
+        )
     mid = ((start[0] + end[0]) // 2 + 12, (start[1] + end[1]) // 2 - 34)
     draw_text_box(draw, mid, text, font, color)
 
@@ -3417,7 +2977,12 @@ def annotate_png(
     width, height = image.size
 
     if title:
-        draw.rectangle([14, 12, min(width - 14, 14 + len(title) * 18 + 28), 50], fill=(255, 255, 255), outline=red, width=2)
+        draw.rectangle(
+            [14, 12, min(width - 14, 14 + len(title) * 18 + 28), 50],
+            fill=(255, 255, 255),
+            outline=red,
+            width=2,
+        )
         draw.text((28, 18), title, fill=red, font=title_font)
 
     for idx, annotation in enumerate(annotations):
@@ -3426,7 +2991,9 @@ def annotate_png(
         radius = int(annotation[2]) if len(annotation) >= 3 else 34
         x = clamp(point[0], 20, width - 20)
         y = clamp(point[1], 20, height - 20)
-        draw.ellipse([x - radius, y - radius, x + radius, y + radius], outline=red, width=4)
+        draw.ellipse(
+            [x - radius, y - radius, x + radius, y + radius], outline=red, width=4
+        )
 
         if show_annotation_ids:
             short_id = issue.id.replace("DFM-", "")
@@ -3443,7 +3010,9 @@ def annotate_png(
                 y + text_h // 2 + pad_y,
             ]
             draw.rectangle(box, fill=(255, 255, 255), outline=red, width=2)
-            draw.text((x - text_w // 2, y - text_h // 2 - 1), short_id, fill=red, font=id_font)
+            draw.text(
+                (x - text_w // 2, y - text_h // 2 - 1), short_id, fill=red, font=id_font
+            )
 
         if not show_annotation_labels:
             continue
@@ -3460,13 +3029,20 @@ def annotate_png(
 
         target = (label_x + (0 if prefer_right else label_w), label_y + label_h // 2)
         draw_arrow(draw, target, (x, y + radius - 4), red, 4)
-        draw.rectangle([label_x, label_y, label_x + label_w, label_y + label_h], fill=(255, 255, 255), outline=red, width=2)
+        draw.rectangle(
+            [label_x, label_y, label_x + label_w, label_y + label_h],
+            fill=(255, 255, 255),
+            outline=red,
+            width=2,
+        )
         draw.text((label_x + 11, label_y + 8), label, fill=red, font=font)
 
     for overlay in overlays or []:
         kind = overlay.get("kind")
         if kind == "measure":
-            draw_measure_line(draw, overlay["start"], overlay["end"], overlay["text"], font, red)
+            draw_measure_line(
+                draw, overlay["start"], overlay["end"], overlay["text"], font, red
+            )
         elif kind == "arrow":
             draw_arrow(draw, overlay["start"], overlay["end"], red, 4)
             draw_text_box(draw, overlay["label_at"], overlay["text"], font, red)
@@ -3476,34 +3052,6 @@ def annotate_png(
 
     image.save(output_path)
     emit_artifact_event(output_path)
-
-
-def render_outputs(
-    shape: Any,
-    occ: SimpleNamespace,
-    issues: list[Issue],
-    out_dir: Path,
-    args: argparse.Namespace,
-) -> None:
-    if args.no_render:
-        return
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        screen_points = render_with_vtk(shape, occ, issues, out_dir, args.image_width, args.image_height, args.mesh_deflection_mm)
-        renderer_name = "VTK"
-    except Exception as exc:
-        print(f"[warn] VTK render failed, falling back to 2D projection: {exc}", file=sys.stderr)
-        screen_points = render_projection_pil(shape, occ, issues, out_dir, args.image_width, args.image_height)
-        renderer_name = "PIL projection"
-
-    base_path = out_dir / "model.png"
-    overview_annotations = [
-        (issue, screen_points[issue.id].point, screen_points[issue.id].radius)
-        for issue in issues
-        if issue.id in screen_points
-    ]
-    annotate_png(base_path, out_dir / "overview.png", overview_annotations, show_annotation_labels=False, show_annotation_ids=True)
 
 
 def make_preview_edge(occ: SimpleNamespace, start: Vec3, end: Vec3) -> Any | None:
@@ -3590,74 +3138,6 @@ def issue_preview_edges(
         marker_bbox = expand_degenerate_bbox(evidence_bbox, minimum_span)
         edges.extend(bbox_preview_edges(occ, marker_bbox))
     return edges
-
-
-def export_highlighted_step(
-    shape: Any,
-    occ: SimpleNamespace,
-    issues: list[Issue],
-    out_path: Path,
-) -> dict[str, Any]:
-    doc = occ.TDocStd_Document("dfm-highlighted-step")
-    shape_tool = occ.XCAFDoc_DocumentTool.ShapeTool(doc.Main())
-    color_tool = occ.XCAFDoc_DocumentTool.ColorTool(doc.Main())
-    base_color = occ.Quantity_Color(0.74, 0.72, 0.78, occ.Quantity_TOC_RGB)
-    red = occ.Quantity_Color(1.0, 0.02, 0.02, occ.Quantity_TOC_RGB)
-
-    base_label = shape_tool.AddShape(shape)
-    color_tool.SetColor(base_label, base_color, occ.XCAFDoc_ColorGen)
-    color_tool.SetColor(base_label, base_color, occ.XCAFDoc_ColorSurf)
-
-    global_bbox = shape_bbox(shape, occ)
-    global_diag = bounds_diag(global_bbox)
-    colored_refs: set[tuple[str, int]] = set()
-    duplicate_highlights = 0
-    preview_edges = 0
-
-    def add_red_shape(highlight_shape: Any, color_type: Any) -> None:
-        nonlocal duplicate_highlights
-        label = shape_tool.AddShape(highlight_shape, False, False)
-        color_tool.SetColor(label, red, occ.XCAFDoc_ColorGen)
-        color_tool.SetColor(label, red, color_type)
-        duplicate_highlights += 1
-
-    for issue in issues:
-        ref_shapes = ref_shapes_for_issue(shape, occ, issue)
-        ref_bounds = [(ref, shape_bbox(ref_shape, occ)) for ref, ref_shape in ref_shapes]
-        annotation_point = issue_annotation_world_point(shape, occ, issue, ref_shapes)
-        local_bbox = union_bounds([bbox for _ref, bbox in ref_bounds]) or global_bbox
-        local_diag = max(bounds_diag(local_bbox), global_diag * 0.035)
-        target = annotation_point or issue.anchor or bbox_center(local_bbox)
-        evidence_bbox = issue_evidence_bbox(issue, ref_bounds, global_diag, target, local_diag)
-
-        for ref, ref_shape in ref_shapes:
-            kind = str(ref.get("kind", ""))
-            index = int(ref.get("index", 0))
-            if index <= 0 or (kind, index) in colored_refs:
-                continue
-            color_type = occ.XCAFDoc_ColorSurf if kind == "face" else occ.XCAFDoc_ColorCurv
-            if not color_tool.SetColor(ref_shape, red, color_type):
-                add_red_shape(ref_shape, color_type)
-            colored_refs.add((kind, index))
-
-        for preview_edge in issue_preview_edges(occ, issue, evidence_bbox, global_diag, target, local_diag):
-            add_red_shape(preview_edge, occ.XCAFDoc_ColorCurv)
-            preview_edges += 1
-
-    writer = occ.STEPCAFControl_Writer()
-    writer.SetColorMode(True)
-    with suppress_native_output():
-        written = writer.Perform(doc, str(out_path))
-    if not written:
-        raise RuntimeError(f"OpenCascade failed to write highlighted STEP: {out_path}")
-    emit_artifact_event(out_path, "step")
-    return {
-        "file": out_path.name,
-        "path": str(out_path),
-        "colored_ref_count": len(colored_refs),
-        "duplicate_highlight_count": duplicate_highlights,
-        "preview_edge_count": preview_edges,
-    }
 
 
 def thresholds_dict(args: argparse.Namespace) -> dict[str, Any]:
@@ -3895,45 +3375,6 @@ def emit_stage_progress(title: str, *, completed: bool) -> None:
     emit_dfm_event("progress", stage=key, percent=min(percent, 62))
 
 
-def render_issue_evidence(
-    shape: Any,
-    occ: SimpleNamespace,
-    issues: list[Issue],
-    out_dir: Path,
-    args: argparse.Namespace,
-) -> int:
-    if args.no_render:
-        emit_dfm_event("progress", stage="evidence_skipped", percent=78)
-        return 0
-    limit = args.max_evidence_issues
-    selected = issues if limit is None else issues[:limit]
-    bbox = shape_bbox(shape, occ)
-    total = max(len(selected), 1)
-    for index, issue in enumerate(selected, start=1):
-        emit_dfm_event(
-            "progress",
-            stage="render_evidence",
-            percent=64 + int(((index - 1) / total) * 14),
-        )
-        try:
-            images = render_issue_with_vtk(
-                shape,
-                occ,
-                issue,
-                out_dir,
-                args.image_width,
-                args.image_height,
-                args.mesh_deflection_mm,
-                bbox,
-            )
-            issue.images = images
-            issue.image = images[0] if images else None
-        except Exception as exc:
-            print(f"[warn] targeted render failed for {issue.id}: {exc}", file=sys.stderr)
-    emit_dfm_event("progress", stage="evidence_complete", percent=78)
-    return len(selected)
-
-
 def mark_stage_issues(title: str, issues: list[Issue]) -> None:
     try:
         stage_order = DFM_STAGE_TITLES.index(title)
@@ -3952,7 +3393,9 @@ def emit_analysis_intro() -> None:
 def emit_model_summary(stats: dict[str, Any]) -> None:
     topology = stats.get("topology", {})
     emit_report_delta("## 模型概况\n\n")
-    emit_report_delta(f"- B-Rep 有效性: {'通过' if stats.get('valid_brep') else '存在问题'}\n")
+    emit_report_delta(
+        f"- B-Rep 有效性: {'通过' if stats.get('valid_brep') else '存在问题'}\n"
+    )
     emit_report_delta(f"- 外包围尺寸(mm): {format_vec(stats.get('bbox_size_mm'))}\n")
     emit_report_delta(
         "- 面/边/点数量: "
@@ -3982,70 +3425,15 @@ def emit_stage_result(
         return
     mark_stage_issues(title, issues)
     emit_report_delta(f"{title}：发现 {len(issues)} 个风险项。\n\n")
-    emit_stage_issue_details(title, issues, shape=shape, occ=occ, out_dir=out_dir, args=args, global_bbox=global_bbox)
-
-
-def write_json_report(path: Path, result: dict[str, Any]) -> None:
-    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def write_markdown_report(path: Path, result: dict[str, Any], *, emit_stream: bool = False) -> None:
-    issues = result["issues"]
-    stats = result["stats"]
-    lines = [
-        "# DFM 分析报告",
-        "",
-        f"- B-Rep 有效性: {'通过' if stats.get('valid_brep') else '存在问题'}",
-        f"- 外包围尺寸(mm): {format_vec(stats.get('bbox_size_mm'))}",
-        f"- 面/边/点数量: {stats['topology']['faces']} / {stats['topology']['edges']} / {stats['topology']['vertices']}",
-        "",
-    ]
-    lines.extend(["## 发现的问题", ""])
-    if not issues:
-        lines.append("未发现超过当前阈值的 DFM 风险。")
-    else:
-        lines.extend(issue_table_header_lines())
-        for issue in issues:
-            lines.append(issue_table_row(issue))
-            lines.extend(issue_image_rows(issue))
-        lines.extend(["</tbody>", "</table>"])
-    lines.extend(
-        [
-            "",
-            "## 输出图片",
-            "",
-            "- [overview.png](overview.png)",
-            "- [model.png](model.png)",
-            *(
-                [
-                    "",
-                    "## 彩色 STEP 预览",
-                    "",
-                    f"- [{result['highlighted_step']['file']}]({result['highlighted_step']['file']})",
-                ]
-                if result.get("highlighted_step")
-                else []
-            ),
-            *(
-                [
-                    "",
-                    "## 彩色 STEP 导出警告",
-                    "",
-                    f"- {result['highlighted_step_error']}",
-                ]
-                if result.get("highlighted_step_error")
-                else []
-            ),
-            "",
-            "说明: 该分析是自动几何启发式检查，最终量产结论仍需结合材料、工艺、模具结构和公差要求确认。",
-            "",
-        ]
+    emit_stage_issue_details(
+        title,
+        issues,
+        shape=shape,
+        occ=occ,
+        out_dir=out_dir,
+        args=args,
+        global_bbox=global_bbox,
     )
-    markdown = "\n".join(lines)
-    path.write_text(markdown, encoding="utf-8-sig")
-    if emit_stream:
-        for line in lines:
-            emit_report_delta(f"{line}\n")
 
 
 def format_vec(value: Any) -> str:
@@ -4079,7 +3467,9 @@ def clean_previous_outputs(out_dir: Path) -> None:
                 path.unlink()
 
 
-def launch_preview_from_analyzer(preview_input: Path, args: argparse.Namespace) -> dict[str, Any]:
+def launch_preview_from_analyzer(
+    preview_input: Path, args: argparse.Namespace
+) -> dict[str, Any]:
     preview_script = Path(__file__).with_name("dfm_preview.py")
     command = [
         sys.executable,
@@ -4108,18 +3498,57 @@ def launch_preview_from_analyzer(preview_input: Path, args: argparse.Namespace) 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Analyze STEP/STP CAD files for first-pass DFM issues.")
+    parser = argparse.ArgumentParser(
+        description="Analyze STEP/STP CAD files for first-pass DFM issues."
+    )
     parser.add_argument("input", type=Path, help="Input STEP/STP file.")
-    parser.add_argument("--out", type=Path, default=None, help="Output directory for report and PNG files.")
-    parser.add_argument("--config", type=Path, default=None, help="JSON file with process/threshold defaults. CLI options override config values.")
-    parser.add_argument("--highlight-step-name", default=None, help="Colored STEP preview filename written in the output directory.")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Output directory for report and PNG files.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="JSON file with process/threshold defaults. CLI options override config values.",
+    )
+    parser.add_argument(
+        "--operation", action="append", default=[], help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--highlight-step-name",
+        default=None,
+        help="Colored STEP preview filename written in the output directory.",
+    )
     parser.add_argument("--highlight-step", dest="highlight_step", action="store_true")
-    parser.add_argument("--no-highlight-step", dest="highlight_step", action="store_false")
-    parser.add_argument("--open-preview", action="store_true", help="Open the highlighted STEP in an external CAD previewer after analysis.")
-    parser.add_argument("--preview-backend", choices=["auto", "freecad", "pythonocc", "cadquery"], default="auto")
-    parser.add_argument("--preview-wait", action="store_true", help="Wait for the preview process to exit.")
-    parser.add_argument("--preview-plain", action="store_true", help="Preview the original STEP instead of dfm_highlighted.step.")
-    parser.add_argument("--process", choices=["generic", "injection", "machining"], default="generic")
+    parser.add_argument(
+        "--no-highlight-step", dest="highlight_step", action="store_false"
+    )
+    parser.add_argument(
+        "--open-preview",
+        action="store_true",
+        help="Open the highlighted STEP in an external CAD previewer after analysis.",
+    )
+    parser.add_argument(
+        "--preview-backend",
+        choices=["auto", "freecad", "pythonocc", "cadquery"],
+        default="auto",
+    )
+    parser.add_argument(
+        "--preview-wait",
+        action="store_true",
+        help="Wait for the preview process to exit.",
+    )
+    parser.add_argument(
+        "--preview-plain",
+        action="store_true",
+        help="Preview the original STEP instead of dfm_highlighted.step.",
+    )
+    parser.add_argument(
+        "--process", choices=["generic", "injection", "machining"], default="generic"
+    )
     parser.add_argument("--min-wall-mm", type=float, default=1.0)
     parser.add_argument("--min-hole-diameter-mm", type=float, default=2.0)
     parser.add_argument("--min-tool-radius-mm", type=float, default=0.5)
@@ -4144,42 +3573,109 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-hole-web-mm", type=float, default=1.0)
     parser.add_argument("--max-hole-depth-ratio", type=float, default=6.0)
     parser.add_argument("--deep-hole-max-diameter-mm", type=float, default=8.0)
-    parser.add_argument("--engineering", action="store_true", help="Compatibility flag; engineering-grade modules run by default.")
-    parser.add_argument("--enable-thickness-field", dest="enable_thickness_field", action="store_true")
-    parser.add_argument("--disable-thickness-field", dest="enable_thickness_field", action="store_false")
+    parser.add_argument(
+        "--engineering",
+        action="store_true",
+        help="Compatibility flag; engineering-grade modules run by default.",
+    )
+    parser.add_argument(
+        "--enable-thickness-field", dest="enable_thickness_field", action="store_true"
+    )
+    parser.add_argument(
+        "--disable-thickness-field", dest="enable_thickness_field", action="store_false"
+    )
     parser.add_argument("--thickness-samples", type=int, default=450)
     parser.add_argument("--thickness-mesh-deflection-mm", type=float, default=0.8)
     parser.add_argument("--thickness-min-hit-mm", type=float, default=0.10)
     parser.add_argument("--max-thickness-issues", type=int)
     parser.add_argument("--thickness-issue-cluster-mm", type=float, default=0.0)
-    parser.add_argument("--report-thickness-variation-with-thin-wall", action="store_true")
+    parser.add_argument(
+        "--report-thickness-variation-with-thin-wall", action="store_true"
+    )
     parser.add_argument("--max-wall-mm", type=float, default=0.0)
     parser.add_argument("--thickness-variation-ratio", type=float, default=4.0)
     parser.add_argument("--thickness-variation-nominal-max-mm", type=float, default=6.0)
-    parser.add_argument("--enable-surface-continuity", dest="enable_surface_continuity", action="store_true")
-    parser.add_argument("--disable-surface-continuity", dest="enable_surface_continuity", action="store_false")
-    parser.add_argument("--continuity-include-plane-plane", action="store_true", help="Also report sharp plane-plane edges as surface continuity findings.")
-    parser.add_argument("--continuity-include-plane-cylinder", action="store_true", help="Also report plane-cylinder hard edges, such as hole mouths, as surface continuity findings.")
-    parser.add_argument("--continuity-include-plane-other", action="store_true", help="Also report hard edges between planes and other surface types as surface continuity findings.")
-    parser.add_argument("--continuity-include-cylinder-other", action="store_true", help="Also report hard edges between cylinders and other surface types as surface continuity findings.")
-    parser.add_argument("--continuity-include-hard-edges", action="store_true", help="Also report large-angle intentional hard edges as continuity findings.")
+    parser.add_argument(
+        "--enable-surface-continuity",
+        dest="enable_surface_continuity",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--disable-surface-continuity",
+        dest="enable_surface_continuity",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--continuity-include-plane-plane",
+        action="store_true",
+        help="Also report sharp plane-plane edges as surface continuity findings.",
+    )
+    parser.add_argument(
+        "--continuity-include-plane-cylinder",
+        action="store_true",
+        help="Also report plane-cylinder hard edges, such as hole mouths, as surface continuity findings.",
+    )
+    parser.add_argument(
+        "--continuity-include-plane-other",
+        action="store_true",
+        help="Also report hard edges between planes and other surface types as surface continuity findings.",
+    )
+    parser.add_argument(
+        "--continuity-include-cylinder-other",
+        action="store_true",
+        help="Also report hard edges between cylinders and other surface types as surface continuity findings.",
+    )
+    parser.add_argument(
+        "--continuity-include-hard-edges",
+        action="store_true",
+        help="Also report large-angle intentional hard edges as continuity findings.",
+    )
     parser.add_argument("--continuity-g1-angle-deg", type=float, default=35.0)
-    parser.add_argument("--continuity-max-smooth-break-angle-deg", type=float, default=35.0)
+    parser.add_argument(
+        "--continuity-max-smooth-break-angle-deg", type=float, default=35.0
+    )
     parser.add_argument("--continuity-g1-high-angle-deg", type=float, default=75.0)
     parser.add_argument("--continuity-g2-curvature-jump", type=float, default=0.08)
-    parser.add_argument("--enable-undercut-slider", dest="enable_undercut_slider", action="store_true")
-    parser.add_argument("--disable-undercut-slider", dest="enable_undercut_slider", action="store_false")
+    parser.add_argument(
+        "--enable-undercut-slider", dest="enable_undercut_slider", action="store_true"
+    )
+    parser.add_argument(
+        "--disable-undercut-slider", dest="enable_undercut_slider", action="store_false"
+    )
     parser.add_argument("--undercut-negative-draft-deg", type=float, default=0.5)
     parser.add_argument("--undercut-side-face-abs-dot-max", type=float, default=0.70)
     parser.add_argument("--undercut-min-area-mm2", type=float, default=1.0)
     parser.add_argument("--side-core-axis-pull-abs-dot-max", type=float, default=0.25)
-    parser.add_argument("--side-action-surface-pull-abs-dot-max", type=float, default=0.35)
-    parser.add_argument("--max-hole-draft-undercut-diameter-mm", type=float, default=12.0, help=argparse.SUPPRESS)
-    parser.add_argument("--min-hole-draft-cap-area-mm2", type=float, default=0.5, help=argparse.SUPPRESS)
-    parser.add_argument("--max-hole-draft-cap-area-mm2", type=float, default=12.0, help=argparse.SUPPRESS)
-    parser.add_argument("--max-hole-draft-cap-depth-mm", type=float, default=1.0, help=argparse.SUPPRESS)
-    parser.add_argument("--max-hole-draft-cap-aspect", type=float, default=1.8, help=argparse.SUPPRESS)
-    parser.add_argument("--min-hole-draft-side-area-mm2", type=float, default=3.0, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--side-action-surface-pull-abs-dot-max", type=float, default=0.35
+    )
+    parser.add_argument(
+        "--max-hole-draft-undercut-diameter-mm",
+        type=float,
+        default=12.0,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--min-hole-draft-cap-area-mm2", type=float, default=0.5, help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--max-hole-draft-cap-area-mm2",
+        type=float,
+        default=12.0,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--max-hole-draft-cap-depth-mm", type=float, default=1.0, help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--max-hole-draft-cap-aspect", type=float, default=1.8, help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--min-hole-draft-side-area-mm2",
+        type=float,
+        default=3.0,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--max-side-action-diameter-mm", type=float, default=30.0)
     parser.add_argument("--min-draft-area-mm2", type=float, default=1.0)
     parser.add_argument("--pull-dir", type=parse_vec3, default=(0.0, 0.0, 1.0))
@@ -4200,7 +3696,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--fail-on-issues", action="store_true")
     parser.add_argument("--debug", action="store_true")
-    parser.set_defaults(enable_thickness_field=True, enable_surface_continuity=True, enable_undercut_slider=True, highlight_step=True)
+    parser.set_defaults(
+        enable_thickness_field=True,
+        enable_surface_continuity=True,
+        enable_undercut_slider=True,
+        highlight_step=True,
+    )
     return parser
 
 
@@ -4236,7 +3737,9 @@ def coerce_config_value(action: argparse.Action, value: Any) -> Any:
     return value
 
 
-def load_config_defaults(config_path: Path, parser: argparse.ArgumentParser) -> dict[str, Any]:
+def load_config_defaults(
+    config_path: Path, parser: argparse.ArgumentParser
+) -> dict[str, Any]:
     try:
         data = json.loads(config_path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -4280,7 +3783,9 @@ def normalize_args(args: argparse.Namespace) -> argparse.Namespace:
     if args.process == "machining" and args.min_tool_radius_mm < 0.8:
         args.min_tool_radius_mm = 0.8
     args.out = args.out or default_out_dir(args.input)
-    highlight_name = Path(str(args.highlight_step_name or f"{int(time.time() * 1000)}.step")).name
+    highlight_name = Path(
+        str(args.highlight_step_name or f"{int(time.time() * 1000)}.step")
+    ).name
     if not highlight_name.lower().endswith((".step", ".stp")):
         highlight_name += ".step"
     args.highlight_step_name = highlight_name
@@ -4314,18 +3819,10 @@ def main(argv: list[str] | None = None) -> int:
         shape = read_step(input_path, occ)
         emit_dfm_event("progress", stage="inspect_geometry", percent=15)
         issues, stats = analyze_shape(shape, occ, args, out_dir)
-        rendered_findings = render_issue_evidence(shape, occ, issues, out_dir, args)
-        emit_dfm_event("progress", stage="render_overview", percent=80)
-        render_outputs(shape, occ, issues, out_dir, args)
-        highlighted_step = None
-        highlighted_step_error = None
-        if args.highlight_step:
-            emit_dfm_event("progress", stage="export_highlighted_step", percent=88)
-            try:
-                highlighted_step = export_highlighted_step(shape, occ, issues, out_dir / args.highlight_step_name)
-            except Exception as exc:
-                highlighted_step_error = str(exc)
-                print(f"[warn] highlighted STEP export failed: {exc}", file=sys.stderr)
+        should_render = operation_enabled(args, "render_evidence")
+        evidence_result = EvidenceResult(0, None, None)
+        if should_render:
+            evidence_result = render_evidence_bundle(shape, occ, issues, out_dir, args)
 
         result = {
             "input": str(input_path),
@@ -4336,12 +3833,12 @@ def main(argv: list[str] | None = None) -> int:
             "issue_count": len(issues),
             "issues": [asdict(issue) for issue in issues],
             "evidence": {
-                "rendered_findings": rendered_findings,
+                "rendered_findings": evidence_result.rendered_findings,
                 "total_findings": len(issues),
                 "limit": args.max_evidence_issues,
             },
-            "highlighted_step": highlighted_step,
-            "highlighted_step_error": highlighted_step_error,
+            "highlighted_step": evidence_result.highlighted_step,
+            "highlighted_step_error": evidence_result.highlighted_step_error,
         }
         emit_dfm_event("progress", stage="write_reports", percent=95)
         json_report = out_dir / "dfm_report.json"
@@ -4360,7 +3857,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.open_preview:
         try:
             preview_launch = launch_preview_from_analyzer(out_dir, args)
-            print(f"Preview: backend={preview_launch['backend']} pid={preview_launch['pid']}")
+            print(
+                f"Preview: backend={preview_launch['backend']} pid={preview_launch['pid']}"
+            )
         except Exception as exc:
             print(f"[warn] preview launch failed: {exc}", file=sys.stderr)
     if issues and args.fail_on_issues:
