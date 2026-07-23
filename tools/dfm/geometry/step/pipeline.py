@@ -4,21 +4,10 @@ from __future__ import annotations
 
 from ...contracts import PlanOperation
 from ...errors import DFMError
+from ..brep.checks import BREP_CHECK_FAMILIES, resolve_brep_check
 
 
-OPERATION_CHECK_FAMILIES = {
-    "load_step": "load",
-    "inspect_topology": "topology",
-    "inspect_small_features": "small_features",
-    "measure_planar_spacing": "planar_spacing",
-    "inspect_face_quality": "face_quality",
-    "inspect_cylindrical_features": "cylindrical",
-    "measure_wall_thickness": "thickness",
-    "measure_draft": "draft",
-    "inspect_surface_continuity": "continuity",
-    "inspect_undercut": "undercut",
-    "render_evidence": "evidence",
-}
+OPERATION_CHECK_FAMILIES = BREP_CHECK_FAMILIES
 
 
 def validate_operations(operations: list[PlanOperation]) -> list[str]:
@@ -36,12 +25,7 @@ def validate_operations(operations: list[PlanOperation]) -> list[str]:
                 "DFM plan operation ids must be unique.",
                 {"operation_id": item.operation_id},
             )
-        if item.operation not in OPERATION_CHECK_FAMILIES:
-            raise DFMError(
-                "unsupported_capability",
-                "The DFM plan contains an unsupported STEP operation.",
-                {"operation": item.operation},
-            )
+        resolve_brep_check(item.operation)
         missing = [
             dependency for dependency in item.depends_on if dependency not in ids
         ]

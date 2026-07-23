@@ -6,10 +6,10 @@
 
 ## 1. 当前支持范围
 
-当前 M1 阶段的部署基线为：
+当前 M2.5 阶段的部署基线为：
 
-- 工艺：注塑（`injection`）。
-- 三维输入：STEP/STP。
+- 工艺：注塑（`injection`）完整基线；压铸（`die_casting`）拓扑门。
+- 三维输入：STEP/STP；Parasolid `x_t` 仅登记和能力诊断，Reader 仍未批准。
 - 几何内核：OpenCascade，通过 `pythonocc-core` 使用。
 - 报告：结构化 JSON、证据图片和 PPTX。
 - 运行方式：Hermes 主进程创建 DFM 作业，几何分析在隔离 worker 子进程中执行。
@@ -140,11 +140,24 @@ dfm:
     max_pages: 50
   defaults:
     process: injection
+  nx:
+    # Optional remote-only Siemens NX compute backend. There is no local fallback.
+    endpoint: ""
+    request_timeout_seconds: 30
+    poll_interval_seconds: 2
   evidence:
     max_rendered_findings: 12
   retention:
     keep_failed_runs: true
 ```
+
+配置 `dfm.nx.endpoint` 后，Parasolid `.x_t` 通过 HTTP NX Backend 执行；未配置时
+返回 `dependency_missing`，不会尝试本地启动 NX。认证 Token 是机密，通过
+`NX_BACKEND_TOKEN` 提供，不写入 `config.yaml`。完整 Server/C++ 插件协议见
+[NX HTTP Backend 契约](plans/2026-07-23-dfm-nx-http-backend-contract.md)。
+NX Server 和 C++ 插件开发团队应以
+[NX Server 与 NX C++ 插件开发交接规格](plans/2026-07-23-nx-server-plugin-development-spec.md)
+作为实施与验收清单。
 
 - `runtime.python: auto`：worker 使用当前 Hermes Python 解释器。
 - `runtime.python: /absolute/path/to/python`：worker 使用独立 DFM/OCC 环境。
@@ -259,7 +272,7 @@ hermes logs --follow
 - 至少一个基准 STEP 完成 E2E，并校验证据图与 PPTX。
 - 大文件、超时、取消和失败保留策略已验证。
 - artifact 目录容量、清理和备份策略已配置。
-- 当前只声明 injection/STEP 能力，未实现能力不会出现在生产能力声明中。
+- 当前完整声明 injection/STEP；die_casting/STEP 只声明拓扑门；Parasolid `x_t` 明确声明为未实现能力，未实现能力不会被误报为可用。
 
 ## 11. 后续演进
 

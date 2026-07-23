@@ -28,7 +28,7 @@ def _call(kind: str, args: dict, **context) -> str:
 
 DFM_PROJECT_SCHEMA = {
     "name": "dfm_project",
-    "description": "Manage durable DFM projects and register STEP or drawing inputs. Use status before analysis to inspect capabilities. confirm_fact may be called only after the user explicitly answers a clarification; never infer material, units, or pull direction from the STEP geometry.",
+    "description": "Manage durable DFM projects and register STEP, Parasolid x_t, or drawing inputs. Use status before analysis to inspect format and process capabilities. confirm_fact may be called only after the user explicitly answers a clarification; never infer engineering facts from geometry.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["create", "add_input", "status", "confirm_fact", "list"]},
         "project_id": {"type": "string"}, "name": {"type": "string"},
@@ -44,7 +44,8 @@ DFM_ANALYSIS_SCHEMA = {
         "action": {"type": "string", "enum": ["plan", "start", "status", "cancel", "result"]},
         "project_id": {"type": "string"}, "plan_id": {"type": "string"}, "run_id": {"type": "string", "description": "Run ID returned by start. Always pass it to status, result, or cancel; if omitted, the service can infer it only when unambiguous."},
         "base_plan_id": {"type": "string", "description": "Invalidated plan to rebuild with only affected operations."},
-        "analyzer_key": {"type": "string", "enum": ["step", "drawing", "fusion"]},
+        "process": {"type": "string", "enum": ["injection", "die_casting"], "description": "Manufacturing process selected by the user. Omit only to keep the project's current/default process."},
+        "analyzer_key": {"type": "string", "enum": ["step", "parasolid", "drawing", "fusion"]},
         "idempotency_key": {"type": "string"},
     }, "required": ["action", "project_id"]},
 }

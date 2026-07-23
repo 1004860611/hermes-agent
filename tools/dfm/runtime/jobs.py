@@ -339,6 +339,7 @@ class JobManager:
                 stage=stage,
                 heartbeat_at=now,
                 updated_at=now,
+                external_job_id=event.external_job_id or run.external_job_id,
             )
 
         updated = self._replace_run(project_id, run_id, update)

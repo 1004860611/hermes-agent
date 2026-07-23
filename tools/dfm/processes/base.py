@@ -26,6 +26,8 @@ class ProcessAdapter(Protocol):
 
     def capability(self, context: AnalyzerContext) -> Capability: ...
 
+    def required_facts(self) -> Mapping[str, str]: ...
+
     def compile(
         self,
         context: AnalyzerContext,

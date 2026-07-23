@@ -33,6 +33,11 @@ def materialize_findings(
         if item.kind in {"measurements", "report_json", "report_markdown", "evidence_image", "highlighted_step"}
     ]
     input_hash = str(payload.get("input_sha256") or "")
+    process = str(payload.get("process") or "injection")
+    if process == "die_casting":
+        catalog_id, catalog_version = "die_casting.baseline-issues", "1.0.0"
+    else:
+        catalog_id, catalog_version = "injection.legacy-issues", "1.0.0"
     results = []
     for evaluation in payload["evaluations"]:
         if not isinstance(evaluation, dict) or evaluation.get("outcome") != "fail":
@@ -48,7 +53,7 @@ def materialize_findings(
                 severity=str(issue.get("severity") or "unclassified"),
                 status="open",
                 evidence_refs=evidence_refs,
-                rule_ref=f"injection.legacy-issues@1.0.0:{check_id}",
+                rule_ref=f"{catalog_id}@{catalog_version}:{check_id}",
                 recommendation=str(issue.get("recommendation") or "Review the measured geometry against the referenced rule."),
             )
         )

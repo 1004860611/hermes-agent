@@ -52,7 +52,10 @@ def _pptx_available() -> bool:
 
 def _legacy_config(request: WorkerRequest) -> dict[str, Any]:
     config = {
-        "process": request.process,
+        # The migrated analyzer knows only its historical generic/injection/
+        # machining labels. The persisted Run keeps the real process; generic
+        # is only the geometry-execution compatibility mode for die casting.
+        "process": "injection" if request.process == "injection" else "generic",
         "thresholds": {
             key: parameter.value for key, parameter in request.parameters.items()
         },
@@ -115,13 +118,13 @@ def _input_sha256(path: Path) -> str:
 
 
 def _execute(request: WorkerRequest) -> WorkerResult:
-    if request.process != "injection":
+    if request.process not in {"injection", "die_casting"}:
         raise DFMError(
             "unsupported_capability",
             f"DFM process is not supported: {request.process}",
             {
                 "requested_process": request.process,
-                "supported_processes": ["injection"],
+                "supported_processes": ["die_casting", "injection"],
             },
         )
     if not _occ_available():
@@ -181,7 +184,7 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         "--config",
         str(profile_path),
         "--process",
-        "injection",
+        "injection" if request.process == "injection" else "generic",
         "--highlight-step-name",
         "dfm_highlighted.step",
     ]
@@ -220,6 +223,7 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         thresholds=report_result.get("thresholds")
         if isinstance(report_result.get("thresholds"), dict)
         else {},
+        process=request.process,
     )
     measurement_path = output_dir / "measurements.json"
     measurement_path.write_text(
@@ -229,6 +233,8 @@ def _execute(request: WorkerRequest) -> WorkerResult:
                 "run_id": request.run_id,
                 "input_sha256": input_sha256,
                 "algorithm_version": WORKER_VERSION,
+                "process": request.process,
+                "scope_id": request.scope_id,
                 "operations": operations,
                 "parameters": {
                     key: value.to_dict() for key, value in request.parameters.items()

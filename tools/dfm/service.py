@@ -51,11 +51,6 @@ def _resolve_input_path(raw_path: object, working_dir: object = None) -> Path:
 
 
 class DFMService:
-    _STEP_REQUIRED_FACTS = {
-        "material": "What resin/material grade will be used for this part?",
-        "pull_dir": "What is the confirmed mold pull direction as [x, y, z]?",
-        "model_units": "What length unit was used to author the STEP model?",
-    }
     _FACTS_REQUIRING_NORMALIZATION = {"pull_dir"}
     _FACT_ALIASES = {
         "unit": "model_units",
@@ -79,8 +74,16 @@ class DFMService:
     def _store(self, project_id: str) -> ManifestStore:
         return ManifestStore(self.workspace.project_dir(project_id))
 
-    def _context(self, manifest: ProjectManifest) -> AnalyzerContext:
-        return AnalyzerContext(manifest.project_id, self.workspace.project_dir(manifest.project_id), manifest.input_mode, manifest.inputs)
+    def _context(
+        self, manifest: ProjectManifest, plan: PlanRecord | None = None
+    ) -> AnalyzerContext:
+        return AnalyzerContext(
+            manifest.project_id,
+            self.workspace.project_dir(manifest.project_id),
+            manifest.input_mode,
+            manifest.inputs,
+            plan=plan,
+        )
 
     @staticmethod
     def _canonical_fact_name(fact_name: str) -> str:
@@ -147,9 +150,18 @@ class DFMService:
         context = self._context(manifest)
         return {key: self.registry.get(key).capability(context).to_dict() for key in self.registry.keys()}
 
-    def _open_clarifications(self, manifest: ProjectManifest) -> list[ClarificationRecord]:
-        if manifest.input_mode not in {"step", "fusion"}:
+    def _open_clarifications(
+        self, manifest: ProjectManifest, process: str | None = None
+    ) -> list[ClarificationRecord]:
+        # Reserved Parasolid-only projects do not ask engineering questions
+        # before an approved reader exists. Mixed/STEP geometry still uses the
+        # selected process adapter's prerequisites.
+        if manifest.input_mode not in {"step", "geometry", "fusion"} and not (
+            manifest.input_mode == "parasolid" and self.config.nx_endpoint
+        ):
             return []
+        adapter = self.process_registry.get(process or manifest.process or self.config.default_process)
+        required_facts = adapter.required_facts()
         confirmed = {
             self._canonical_fact_name(fact.name)
             for fact in manifest.facts
@@ -157,7 +169,7 @@ class DFMService:
         }
         existing = {item.clarification_id: item for item in manifest.clarifications}
         result = []
-        for name, question in self._STEP_REQUIRED_FACTS.items():
+        for name, question in required_facts.items():
             if name in confirmed:
                 continue
             clarification_id = f"clarification_{name}"
@@ -212,6 +224,35 @@ class DFMService:
         payload = manifest.to_dict()
         payload["open_clarifications"] = [item.to_dict() for item in self._open_clarifications(manifest)]
         return payload
+
+    def _select_process(self, project_id: str, process: str, source: str) -> ProjectManifest:
+        self.process_registry.get(process)
+        return self._store(project_id).update(
+            lambda current: current
+            if current.process == process and current.process_source == source
+            else replace(
+                current,
+                process=process,
+                process_source=source,
+                domain=(
+                    "injection_molding"
+                    if process == "injection"
+                    else "die_casting"
+                    if process == "die_casting"
+                    else process
+                ),
+                plans=[
+                    replace(
+                        plan,
+                        status="invalidated",
+                        invalidated_by=f"process:{process}",
+                        affected_operation_ids=[item.operation_id for item in plan.operations],
+                    )
+                    for plan in current.plans
+                ],
+                updated_at=_utc_now(),
+            )
+        )
 
     @staticmethod
     def _resolve_run_id(manifest: ProjectManifest, requested: object, action: str) -> str:
@@ -301,7 +342,17 @@ class DFMService:
             return {"ok": True, "project_id": project_id, "fact": fact.to_dict(), "revision": manifest.revision}
         if action == "status":
             manifest = self._reconcile_clarifications(project_id)
-            return {"ok": True, "project": self._project_payload(manifest), "capabilities": self._capabilities(manifest)}
+            context = self._context(manifest)
+            process_capabilities = {
+                key: self.process_registry.get(key).capability(context).to_dict()
+                for key in self.process_registry.keys()
+            }
+            return {
+                "ok": True,
+                "project": self._project_payload(manifest),
+                "capabilities": self._capabilities(manifest),
+                "process_capabilities": process_capabilities,
+            }
         raise DFMError("action_invalid", f"Unsupported dfm_project action: {action}")
 
     def analysis(self, action: str, **params: Any) -> dict[str, Any]:
@@ -312,7 +363,14 @@ class DFMService:
             analyzer_key = params.get("analyzer_key") or manifest.input_mode
             if not analyzer_key:
                 raise DFMError("input_required", "Register a DFM input before planning analysis.")
-            open_clarifications = self._open_clarifications(manifest)
+            requested_process = str(params.get("process") or manifest.process or self.config.default_process)
+            manifest = self._select_process(
+                project_id,
+                requested_process,
+                "user_selected" if params.get("process") else manifest.process_source,
+            )
+            manifest = self._ensure_clarifications(project_id)
+            open_clarifications = self._open_clarifications(manifest, requested_process)
             if open_clarifications:
                 return {
                     "ok": False,
@@ -326,9 +384,9 @@ class DFMService:
             analyzer = self.registry.get(str(analyzer_key))
             context = self._context(manifest)
             capability = analyzer.capability(context)
-            process = str(params.get("process") or self.config.default_process)
+            process = requested_process
             process_plan = None
-            if str(analyzer_key) == "step":
+            if str(analyzer_key) in {"step", "parasolid"}:
                 adapter = self.process_registry.get(process)
                 defaults = adapter.compile(context, {})
                 raw_parameters = {
@@ -366,6 +424,11 @@ class DFMService:
                 parameters=process_plan.parameters if process_plan else {},
                 operations=operations,
                 parent_plan_id=parent_plan_id,
+            )
+            capability = analyzer.capability(self._context(manifest, plan))
+            plan = replace(
+                plan,
+                status="ready" if capability.status.value == "available" else "blocked",
             )
             store.update(lambda current: replace(current, plans=[*current.plans, plan], updated_at=_utc_now()))
             return {"ok": True, "project_id": project_id, "plan": plan.to_dict(), "capability": capability.to_dict()}

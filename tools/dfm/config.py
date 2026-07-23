@@ -18,6 +18,9 @@ class DFMConfig:
     max_pages: int = 50
     keep_failed_runs: bool = True
     max_evidence_findings: int = 12
+    nx_endpoint: str = ""
+    nx_request_timeout_seconds: int = 30
+    nx_poll_interval_seconds: int = 2
 
 
 def _nested(mapping: Mapping[str, Any], *keys: str, default: Any) -> Any:
@@ -46,6 +49,9 @@ def load_dfm_config(config: Mapping[str, Any] | None = None) -> DFMConfig:
     keep_failed = _nested(
         config, "dfm", "retention", "keep_failed_runs", default=defaults.keep_failed_runs
     )
+    nx_endpoint = _nested(config, "dfm", "nx", "endpoint", default=defaults.nx_endpoint)
+    if not isinstance(nx_endpoint, str):
+        raise DFMError("config_invalid", "dfm.nx.endpoint must be a string.")
     if not isinstance(runtime_python, str) or not runtime_python.strip():
         raise DFMError("config_invalid", "dfm.runtime.python must be a non-empty string.")
     if not isinstance(default_process, str) or not default_process.strip():
@@ -84,5 +90,14 @@ def load_dfm_config(config: Mapping[str, Any] | None = None) -> DFMConfig:
                 default=defaults.max_evidence_findings,
             ),
             "dfm.evidence.max_rendered_findings",
+        ),
+        nx_endpoint=nx_endpoint.strip().rstrip("/"),
+        nx_request_timeout_seconds=_positive_int(
+            _nested(config, "dfm", "nx", "request_timeout_seconds", default=defaults.nx_request_timeout_seconds),
+            "dfm.nx.request_timeout_seconds",
+        ),
+        nx_poll_interval_seconds=_positive_int(
+            _nested(config, "dfm", "nx", "poll_interval_seconds", default=defaults.nx_poll_interval_seconds),
+            "dfm.nx.poll_interval_seconds",
         ),
     )

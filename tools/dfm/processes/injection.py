@@ -41,6 +41,13 @@ class InjectionProcessAdapter:
             details={"adapter_version": self.version},
         )
 
+    def required_facts(self) -> Mapping[str, str]:
+        return {
+            "material": "What resin/material grade will be used for this part?",
+            "pull_dir": "What is the confirmed mold pull direction as [x, y, z]?",
+            "model_units": "What length unit was used to author the STEP model?",
+        }
+
     def compile(
         self,
         context: AnalyzerContext,

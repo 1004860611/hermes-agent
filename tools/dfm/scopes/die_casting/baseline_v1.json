@@ -1,0 +1,10 @@
+{
+  "scope_id": "die_casting.topology-baseline",
+  "version": "1.0.0",
+  "process": "die_casting",
+  "parameters": {},
+  "operations": [
+    {"operation_id": "step.load", "operation": "load_step", "depends_on": []},
+    {"operation_id": "step.topology", "operation": "inspect_topology", "depends_on": ["step.load"]}
+  ]
+}

@@ -17,15 +17,30 @@ def context(tmp_path):
     )
 
 
-def test_default_process_registry_supports_injection_only():
+def test_default_process_registry_supports_injection_and_die_casting():
     registry = build_default_process_registry()
 
-    assert registry.keys() == ("injection",)
+    assert registry.keys() == ("die_casting", "injection")
     with pytest.raises(DFMError) as exc_info:
         registry.get("machining")
 
     assert exc_info.value.code == "unsupported_capability"
-    assert exc_info.value.details["supported_processes"] == ["injection"]
+    assert exc_info.value.details["supported_processes"] == ["die_casting", "injection"]
+
+
+def test_die_casting_scope_is_independent_and_topology_only(context):
+    adapter = build_default_process_registry().get("die_casting")
+
+    plan = adapter.compile(context, {})
+
+    assert plan.process == "die_casting"
+    assert plan.scope_id == "die_casting.topology-baseline"
+    assert plan.scope_version == "1.0.0"
+    assert [item.operation for item in plan.operations] == [
+        "load_step",
+        "inspect_topology",
+    ]
+    assert tuple(adapter.required_facts()) == ("model_units",)
 
 
 def test_injection_default_scope_has_versioned_parameter_provenance(context):

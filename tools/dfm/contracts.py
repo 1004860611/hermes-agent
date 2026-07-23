@@ -317,6 +317,7 @@ class WorkerEvent:
     path: str | None = None
     code: str | None = None
     message: str | None = None
+    external_job_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -410,6 +411,8 @@ class InputRecord:
     created_at: str
     preflight: dict[str, Any] = field(default_factory=dict)
     supersedes_input_id: str | None = None
+    format_id: str = ""
+    representation: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -422,6 +425,8 @@ class InputRecord:
             "created_at": self.created_at,
             "preflight": dict(self.preflight),
             "supersedes_input_id": self.supersedes_input_id,
+            "format_id": self.format_id,
+            "representation": self.representation,
         }
 
     @classmethod
@@ -472,6 +477,7 @@ class RunRecord:
     event_log_path: str | None = None
     worker_stdout_path: str | None = None
     worker_stderr_path: str | None = None
+    external_job_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -494,6 +500,7 @@ class RunRecord:
             "event_log_path": self.event_log_path,
             "worker_stdout_path": self.worker_stdout_path,
             "worker_stderr_path": self.worker_stderr_path,
+            "external_job_id": self.external_job_id,
         }
 
     @classmethod
@@ -513,6 +520,8 @@ class ProjectManifest:
     created_at: str
     updated_at: str
     domain: str = "injection_molding"
+    process: str = "injection"
+    process_source: str = "default"
     input_mode: str | None = None
     inputs: list[InputRecord] = field(default_factory=list)
     facts: list[FactRecord] = field(default_factory=list)
@@ -535,6 +544,8 @@ class ProjectManifest:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "domain": self.domain,
+            "process": self.process,
+            "process_source": self.process_source,
             "input_mode": self.input_mode,
             "revision": self.revision,
             "idempotency_key": self.idempotency_key,

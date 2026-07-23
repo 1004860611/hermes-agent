@@ -40,13 +40,13 @@ def test_registry_rejects_duplicates_and_returns_deterministic_keys(tmp_path):
     assert registry.get("test").capability(_context(tmp_path)).status is CapabilityStatus.AVAILABLE
 
 
-def test_default_registry_exposes_three_production_boundaries(tmp_path):
+def test_default_registry_exposes_geometry_and_document_boundaries(tmp_path):
     registry = build_default_registry()
     context = _context(tmp_path)
 
     capabilities = {key: registry.get(key).capability(context) for key in registry.keys()}
 
-    assert registry.keys() == ["drawing", "fusion", "step"]
+    assert registry.keys() == ["drawing", "fusion", "parasolid", "step"]
     assert capabilities["step"].status in {
         CapabilityStatus.AVAILABLE,
         CapabilityStatus.DEPENDENCY_MISSING,

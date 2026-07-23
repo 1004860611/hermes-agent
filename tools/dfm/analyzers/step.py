@@ -107,7 +107,9 @@ class StepAnalyzer:
             "The isolated STEP analyzer is available.",
             details={
                 "worker_version": self.version,
-                "supported_processes": ["injection"],
+                "supported_processes": ["die_casting", "injection"],
+                "format_ids": ["step"],
+                "representation": "brep",
             },
         )
 
@@ -128,11 +130,11 @@ class StepAnalyzer:
             raise DFMError(
                 "plan_required", "A persisted DFM execution plan is required."
             )
-        if context.plan.process != "injection":
+        if context.plan.process not in {"injection", "die_casting"}:
             raise DFMError(
                 "unsupported_capability",
                 f"DFM process is not supported: {context.plan.process}",
-                {"supported_processes": ["injection"]},
+                {"supported_processes": ["die_casting", "injection"]},
             )
         input_record = next(
             (

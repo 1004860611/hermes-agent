@@ -131,9 +131,31 @@ def normalize_legacy_issues(
     algorithm_version: str,
     stats: dict[str, Any] | None = None,
     thresholds: dict[str, Any] | None = None,
+    process: str = "injection",
 ) -> tuple[list[MeasurementRecord], list[EvaluationRecord]]:
     measurements = _model_measurements(stats or {}, input_sha256, algorithm_version)
     evaluations: list[EvaluationRecord] = []
+    if process == "die_casting":
+        valid = (stats or {}).get("valid_brep")
+        measurement = next(
+            (item for item in measurements if item.metric == "valid_brep"), None
+        )
+        if isinstance(valid, bool) and measurement is not None:
+            evaluations.append(
+                EvaluationRecord(
+                    "evaluation-die-casting-valid-brep",
+                    "invalid_brep",
+                    [measurement.measurement_id],
+                    "valid_brep_required",
+                    "==",
+                    True,
+                    valid,
+                    "pass" if valid else "fail",
+                )
+            )
+        # The first approved die-casting scope is deliberately topology-only.
+        # Legacy issue thresholds belong to injection and must not leak across processes.
+        return measurements, evaluations
     for issue in issues:
         code = str(issue.get("code") or "unknown")
         catalog_entry = issue_catalog().get(code, {})

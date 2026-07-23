@@ -38,8 +38,10 @@ class ProcessAdapterRegistry:
 
 
 def build_default_process_registry() -> ProcessAdapterRegistry:
+    from .die_casting import DieCastingProcessAdapter
     from .injection import InjectionProcessAdapter
 
     registry = ProcessAdapterRegistry()
     registry.register(InjectionProcessAdapter())
+    registry.register(DieCastingProcessAdapter())
     return registry

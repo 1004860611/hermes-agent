@@ -1,6 +1,6 @@
 ---
 name: dfm-analysis
-description: Use when analyzing injection-molded part manufacturability from STEP/STP CAD, PDF engineering drawings, or PNG/JPG drawing images with the built-in dfm_project and dfm_analysis tools.
+description: Use when analyzing injection-molded or die-cast part manufacturability from STEP/STP CAD, reserved Parasolid x_t input, PDF engineering drawings, or PNG/JPG drawing images with the built-in dfm_project and dfm_analysis tools.
 license: MIT
 metadata:
   hermes:
@@ -21,12 +21,13 @@ not bypass that decision or return control to the Agent Loop from inside the
 worker.
 
 1. Call `dfm_project` with `create`, unless continuing a known `project_id`.
-2. Call `dfm_project` with `add_input` for every STEP/STP or drawing `@file:` reference.
+2. Call `dfm_project` with `add_input` for every STEP/STP, Parasolid x_t, or drawing `@file:` reference. An accepted x_t intake does not mean its geometry reader is available; inspect capability before planning.
 3. Call project `status`. Inspect the input mode and every analyzer `capability`.
-4. Ask only for missing facts that affect valid checks: material, molding process, model units, nominal wall, or pull direction. If `dfm_analysis(plan)` returns `status=clarification_required`, it is a hard stop: do **not** answer the questions yourself and do **not** call `confirm_fact` in the same turn. Call the Hermes `clarify` tool for each open question so Desktop shows its blocking question panel; wait for the user's response, then call `confirm_fact` with exactly that response. Use canonical names `material`, `model_units`, and `pull_dir` (the service also accepts `units` and `pull_direction` aliases); keep them `confirmed`, not inferred.
-5. Call `dfm_analysis` with `plan`. In M1, omitted process selection means the
-   built-in `injection` adapter and its default `injection.legacy-baseline`
-   scope. Inspect the returned process, scope version, input hashes, operations,
+4. Pass `process=injection` or `process=die_casting` when the user has selected it; never infer the process from part shape. Ask only the process adapter's returned missing facts. If `dfm_analysis(plan)` returns `status=clarification_required`, it is a hard stop: do **not** answer the questions yourself and do **not** call `confirm_fact` in the same turn. Call the Hermes `clarify` tool for each open question so Desktop shows its blocking question panel; wait for the user's response, then call `confirm_fact` with exactly that response. Use the canonical fact names returned by the service; keep them `confirmed`, not inferred.
+5. Call `dfm_analysis` with `plan`. Omitted process selection keeps the project's
+   current process; a new project defaults to the compatible `injection` adapter
+   and `injection.legacy-baseline` scope. Die casting currently exposes only its
+   approved topology gate. Inspect the returned process, scope version, input hashes, operations,
    and parameter provenance. Explain blocked checks and assumptions before
    execution.
 6. Call `start` only when the selected capability is `available`. Preserve its `run_id`.
@@ -45,9 +46,11 @@ worker.
 - `disabled`: ask the user to configure and enable the capability in a new session.
 - `unhealthy`: preserve project and Run IDs and report diagnostics.
 
-M1 executes STEP geometry only for injection molding. If the user requests
-machining, casting, sheet metal, or another process, do not relabel the
-injection plan: report `unsupported_capability` and the supported process list.
+STEP geometry supports the established injection scope and the initial die-casting
+topology gate. Do not run injection thresholds under a die-casting label. If the
+user requests machining, sheet metal, or another process, report
+`unsupported_capability` and the supported process list. Parasolid x_t remains
+an explicit reserved capability until an approved licensed reader is installed.
 Drawing-only and Fusion execution remain explicit unavailable capabilities.
 
 ## Engineering integrity

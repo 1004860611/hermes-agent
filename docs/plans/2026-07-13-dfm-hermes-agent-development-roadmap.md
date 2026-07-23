@@ -16,9 +16,12 @@ owners: DFM 工程团队
 
 ### 1.1 当前要做什么
 
-构建一个基于 Hermes 的注塑 DFM 分析智能体。它接收以下任意一种资料组合：
+构建一个基于 Hermes 的多工艺 DFM 分析智能体。当前已交付注塑 STEP
+闭环；下一阶段在保持该能力兼容的前提下拆分制造工艺与几何格式，支持
+注塑和压铸分别规划，并为 Parasolid `x_t` 输入预留经过能力门控的读取模块。
+它接收以下任意一种资料组合：
 
-1. 产品零件的三维设计文件（也可称为产品三维 CAD 模型）：第一阶段支持 `STEP` / `STP` 格式；
+1. 产品零件的三维设计文件（也可称为产品三维 CAD 模型）：当前支持 `STEP` / `STP`，后续通过独立 Reader 支持 Parasolid `x_t`；
 2. 产品零件的 2D 工程图纸：例如 PDF、PNG、JPG；
 3. 产品零件的三维设计文件与 2D 工程图纸同时提供。
 
@@ -40,7 +43,7 @@ owners: DFM 工程团队
 - 不建设通用 CAD 查看、编辑或创作能力。
 - 不自动修改客户的产品零件设计文件。
 - 不让大语言模型直接生成壁厚、拔模角、距离或风险分数。
-- 不在第一阶段同时覆盖注塑以外的全部制造工艺。
+- 不一次覆盖全部制造工艺；当前生产基线为注塑，下一优先工艺为压铸。
 
 ### 1.4 最终形态
 
@@ -102,7 +105,7 @@ DFM 采用“内建代码、按需启用”的方式：
 
 | 输入模式       | 主要信息来源                             | 可以完成                                               | 必须提示的限制                                                                       |
 | ---------------- | ------------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| 仅 STEP        | B-Rep 几何、拓扑、尺寸关系               | 几何有效性、壁厚、拔模角、倒扣、孔槽、距离等确定性检查 | 材料、工艺、公差和局部特殊要求可能缺失，需要追问或采用经用户确认的规则假设           |
+| 仅三维 B-Rep（当前 STEP） | B-Rep 几何、拓扑、尺寸关系 | 几何有效性、壁厚、拔模角、倒扣、孔槽、距离等确定性检查 | 材料、工艺、公差和局部特殊要求可能缺失；`x_t` 只有 Reader 能力可用并通过格式验收后才能进入同一计算层 |
 | 仅 2D 图纸     | 标题栏、尺寸、公差、技术说明、视图和标注 | 文本指标提取、特征定位、规则预检查、资料完整性检查     | 没有可靠比例或明确尺寸时，不得从像素推断精确几何值；需要 STEP 的检查应标记为无法执行 |
 | STEP + 2D 图纸 | 几何事实与设计要求的组合                 | 完整分析、图纸要求与几何测量交叉校验、局部特征规则应用 | 二维特征映射到 STEP 拓扑存在歧义时，必须保留置信度并请求确认                         |
 
@@ -115,7 +118,7 @@ flowchart TB
     U[用户 / DFM 工程师]
 
     subgraph IN[输入资料]
-        S[产品零件三维设计文件<br/>产品 CAD 模型：STEP / STP]
+        S[产品零件三维设计文件<br/>当前 STEP / STP；预留 Parasolid x_t]
         D[产品零件 2D 工程图纸<br/>PDF / PNG / JPG]
         T[用户补充说明与回答]
     end
@@ -131,7 +134,7 @@ flowchart TB
     end
 
     subgraph E[确定性工程能力层]
-        SI[STEP 接收与几何解析]
+        SI[几何输入与 Reader<br/>STEP；预留 Parasolid x_t]
         DI[图纸 OCR / 版面解析]
         FD[工程特征识别<br/>螺牙 / 油管 / 孔 / 筋等]
         GT[几何分析工具<br/>壁厚 / 拔模角 / 倒扣 / 距离等]
@@ -702,6 +705,43 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 
 **退出标准：** STEP 用户可以完成上传、追问、计划、分析、取消/恢复、证据检查和报告导出；相同输入、配置和分析器版本产生可复现结果。
 
+### M2.5：多工艺与多几何格式架构适配
+
+**目标：** 在不改变现有注塑 STEP 默认行为、规则版本和结果契约的前提下，
+把制造工艺选择、几何文件读取和几何检查执行拆成正交能力；使项目能够明确
+选择 `injection` 或 `die_casting`，并为 Parasolid `x_t` 建立可查询、不可误用的
+HTTP NX Backend 插槽，为后续优先落地压铸 DFM 提供稳定边界。
+
+**主要工作：**
+
+- 将 `process`、`geometry_format`、`document_mode` 和 analyzer capability 分开建模，
+  不再用 `input_mode=step` 同时代表文件格式、资料组合和执行能力。
+- 保留 `InjectionProcessAdapter`、`injection.legacy-baseline@1.1.0`、现有 STEP
+  operations、参数来源和 Finding `rule_ref`；未显式选择工艺的既有项目继续按
+  `injection` 规划。
+- 新增 `DieCastingProcessAdapter` 和版本化压铸 scope 契约。未批准的压铸检查
+  返回 `not_implemented`/`unsupported_capability`，不得复用注塑阈值冒充压铸规则。
+- 把材料、单位、拔模方向等澄清要求从 `_STEP_REQUIRED_FACTS` 迁移为按工艺、
+  scope 和 operation 声明的前置事实；压铸可增加合金、压铸方法、关键质量目标等
+  自己的要求，而不改变注塑问题集。
+- 引入 `GeometryReader`/`GeometryModel` 边界，将 STEP Reader 与可复用 B-Rep
+  检查解耦；先保持现有 STEP worker 行为等价，再逐步把通用检查从 `geometry/step`
+  提升到 `geometry/brep`。
+- 为 `.x_t`/Parasolid 建立独立格式 ID、预检契约、Reader registry、依赖和许可
+  capability。没有经过真实 SDK/转换器验收时只返回不可用状态，不仅凭扩展名登记
+  为可分析输入。
+- 建立工艺 × 格式 × operation 能力矩阵和组合门控。例如“压铸 + STEP + 已实现
+  检查”可运行，“压铸 + x_t + Reader 缺失”明确阻塞，同时不影响“注塑 + STEP”。
+- 增加兼容性、错误隔离和真实 E2E 回归，证明新增注册项不会改变现有注塑 Plan、
+  Measurement、Evaluation、Finding、Artifact 和报告。
+
+**退出标准：** 现有注塑 STEP E2E 在相同输入和配置下保持批准的行为等价；项目可
+显式选择注塑或压铸并生成各自独立的 Plan/scope provenance；至少一条批准的压铸
+STEP 垂直检查链路能够运行，尚未实现的压铸检查明确阻塞；`x_t` capability 能准确
+说明 Reader/许可证/格式版本状态，未安装 Reader 时不会影响 STEP；不得出现跨工艺
+阈值、规则引用或结果污染。详细实施计划见
+[M2.5 多工艺与多几何格式架构适配](2026-07-22-dfm-m25-multi-process-geometry.md)。
+
 ### M3：2D 图纸文本理解与指标提取
 
 **目标：** 从 2D 图纸中提取可追溯的产品指标要求。
@@ -840,7 +880,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | Desktop 远程上传大型 STEP 占用过多内存     | 生产前增加传输层大小上限、分块或直传；intake 再做第二层校验                        |
 | 为 DFM 重写 Desktop 聊天造成双状态源        | 复用现有 `file.attach`、JSON-RPC、会话和 Artifacts；专用 UI 仅做附属视图            |
 | SimpleCADAPI 引入技术或许可锁定            | 置于 PoC 和许可决策门之后，必要时只借鉴设计理念                                    |
-| 范围扩张为通用制造平台                     | 第一阶段只做注塑 DFM；其他工艺按独立规则和工具包立项                               |
+| 范围无控制地扩张为通用制造平台             | 已交付注塑基线后只按独立 ProcessAdapter、规则 scope、能力矩阵和验收语料逐项增加工艺；下一优先项限定为压铸 |
 
 ## 15. 决策记录
 
@@ -857,6 +897,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | 2026-07-13 | 第一阶段制造领域限定为注塑。                                                            | 先完成可验收闭环，再评估扩展到其他工艺。                                       |
 | 2026-07-13 | 第一版改为当前 Hermes fork 自带的内建 DFM 能力；此前“优先独立包/插件”的决策被本条替代。 | 当前目标是先在官方 Hermes 基线之上跑通产品闭环，独立发布不是前置条件。          |
 | 2026-07-13 | DFM 使用默认关闭的独立 toolset，不加入 `_HERMES_CORE_TOOLS`。                           | 允许采用常驻源码，同时避免无关会话承担工具 Schema 成本并保护提示词缓存。        |
+| 2026-07-22 | M2 注塑 STEP 闭环完成后插入 M2.5，下一优先工艺调整为压铸，并预留 Parasolid `x_t` Reader；2026-07-13 的“第一阶段限定注塑”在已交付基线范围内仍成立，本条负责后续扩展。 | 先拆分工艺、几何格式和检查能力，再增加压铸规则与算法，可保护现有注塑结果并避免为 `x_t` 复制分析链路。 |
 | 2026-07-13 | M0 优先搭建终极架构所需契约和模块接口，具体算法后接。                                   | 后续 STEP、2D、融合与规则能力应通过稳定接口扩展，不反复改动工具和项目主结构。    |
 | 2026-07-13 | Desktop 首先复用现有附件、Gateway JSON-RPC 和 Artifacts，不建设 DFM 专用聊天页。         | 当前代码已经具备上传和结果发现链路；专用 UI 应是非破坏性的增强。                |
 | 2026-07-14 | M0 基础架构通过纵向验收，后续进入 M1 现有 STEP 行为基线与分析器适配。                    | 真实工具发现、生产显式失败、测试分析器异步成功和 Desktop artifact 路径均已有自动化证据。 |
@@ -874,6 +915,7 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 | M1 现有行为基线与 STEP 分析器适配 | 已完成 | `tests/tools/dfm/test_m1_baseline.py`、`test_m1_e2e.py`；OCC 矩阵 130 passed；无 OCC 矩阵 128 passed、2 dependency-gated skipped；合成样件与 profile 位于 `tests/fixtures/dfm/step/` |
 | M1.2 STEP 指标拆解与检查族模块化 | 已完成 | `tests/tools/dfm/test_m12_measurements.py`、`test_m1_baseline.py`、`test_m1_e2e.py`；检查族物理模块、共享 STEP 索引、版本化 issue catalog、真实 Plan 门控、`measurements.json`、evidence/reporting 分层和完整 DFM 矩阵 |
 | M2 STEP DFM Hermes 端到端闭环     | 已完成 | [M2 实施记录](2026-07-21-dfm-m2-end-to-end.md)；STEP 预检、持久化澄清、Finding/Artifacts、输入版本/增量重跑、CLI/部署与 Desktop Artifacts 验收已覆盖 |
+| M2.5 多工艺与多几何格式架构适配 | 已完成 | [M2.5 实施计划](2026-07-22-dfm-m25-multi-process-geometry.md)；139 项 DFM 回归、真实 OCC 压铸 STEP E2E；保持注塑 STEP 基线，交付压铸拓扑门、Parasolid `x_t` Reader 和 HTTP-only NX Backend Client 契约 |
 | M3 2D 图纸文本理解与指标提取      | 未开始 |           |
 | M4 2D 工程特征识别                | 未开始 |           |
 | M5 事实融合、分析规划与工具编排   | 未开始 |           |
@@ -884,16 +926,16 @@ SimpleCADAPI 当前只作为技术候选和设计参考，不作为已确定的�
 
 ## 17. 下一步工作
 
-下一份可执行实施计划应覆盖 M2，建议按以下顺序开展：
+下一份可执行实施计划覆盖 M3；压铸规则扩展和 NX Server/C++ 插件 PoC 作为并行决策门推进，建议按以下顺序开展：
 
-1. 为 STEP 输入增加真实格式/magic、B-Rep 可读性和复杂度预检，在进入重型 worker 前返回可恢复错误。
-2. 建立材料、拔模方向、单位和关键注塑参数的澄清门控，把用户确认事实映射到 Plan 参数 provenance。
-3. 基于 M1.2 的 Measurement/Evaluation 和版本化 issue catalog，把兼容 issue 适配为稳定 Finding 和 evidence 引用，不改写原始报告制品。
-4. 完成项目继续、输入新版本、Plan 失效传播和受影响步骤重跑语义。
-5. 验证 Desktop 附件到 DFM intake、运行状态、Artifacts 发现和报告打开的真实交互闭环。
-6. 补齐安装/容器配置、`dfm.runtime.python`、OpenCascade 依赖和故障排查文档。
+1. 启动 M3 页面渲染、原生 PDF 文本和 OCR Provider 设计，保持图纸-only 能力显式阻塞。
+2. 根据压铸代表性样件批准首批壁厚、拔模、倒扣或圆角规则，新增独立压铸 scope，不改写注塑 scope。
+3. 完成 NX Server/C++ 插件的 Parasolid `x_t` 版本、许可证和转换保真 PoC 后，再将 NX Backend capability 改为可执行状态。
+4. 持续执行工艺 × 格式能力矩阵、错误隔离和注塑无回归 E2E 验收。
 
-M2 继续限定注塑 STEP 闭环；不训练 OCR/视觉模型、不开发第二套 Desktop 聊天页、不启用其他制造工艺，也不开展 SimpleCADAPI 集成。这些工作仍按后续里程碑和决策门推进。
+M2.5 不训练 OCR/视觉模型、不开发第二套 Desktop 聊天页，也不因规划优先级变化而
+重写现有注塑规则。`x_t` 在 Reader 未验收前是明确预留能力，不是生产可用声明；
+2D 图纸文本理解仍由 M3 开始。
 
 ## 18. 文档维护规则
 

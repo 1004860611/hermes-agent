@@ -1,7 +1,7 @@
 ---
 title: "单次 DFM 分析数据说明"
 status: active
-milestone: M2
+milestone: M2.5
 last_updated: 2026-07-21
 type: living-runbook
 owners: DFM 工程团队
@@ -9,7 +9,7 @@ owners: DFM 工程团队
 
 # 单次 DFM 分析数据说明
 
-本文说明当前 M2 开发版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
+本文说明当前 M2.5 开发版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
 
 本文是随 DFM 里程碑持续更新的活文档。这里描述的是**当前已实现行为**；长期目标、尚未实现的输入模式和演进路线参见 [DFM Hermes Agent 开发目标与路线图](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)。
 
@@ -17,28 +17,28 @@ owners: DFM 工程团队
 
 | 能力 | M1 状态 |
 | --- | --- |
-| 制造工艺 | 支持注塑 `injection` |
-| 三维输入 | 支持 STEP/STP 产品零件模型 |
+| 制造工艺 | 注塑 `injection` 完整基线；压铸 `die_casting` 首条 STEP 拓扑有效性门 |
+| 三维输入 | 支持 STEP/STP；Parasolid `x_t` 可登记，配置 `dfm.nx.endpoint` 后通过远程 NX HTTP Backend 查询/执行，未配置时返回 `dependency_missing` |
 | 2D 图纸/OCR | 接口预留，尚未形成生产分析闭环 |
 | 混合输入融合 | 接口预留，尚未形成生产分析闭环 |
 | 几何计算 | OpenCascade / `pythonocc-core` |
-| 工艺规则 | `injection` ProcessAdapter，默认范围 `injection.legacy-baseline@1.1.0` |
+| 工艺规则 | 注塑 `injection.legacy-baseline@1.1.0`；压铸 `die_casting.topology-baseline@1.0.0` |
 | 执行方式 | Hermes 主进程管理 Run，STEP worker 隔离子进程执行 |
 | 结果 | Measurement/Evaluation JSON、兼容报告 JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
 | Desktop | 复用附件上传、聊天进度和 Artifacts 展示 |
 
-M1 不分析模具设计模型，也不分析型芯、型腔、滑块、顶针、浇注系统或冷却系统。
+M2.5 不分析模具设计模型，也不分析型芯、型腔、滑块、顶针、浇注系统或冷却系统；压铸尚未开放壁厚、拔模和倒扣规则。
 
 ## 2. 一次分析的调用流程
 
 ```text
 用户 / Desktop
   │
-  ├─ 上传 STEP
+  ├─ 上传 STEP（或登记 x_t）
   │
   v
 Hermes Agent
-  │  理解目标、选择 injection、必要时追问
+  │  理解目标、选择 injection/die_casting、必要时追问
   │
   ├─ dfm_project(create)
   ├─ dfm_project(add_input)
@@ -49,10 +49,11 @@ Hermes Agent
   └─ dfm_analysis(result)
           │
           v
-DFMService → JobManager → StepAnalyzer → STEP worker
+DFMService → JobManager → ProcessAdapter + Analyzer → geometry worker
                                       │
                                       ├─ OpenCascade 几何计算
                                       ├─ 注塑规则检查
+                                      └─ 压铸拓扑门（当前）
                                       ├─ 证据图片渲染
                                       └─ JSON/MD/PPTX 报告生成
 ```
@@ -185,7 +186,7 @@ STEP 项目在生成可执行 Plan 前必须确认 `material`、`pull_dir` 和 `
 
 ### M1.2 边界
 
-`facts`、`clarifications`、`features` 和 `findings` 契约已经存在。M2 将 STEP `measurements.json` 中 `outcome=fail` 的 Evaluation 归一化为项目级 Finding：
+`facts`、`clarifications`、`features` 和 `findings` 契约已经存在。M2.5 在保持注塑结果不变的前提下，将压铸拓扑门的失败 Evaluation 归一化为压铸规则引用的项目级 Finding：
 
 - 已确认工艺参数可以写入 `facts` 并参与 Plan 编译；
 - 每次 STEP Run 都生成 `measurements.json`，保存输入哈希、算法版本、实际 operations、客观模型测量、问题测量及规则 Evaluation；
@@ -199,7 +200,7 @@ STEP 项目在生成可执行 Plan 前必须确认 `material`、`pull_dir` 和 `
 
 PlanRecord 保存：
 
-- `process`：当前为 `injection`；
+- `process`：由 Plan 固定为 `injection` 或 `die_casting`；
 - `process_adapter_version`；
 - `scope_id` 与 `scope_version`；
 - 输入 ID 和输入哈希；

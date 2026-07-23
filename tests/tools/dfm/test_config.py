@@ -32,6 +32,11 @@ def test_dfm_config_reads_nested_values():
                 "defaults": {"process": "injection"},
                 "retention": {"keep_failed_runs": False},
                 "evidence": {"max_rendered_findings": 7},
+                "nx": {
+                    "endpoint": "https://nx.example.internal/",
+                    "request_timeout_seconds": 15,
+                    "poll_interval_seconds": 1,
+                },
             }
         }
     )
@@ -44,6 +49,9 @@ def test_dfm_config_reads_nested_values():
     assert config.max_pages == 8
     assert config.keep_failed_runs is False
     assert config.max_evidence_findings == 7
+    assert config.nx_endpoint == "https://nx.example.internal"
+    assert config.nx_request_timeout_seconds == 15
+    assert config.nx_poll_interval_seconds == 1
 
 
 def test_dfm_config_normalizes_the_m0_process_name():

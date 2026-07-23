@@ -6,6 +6,7 @@ import pytest
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from tools.dfm.analyzers.drawing import DrawingAnalyzer
 from tools.dfm.analyzers.fusion import FusionAnalyzer
+from tools.dfm.analyzers.parasolid import ParasolidAnalyzer
 from tools.dfm.analyzers.registry import AnalyzerRegistry
 from tools.dfm.analyzers.step import StepAnalyzer
 from tools.dfm.errors import DFMError
@@ -35,6 +36,7 @@ def service(tmp_path):
     registry.register(StepAnalyzer(dependency_probe=lambda: False))
     registry.register(DrawingAnalyzer())
     registry.register(FusionAnalyzer())
+    registry.register(ParasolidAnalyzer())
     instance = DFMService(registry=registry, reconcile_jobs=False)
     try:
         yield instance, tmp_path
@@ -244,3 +246,51 @@ def test_desktop_file_reference_prefix_is_accepted(service):
     result = dfm.project("add_input", project_id=project_id, path=f"@file:{source}")
 
     assert result["input"]["source_name"] == "part.step"
+
+
+def test_die_casting_plan_uses_its_own_facts_scope_and_operations(service):
+    dfm, temp = service
+    project_id = dfm.project("create", name="Die-cast housing")["project_id"]
+    source = temp / "housing.step"
+    source.write_bytes(STEP_PAYLOAD)
+    dfm.project("add_input", project_id=project_id, path=str(source))
+
+    blocked = dfm.analysis("plan", project_id=project_id, process="die_casting")
+
+    assert [item["clarification_id"] for item in blocked["clarifications"]] == [
+        "clarification_model_units"
+    ]
+    dfm.project(
+        "confirm_fact",
+        project_id=project_id,
+        fact_name="model_units",
+        fact_value="mm",
+    )
+    result = dfm.analysis("plan", project_id=project_id, process="die_casting")
+    status = dfm.project("status", project_id=project_id)
+
+    assert result["plan"]["process"] == "die_casting"
+    assert result["plan"]["scope_id"] == "die_casting.topology-baseline"
+    assert [item["operation"] for item in result["plan"]["operations"]] == [
+        "load_step",
+        "inspect_topology",
+    ]
+    assert status["project"]["process"] == "die_casting"
+    assert status["project"]["process_source"] == "user_selected"
+
+
+def test_parasolid_capability_is_local_and_does_not_disable_step(service):
+    dfm, temp = service
+    project_id = dfm.project("create", name="NX backend capability")["project_id"]
+    source = temp / "part.x_t"
+    source.write_text("Parasolid transmit text file\nbody data\n", encoding="ascii")
+    dfm.project("add_input", project_id=project_id, path=str(source))
+
+    status = dfm.project("status", project_id=project_id)
+
+    assert status["project"]["inputs"][0]["format_id"] == "parasolid_xt"
+    assert status["capabilities"]["parasolid"]["status"] == "dependency_missing"
+    assert status["capabilities"]["step"]["status"] == "dependency_missing"
+    plan = dfm.analysis("plan", project_id=project_id)
+    assert plan["plan"]["status"] == "blocked"
+    assert plan["capability"]["status"] == "dependency_missing"

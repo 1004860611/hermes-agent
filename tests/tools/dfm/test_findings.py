@@ -49,3 +49,36 @@ def test_measurements_and_legacy_report_normalize_to_stable_finding(tmp_path):
     assert first[0].title == "Insufficient draft"
     assert first[0].rule_ref == "injection.legacy-issues@1.0.0:low_draft"
     assert first[0].evidence_refs == ["measurements.json", "dfm_report.json"]
+
+
+def test_die_casting_finding_never_uses_injection_rule_reference(tmp_path):
+    measurements = tmp_path / "measurements.json"
+    measurements.write_text(
+        json.dumps(
+            {
+                "input_sha256": "b" * 64,
+                "process": "die_casting",
+                "evaluations": [
+                    {
+                        "evaluation_id": "evaluation-die-casting-valid-brep",
+                        "check_id": "invalid_brep",
+                        "outcome": "fail",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifacts = [
+        ArtifactRecord(
+            "measurements",
+            "measurements",
+            "measurements.json",
+            "application/json",
+            "now",
+        )
+    ]
+
+    finding = materialize_findings(tmp_path, artifacts)[0]
+
+    assert finding.rule_ref == "die_casting.baseline-issues@1.0.0:invalid_brep"

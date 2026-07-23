@@ -95,6 +95,18 @@ def test_worker_passes_evidence_budget_to_legacy_config(tmp_path):
     assert _legacy_config(request)["max_evidence_issues"] == 12
 
 
+def test_die_casting_uses_generic_legacy_geometry_mode(tmp_path):
+    from tools.dfm.workers.step_worker import _legacy_config
+
+    request_path = _request(tmp_path, process="die_casting")
+    request = WorkerRequest.from_dict(
+        json.loads(request_path.read_text(encoding="utf-8"))
+    )
+
+    assert request.process == "die_casting"
+    assert _legacy_config(request)["process"] == "generic"
+
+
 def test_worker_classifies_powerpoint_report_artifact(tmp_path):
     from tools.dfm.workers.step_worker import _artifact_metadata
 

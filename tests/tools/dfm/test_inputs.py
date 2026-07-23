@@ -142,3 +142,20 @@ def test_streaming_copy_enforces_limit_even_if_initial_stat_is_stale(project, mo
         InputRegistrar(workspace, DFMConfig(max_file_size_mb=1)).register(project_id, source)
 
     assert exc_info.value.code == "input_too_large"
+
+
+def test_parasolid_is_registered_as_a_distinct_brep_format(project):
+    workspace, project_id, temp = project
+    source = temp / "part.x_t"
+    source.write_text("Parasolid transmit text file\nbody data\n", encoding="ascii")
+
+    record = InputRegistrar(workspace, DFMConfig()).register(project_id, source)
+    manifest = ManifestStore(workspace.project_dir(project_id)).load()
+
+    assert record.kind == "parasolid"
+    assert record.format_id == "parasolid_xt"
+    assert record.representation == "brep"
+    assert record.preflight["inspection_level"] == "opaque_text_only"
+    assert record.preflight["geometry_verified"] is False
+    assert record.preflight["geometry_verifier"] == "nx_http_backend"
+    assert manifest.input_mode == "parasolid"
