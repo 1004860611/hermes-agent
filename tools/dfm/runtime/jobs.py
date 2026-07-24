@@ -27,6 +27,7 @@ from ..contracts import (
     ensure_run_transition,
 )
 from ..errors import DFMError
+from ..evaluation import EvaluationEngine
 from ..findings import materialize_findings
 from ..project.manifest import ManifestStore
 from ..project.workspace import DFMWorkspace
@@ -61,6 +62,7 @@ class JobManager:
         self._listeners: dict[str, Callable[[RunRecord], None]] = {}
         self._lock = RLock()
         self.runtime_id = f"runtime_{uuid4().hex[:16]}"
+        self.evaluation_engine = EvaluationEngine()
         if reconcile:
             self.reconcile_incomplete_runs()
 
@@ -221,6 +223,16 @@ class JobManager:
             )
             artifacts = analyzer.run(context, token)
             checked = [self._validate_artifact(context.project_dir, item) for item in artifacts]
+            if plan is not None and any(item.kind == "measurements" for item in checked):
+                evaluation_artifact = self.evaluation_engine.materialize(
+                    context.project_dir,
+                    run_id,
+                    plan,
+                    checked,
+                )
+                checked.append(
+                    self._validate_artifact(context.project_dir, evaluation_artifact)
+                )
             self._complete_success(project_id, run_id, checked)
         except DFMError as exc:
             logger.warning(

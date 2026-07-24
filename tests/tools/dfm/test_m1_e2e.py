@@ -125,17 +125,25 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         measurement_ids = {
             item["measurement_id"] for item in measurement_payload["measurements"]
         }
+        evaluation_artifact = next(
+            item
+            for item in result["run"]["artifacts"]
+            if item["kind"] == "evaluations"
+        )
+        evaluation_payload = json.loads(
+            Path(evaluation_artifact["path"]).read_text(encoding="utf-8")
+        )
         assert all(
             set(item["measurement_refs"]) <= measurement_ids
             and item["outcome"] in {"pass", "fail", "indeterminate"}
-            for item in measurement_payload["evaluations"]
+            for item in evaluation_payload["evaluations"]
         )
         project_status = _dispatch(
             registry, "dfm_project", {"action": "status", "project_id": project_id}
         )
         findings = project_status["project"]["findings"]
         failed_evaluations = [
-            item for item in measurement_payload["evaluations"] if item["outcome"] == "fail"
+            item for item in evaluation_payload["evaluations"] if item["outcome"] == "fail"
         ]
         assert len(findings) == len(failed_evaluations)
         assert all(

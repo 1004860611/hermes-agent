@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ...contracts import EvaluationRecord, GeometryRef, MeasurementRecord
+from ...contracts import GeometryRef, MeasurementRecord
 
 
 MEASUREMENT_SCHEMA_VERSION = 1
@@ -124,7 +124,7 @@ def issue_catalog() -> dict[str, dict[str, Any]]:
     return {str(item["code"]): item for item in payload["issues"]}
 
 
-def normalize_legacy_issues(
+def normalize_legacy_measurements(
     issues: list[dict[str, Any]],
     *,
     input_sha256: str,
@@ -132,31 +132,11 @@ def normalize_legacy_issues(
     stats: dict[str, Any] | None = None,
     thresholds: dict[str, Any] | None = None,
     process: str = "injection",
-) -> tuple[list[MeasurementRecord], list[EvaluationRecord]]:
+) -> list[MeasurementRecord]:
     measurements = _model_measurements(stats or {}, input_sha256, algorithm_version)
-    evaluations: list[EvaluationRecord] = []
     if process == "die_casting":
-        valid = (stats or {}).get("valid_brep")
-        measurement = next(
-            (item for item in measurements if item.metric == "valid_brep"), None
-        )
-        if isinstance(valid, bool) and measurement is not None:
-            evaluations.append(
-                EvaluationRecord(
-                    "evaluation-die-casting-valid-brep",
-                    "invalid_brep",
-                    [measurement.measurement_id],
-                    "valid_brep_required",
-                    "==",
-                    True,
-                    valid,
-                    "pass" if valid else "fail",
-                )
-            )
-        # The first approved die-casting scope is deliberately topology-only.
-        # Legacy issue thresholds belong to injection and must not leak across processes.
-        return measurements, evaluations
-    for issue in issues:
+        return measurements
+    for issue_index, issue in enumerate(issues, start=1):
         code = str(issue.get("code") or "unknown")
         catalog_entry = issue_catalog().get(code, {})
         metric = issue.get("metric") if isinstance(issue.get("metric"), dict) else {}
@@ -166,7 +146,7 @@ def normalize_legacy_issues(
         value = metric.get(spec.value_key)
         if not isinstance(value, (int, float, bool)):
             continue
-        issue_id = str(issue.get("id") or f"issue-{len(evaluations) + 1}")
+        issue_id = str(issue.get("id") or f"issue-{issue_index}")
         measurement_id = f"measurement-{issue_id.lower()}"
         refs: list[GeometryRef] = []
         for ref in issue.get("refs") or []:
@@ -182,6 +162,9 @@ def normalize_legacy_issues(
                     )
                 except (KeyError, TypeError, ValueError):
                     continue
+        expected = metric.get(spec.threshold_key)
+        if expected is None:
+            expected = (thresholds or {}).get(spec.parameter_key)
         measurements.append(
             MeasurementRecord(
                 measurement_id,
@@ -197,25 +180,15 @@ def normalize_legacy_issues(
                 diagnostics={
                     "legacy_issue_id": issue_id,
                     "check_family": catalog_entry.get("family", "unmapped"),
+                    "evaluation_hint": {
+                        "parameter_ref": spec.parameter_key,
+                        "operator": spec.operator,
+                        "fallback_expected": expected,
+                    },
                 },
             )
         )
-        expected = metric.get(spec.threshold_key)
-        if expected is None:
-            expected = (thresholds or {}).get(spec.parameter_key)
-        evaluations.append(
-            EvaluationRecord(
-                f"evaluation-{issue_id.lower()}",
-                code,
-                [measurement_id],
-                spec.parameter_key,
-                spec.operator,
-                expected,
-                value,
-                "fail",
-            )
-        )
-    return measurements, evaluations
+    return measurements
 
 
 def _model_measurements(

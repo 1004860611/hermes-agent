@@ -17,20 +17,40 @@ def materialize_findings(
 
     by_kind = {item.kind: item for item in artifacts}
     measurements = by_kind.get("measurements")
+    evaluations_artifact = by_kind.get("evaluations")
     if measurements is None:
         return []
     try:
         payload = json.loads((project_dir / measurements.relative_path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise DFMError("measurements_invalid", "The DFM measurements artifact could not be read.") from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("evaluations"), list):
+    if not isinstance(payload, dict):
         raise DFMError("measurements_invalid", "The DFM measurements artifact has an invalid contract.")
+    if evaluations_artifact is not None:
+        try:
+            evaluation_payload = json.loads(
+                (project_dir / evaluations_artifact.relative_path).read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, ValueError) as exc:
+            raise DFMError(
+                "evaluations_invalid",
+                "The DFM evaluations artifact could not be read.",
+            ) from exc
+        evaluations = evaluation_payload.get("evaluations")
+    else:
+        # Read-only compatibility for historical runs created before the
+        # Hermes EvaluationEngine produced a separate artifact.
+        evaluations = payload.get("evaluations")
+    if not isinstance(evaluations, list):
+        raise DFMError("evaluations_invalid", "The DFM evaluations artifact has an invalid contract.")
 
     report_issues = _report_issues(project_dir, by_kind.get("report_json"))
     evidence_refs = [
         item.relative_path
         for item in artifacts
-        if item.kind in {"measurements", "report_json", "report_markdown", "evidence_image", "highlighted_step"}
+        if item.kind in {"measurements", "evaluations", "report_json", "report_markdown", "evidence_image", "highlighted_step"}
     ]
     input_hash = str(payload.get("input_sha256") or "")
     process = str(payload.get("process") or "injection")
@@ -39,7 +59,7 @@ def materialize_findings(
     else:
         catalog_id, catalog_version = "injection.legacy-issues", "1.0.0"
     results = []
-    for evaluation in payload["evaluations"]:
+    for evaluation in evaluations:
         if not isinstance(evaluation, dict) or evaluation.get("outcome") != "fail":
             continue
         check_id = str(evaluation.get("check_id") or "unmapped")

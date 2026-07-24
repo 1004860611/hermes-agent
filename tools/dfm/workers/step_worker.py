@@ -16,7 +16,7 @@ from ..errors import DFMError
 from ..runtime.events import encode_worker_event
 from ..geometry.step.measurements import (
     MEASUREMENT_SCHEMA_VERSION,
-    normalize_legacy_issues,
+    normalize_legacy_measurements,
 )
 from ..geometry.step.pipeline import validate_operations
 
@@ -213,7 +213,7 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         )
 
     input_sha256 = _input_sha256(input_path)
-    measurements, evaluations = normalize_legacy_issues(
+    measurements = normalize_legacy_measurements(
         list(report_result.get("issues") or []),
         input_sha256=input_sha256,
         algorithm_version=WORKER_VERSION,
@@ -240,7 +240,7 @@ def _execute(request: WorkerRequest) -> WorkerResult:
                     key: value.to_dict() for key, value in request.parameters.items()
                 },
                 "measurements": [item.to_dict() for item in measurements],
-                "evaluations": [item.to_dict() for item in evaluations],
+                "producer_contract": "measurement_only",
             },
             ensure_ascii=False,
             indent=2,

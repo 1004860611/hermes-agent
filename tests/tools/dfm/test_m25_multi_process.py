@@ -1,9 +1,10 @@
 import json
 
-from tools.dfm.contracts import ArtifactRecord
+from tools.dfm.contracts import ArtifactRecord, PlanRecord
+from tools.dfm.evaluation import EvaluationEngine
 from tools.dfm.findings import materialize_findings
 from tools.dfm.geometry.brep.checks import resolve_brep_check
-from tools.dfm.geometry.step.measurements import normalize_legacy_issues
+from tools.dfm.geometry.step.measurements import normalize_legacy_measurements
 
 
 def test_step_operations_resolve_through_format_independent_brep_registry():
@@ -14,13 +15,24 @@ def test_step_operations_resolve_through_format_independent_brep_registry():
 def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
     tmp_path,
 ):
-    measurements, evaluations = normalize_legacy_issues(
+    measurements = normalize_legacy_measurements(
         [],
         input_sha256="c" * 64,
         algorithm_version="step-m12-v1",
         stats={"valid_brep": False},
         process="die_casting",
     )
+    plan = PlanRecord(
+        "plan_1",
+        "step",
+        ["step"],
+        "ready",
+        "now",
+        process="die_casting",
+        scope_id="die_casting.topology-baseline",
+        scope_version="1.0.0",
+    )
+    evaluations, _ = EvaluationEngine().evaluate(measurements, plan)
 
     assert any(item.metric == "valid_brep" for item in measurements)
     assert len(evaluations) == 1
@@ -31,13 +43,22 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
     assert evaluations[0].parameter_ref == "valid_brep_required"
     assert evaluations[0].outcome == "fail"
 
-    path = tmp_path / "measurements.json"
-    path.write_text(
+    measurement_path = tmp_path / "measurements.json"
+    measurement_path.write_text(
         json.dumps(
             {
                 "input_sha256": "c" * 64,
                 "process": "die_casting",
                 "measurements": [item.to_dict() for item in measurements],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evaluation_path = tmp_path / "evaluations.json"
+    evaluation_path.write_text(
+        json.dumps(
+            {
+                "process": "die_casting",
                 "evaluations": [item.to_dict() for item in evaluations],
             }
         ),
@@ -48,7 +69,10 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
         [
             ArtifactRecord(
                 "m", "measurements", "measurements.json", "application/json", "now"
-            )
+            ),
+            ArtifactRecord(
+                "e", "evaluations", "evaluations.json", "application/json", "now"
+            ),
         ],
     )
 

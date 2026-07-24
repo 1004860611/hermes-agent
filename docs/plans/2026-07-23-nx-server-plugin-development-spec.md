@@ -521,8 +521,8 @@ GET /v1/jobs/{job_id}/artifacts/{artifact_id}
     "plugin_version": "1.0.0"
   },
   "operations": ["load_step", "inspect_topology"],
-  "measurements": [],
-  "evaluations": []
+  "producer_contract": "measurement_only",
+  "measurements": []
 }
 ```
 
@@ -561,23 +561,10 @@ GET /v1/jobs/{job_id}/artifacts/{artifact_id}
 NX 插件可以在 `diagnostics` 中额外保存 NX persistent identifier，但不能只返回无法被
 Hermes 使用的 NX 内存句柄。`index` 必须在同一不可变输入和同一插件版本下可重复。
 
-NX 插件原则上只输出 Measurement。若临时输出 Evaluation，必须符合：
-
-```json
-{
-  "evaluation_id": "evaluation-xxx",
-  "check_id": "invalid_brep",
-  "measurement_refs": ["measurement-model-valid-brep"],
-  "parameter_ref": "valid_brep_required",
-  "operator": "==",
-  "expected": true,
-  "actual": false,
-  "outcome": "fail"
-}
-```
-
-但正式工艺阈值 Evaluation 应留给 Hermes；后续 Hermes NX adapter 会根据标准
-Measurement 和规则生成它们。
+NX 插件和 NX Server 只输出 Measurement，不输出 Evaluation。Hermes 在 Artifact
+下载和哈希校验后，由统一 `EvaluationEngine` 使用持久化 Plan 参数和版本化规则生成
+独立 `evaluations.json`；随后 Finding 层消费该 Artifact。Server 返回的 Evaluation
+字段不会作为生产结论使用。
 
 ## 7. C++ 插件内部请求契约
 

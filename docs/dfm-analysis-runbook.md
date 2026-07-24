@@ -24,7 +24,7 @@ owners: DFM 工程团队
 | 几何计算 | OpenCascade / `pythonocc-core` |
 | 工艺规则 | 注塑 `injection.legacy-baseline@1.1.0`；压铸 `die_casting.topology-baseline@1.0.0` |
 | 执行方式 | Hermes 主进程管理 Run，STEP worker 隔离子进程执行 |
-| 结果 | Measurement/Evaluation JSON、兼容报告 JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
+| 结果 | Worker `measurements.json`、Hermes `evaluations.json`、兼容报告 JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
 | Desktop | 复用附件上传、聊天进度和 Artifacts 展示 |
 
 M2.5 不分析模具设计模型，也不分析型芯、型腔、滑块、顶针、浇注系统或冷却系统；压铸尚未开放壁厚、拔模和倒扣规则。
@@ -287,7 +287,8 @@ RunRecord 同时保存：
 | 文件 | 类型/用途 | 主要使用者 |
 | --- | --- | --- |
 | `worker_result.json` | worker 原始结果、输入哈希、参数、artifact 元数据 | Analyzer、开发诊断 |
-| `measurements.json` | 版本化 Measurement、Evaluation、实际 operations 和几何引用 | 后续 Finding 归一化、系统集成、开发诊断 |
+| `measurements.json` | 几何 Worker 输出的版本化客观 Measurement、实际 operations 和几何引用 | EvaluationEngine 输入、系统集成、开发诊断 |
+| `evaluations.json` | Hermes EvaluationEngine 使用 Plan 参数/版本化规则比较后生成的 Evaluation 和 provenance | Finding 归一化、规则审计 |
 | `dfm_report.json` | 结构化 DFM 分析结果 | 系统集成、后续归一化 |
 | `dfm_report.md` | 可读文本报告和兼容交付 | Agent、开发者 |
 | `dfm_report.pptx` | 当前主要用户交付报告 | Desktop 用户 |

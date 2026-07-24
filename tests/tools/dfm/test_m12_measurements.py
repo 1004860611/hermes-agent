@@ -8,13 +8,16 @@ from tools.dfm.contracts import (
     EvaluationRecord,
     GeometryRef,
     MeasurementRecord,
+    EffectiveParameter,
+    PlanRecord,
     PlanOperation,
 )
 from tools.dfm.errors import DFMError
+from tools.dfm.evaluation import EvaluationEngine
 from tools.dfm.geometry.step.measurements import (
     _ISSUE_METRICS,
     issue_catalog,
-    normalize_legacy_issues,
+    normalize_legacy_measurements,
 )
 from tools.dfm.geometry.step.pipeline import validate_operations
 from tools.dfm.workers.step_worker import WORKER_VERSION
@@ -50,7 +53,7 @@ def test_measurement_and_evaluation_contracts_round_trip():
 
 
 def test_legacy_issue_normalization_separates_measurement_and_threshold():
-    measurements, evaluations = normalize_legacy_issues(
+    measurements = normalize_legacy_measurements(
         [
             {
                 "id": "DFM-001",
@@ -67,11 +70,31 @@ def test_legacy_issue_normalization_separates_measurement_and_threshold():
     assert measurements[0].diagnostics == {
         "legacy_issue_id": "DFM-001",
         "check_family": "planar_spacing",
+        "evaluation_hint": {
+            "parameter_ref": "min_wall_mm",
+            "operator": ">=",
+            "fallback_expected": 1.2,
+        },
     }
     assert [ref.index for ref in measurements[0].geometry_refs] == [2, 5]
+    plan = PlanRecord(
+        "plan_1",
+        "step",
+        ["step"],
+        "ready",
+        "now",
+        process="injection",
+        parameters={
+            "min_wall_mm": EffectiveParameter(
+                1.2, "mm", "injection_legacy_default"
+            )
+        },
+    )
+    evaluations, provenance = EvaluationEngine().evaluate(measurements, plan)
     assert evaluations[0].expected == 1.2
     assert evaluations[0].parameter_ref == "min_wall_mm"
     assert evaluations[0].measurement_refs == [measurements[0].measurement_id]
+    assert provenance[evaluations[0].evaluation_id]["type"] == "plan_parameter"
 
 
 def test_plan_operations_are_whitelisted_and_dependency_ordered():
