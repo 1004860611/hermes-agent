@@ -105,7 +105,7 @@ DFM 采用“内建代码、按需启用”的方式：
 
 | 输入模式       | 主要信息来源                             | 可以完成                                               | 必须提示的限制                                                                       |
 | ---------------- | ------------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| 仅三维 B-Rep（当前 STEP） | B-Rep 几何、拓扑、尺寸关系 | 几何有效性、壁厚、拔模角、倒扣、孔槽、距离等确定性检查 | 材料、工艺、公差和局部特殊要求可能缺失；`x_t` 只有 Reader 能力可用并通过格式验收后才能进入同一计算层 |
+| 仅三维 B-Rep（当前 STEP） | B-Rep 几何、拓扑、尺寸关系 | 几何有效性、壁厚、拔模角、倒扣、孔槽、距离等确定性检查 | 材料、工艺、公差和局部特殊要求可能缺失；`x_t` 只有远程 NX Backend 和所需 calculator 通过 capability/认证门后才能进入同一 Measurement 层 |
 | 仅 2D 图纸     | 标题栏、尺寸、公差、技术说明、视图和标注 | 文本指标提取、特征定位、规则预检查、资料完整性检查     | 没有可靠比例或明确尺寸时，不得从像素推断精确几何值；需要 STEP 的检查应标记为无法执行 |
 | STEP + 2D 图纸 | 几何事实与设计要求的组合                 | 完整分析、图纸要求与几何测量交叉校验、局部特征规则应用 | 二维特征映射到 STEP 拓扑存在歧义时，必须保留置信度并请求确认                         |
 
@@ -116,38 +116,53 @@ DFM 采用“内建代码、按需启用”的方式：
 ```mermaid
 flowchart TB
     U[用户 / DFM 工程师]
+    UI[Hermes Desktop / CLI / Gateway]
 
     subgraph IN[输入资料]
-        S[产品零件三维设计文件<br/>当前 STEP / STP；预留 Parasolid x_t]
+        S[产品零件三维设计文件<br/>STEP / STP / Parasolid x_t]
         D[产品零件 2D 工程图纸<br/>PDF / PNG / JPG]
         T[用户补充说明与回答]
     end
 
-    subgraph H[DFM Hermes Agent：理解与编排层]
+    subgraph H[Hermes DFM：理解、事实与规划]
         TA[内建 dfm toolset<br/>dfm_project / dfm_analysis]
         C[对话协调器<br/>意图理解 / 追问 / 恢复]
         P[项目工作区与 Manifest<br/>权威项目状态]
         F[事实融合与冲突检测]
         G{澄清门<br/>关键条件是否充分？}
-        A[分析规划器<br/>选择最小必要工具链]
+        RS[Rule Selector<br/>按工艺 / 材料 / 特征 / 客户选择规则]
+        ER[Effective Rule Set<br/>版本 / 来源 / 优先级 / 哈希快照]
+        PC[Plan Compiler<br/>选择最小 calculator DAG 与 Backend 要求]
         M[记忆路由<br/>会话 / 项目 / 长期偏好]
     end
 
-    subgraph E[确定性工程能力层]
-        SI[几何输入与 Reader<br/>STEP；预留 Parasolid x_t]
+    subgraph DRAWING[图纸理解]
         DI[图纸 OCR / 版面解析]
         FD[工程特征识别<br/>螺牙 / 油管 / 孔 / 筋等]
-        GT[几何分析工具<br/>壁厚 / 拔模角 / 倒扣 / 距离等]
-        KB[版本化 DFM 知识库]
-        RE[规则匹配与风险计算]
+        XF[ExtractedField<br/>原文 / 页码 / bbox / 置信度]
+    end
+
+    subgraph GS[Geometry Service API]
+        GBR[GeometryBackendRegistry<br/>格式 × calculator × certification]
+        NX[NX Geometry Backend<br/>HttpNXBackendClient → NX Server → C++ Plugin]
+        OCC[OCCT Geometry Backend<br/>StepAnalyzer → Step Worker → OpenCascade]
+    end
+
+    subgraph RULES[确定性规则评价]
+        KB[版本化 DFM Rule Repository]
+        MEAS[measurements.json<br/>Backend-only Measurement]
+        EE[Hermes EvaluationEngine<br/>规则运算符 / 单位 / provenance]
+        EVAL[evaluations.json]
+        FE[Finding Engine]
     end
 
     subgraph O[结果与证据]
-        EV[证据制品<br/>页码区域 / STEP 拓扑 / 高亮结果]
+        EV[证据制品<br/>页码区域 / B-Rep 引用 / 高亮结果]
         R[结构化 Finding]
         RP[DFM 报告<br/>结论 / 风险 / 建议 / 未解决项]
     end
 
+    U --> UI --> TA
     U --> S
     U --> D
     U --> T
@@ -158,41 +173,47 @@ flowchart TB
     TA <--> P
     C <--> P
     C <--> M
-    P --> SI
     P --> DI
-    DI --> FD
-    SI --> F
-    DI --> F
-    FD --> F
+    DI --> FD --> XF --> F
     T --> F
+    P --> F
     F --> G
     G -- 信息不足或冲突 --> C
-    G -- 条件满足 --> A
-    A --> GT
-    A --> KB
-    GT --> RE
-    KB --> RE
-    F --> RE
-    SI --> EV
+    G -- 条件满足 --> RS
+    KB --> RS --> ER
+    F --> RS
+    ER --> PC
+    F --> PC
+    PC --> P
+    PC --> GBR
+    GBR --> NX
+    GBR --> OCC
+    NX --> MEAS
+    OCC --> MEAS
+    MEAS --> EE
+    ER --> EE
+    EE --> EVAL --> FE
+    MEAS --> FE
+    FE --> R
+    MEAS --> EV
     DI --> EV
     FD --> EV
-    GT --> EV
-    RE --> R
     EV --> R
     R --> RP
-    RP --> U
+    RP --> UI --> U
 ```
 
 ### 4.1 架构原则
 
 1. **Hermes 负责判断“做什么”和“何时追问”。** 它管理对话、项目意图、分析规划、工具选择、记忆路由和结果解释。
-2. **工程工具负责回答“算出了什么”。** OCR、STEP 解析、壁厚、拔模角、倒扣、距离、规则匹配和风险评分必须由可测试模块执行。
-3. **项目状态不依赖聊天记录。** `project_manifest.json` 是项目事实的权威来源，聊天记录只用于对话连续性。
-4. **风险结论必须有证据链。** 定量结论必须能回溯到输入、测量结果和版本化规则。
-5. **内建但不侵入核心循环。** DFM 可以作为当前 fork 的常驻源码能力，但只能通过独立 toolset 和薄适配器接入；不修改 Agent Loop，不加入 `_HERMES_CORE_TOOLS`，未启用时不向模型发送 DFM Schema。
-6. **会话内工具 Schema 稳定。** 依赖状态变化通过结构化能力状态返回，不在同一会话中反复增删工具；配置变化在新会话或明确重载后生效，以保护提示词缓存。
-7. **未实现能力必须显式失败。** 预留模块可以被注册和查询，但只能返回 `not_implemented`、`unsupported_capability`、`dependency_missing` 等状态，不得返回占位测量或模拟 Finding。
-8. **界面复用 Hermes 现有能力。** Desktop、TUI、CLI 和 Gateway 是交互入口；DFM 领域层只处理规范化输入引用与 artifact，不拥有第二套聊天、上传或会话系统。
+2. **工程 Backend 只负责回答“算出了什么”。** OCR、STEP/NX 解析、壁厚、拔模角、倒扣和距离由可测试模块执行并输出 Measurement；Backend 不执行工艺规则评价。
+3. **规则选择、几何执行和规则评价分层。** Rule Selector 在 Plan 前形成 Effective Rule Set，Geometry Service 只产出 `measurements.json`，Hermes EvaluationEngine 再生成 `evaluations.json`，Finding Engine 最后形成风险记录。
+4. **项目状态不依赖聊天记录。** `project_manifest.json` 是项目事实的权威来源，聊天记录只用于对话连续性。
+5. **风险结论必须有证据链。** 定量结论必须能回溯到输入、Measurement、Evaluation、有效规则和各自版本。
+6. **内建但不侵入核心循环。** DFM 可以作为当前 fork 的常驻源码能力，但只能通过独立 toolset 和薄适配器接入；不修改 Agent Loop，不加入 `_HERMES_CORE_TOOLS`，未启用时不向模型发送 DFM Schema。
+7. **会话内工具 Schema 稳定。** 依赖状态变化通过结构化能力状态返回，不在同一会话中反复增删工具；配置变化在新会话或明确重载后生效，以保护提示词缓存。
+8. **未实现能力必须显式失败。** 预留模块可以被注册和查询，但只能返回 `not_implemented`、`unsupported_capability`、`dependency_missing` 等状态，不得返回占位测量或模拟 Finding。
+9. **界面复用 Hermes 现有能力。** Desktop、TUI、CLI 和 Gateway 是交互入口；DFM 领域层只处理规范化输入引用与 artifact，不拥有第二套聊天、上传或会话系统。
 
 ### 4.2 Hermes 内建接入方式
 
@@ -777,23 +798,28 @@ STEP 垂直检查链路能够运行，尚未实现的压铸检查明确阻塞；
 
 - 融合用户说明、图纸指标、二维特征与 STEP 拓扑事实。
 - 实现带置信度的二维特征到 STEP 区域关联。
-- 定义分析计划契约、前置条件和预期输出。
+- 实现 `RuleSelector`，根据工艺、材料、特征、客户和区域生成带版本、来源、优先级与哈希的 `EffectiveRuleSet`。
+- 收敛 `PlanCompiler`，根据 EffectiveRuleSet 的 required metrics 生成最小 calculator DAG、Backend 要求、前置条件和预期输出。
+- 建立正式 `GeometryService`、`GeometryBackend` 和 `GeometryBackendRegistry` 契约，统一 NX/OCCT capability 与 calculator resolution。
+- 将新 Plan operation 迁移为格式无关的 `geometry.*`/稳定 calculator ID；历史 `step.*` Plan 和 Run 保持只读兼容。
 - 实现依赖执行、有限重试、超时、取消、恢复和幂等记录。
 
-**退出标准：** 场景测试证明：工具选择符合输入模式和特征；关键条件不足时先追问；失败后可安全恢复且不重复污染结果。
+**退出标准：** 场景测试证明：RuleSelector 和 PlanCompiler 根据事实选择正确规则、最小 calculator DAG 与认证 Backend；NX/OCCT 都通过 GeometryService 输出 Measurement-only Artifact；关键条件不足时先追问；失败后可安全恢复且不重复污染结果。
 
 ### M6：版本化知识库与确定性风险计算
 
-**目标：** 把工程事实和测量结果转换为可审计的注塑风险。
+**目标：** 把工程事实和测量结果转换为可审计的注塑或压铸风险。
 
 **主要工作：**
 
-- 整理并版本化初始注塑规则、术语和来源。
+- 整理并版本化初始注塑、压铸规则、术语和来源。
+- 建立 `RuleRepository` 的草稿、审核、发布和不可变版本边界，Plan 保存 EffectiveRuleSet 快照。
 - 实现按材料、工艺、特征、单位和区域匹配规则。
 - 实现局部特征专用规则与公司覆盖规则。
-- 实现确定性严重程度计算和 `rule_not_found` 等明确状态。
+- 完善统一 `EvaluationEngine`：只消费 Measurement + EffectiveRuleSet，生成独立 `evaluations.json` 和参数 provenance。
+- 实现 `FindingEngine` 的确定性严重程度计算和 `rule_not_found` 等明确状态。
 
-**退出标准：** 相同输入、工具版本和规则版本重复运行得到相同测量、阈值和严重程度；不存在由 LLM 编造的数值。
+**退出标准：** 相同输入、Backend/calculator 版本和 EffectiveRuleSet 重复运行得到相同 Measurement、Evaluation、阈值和严重程度；几何 Backend 不执行工艺评价，不存在由 LLM 编造的数值。
 
 ### M7：Desktop 增强、全链路验收与发布准备
 

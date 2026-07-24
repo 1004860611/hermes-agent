@@ -73,16 +73,19 @@ flowchart TB
         TOOL[dfm_project / dfm_analysis]
         SERVICE[DFM Service]
         MANIFEST[Project Manifest]
-        PLAN[ProcessAdapter / Plan Compiler]
-        RULE[版本化规则与 Evaluation]
-        FINDING[Finding / Report / Artifact]
+        FACTS[Confirmed Facts / Feature Context]
+        SELECTOR[Rule Selector]
+        EFFECTIVE[Effective Rule Set]
+        PLAN[Plan Compiler]
+        EVALUATION[EvaluationEngine]
+        FINDING[Finding Engine / Report / Artifact]
     end
 
-    subgraph GEOMETRY[几何计算]
-        STEP[STEP Analyzer / OpenCascade]
-        NXCLIENT[HttpNXBackendClient]
-        NXSERVER[NX Server / Job Queue / License]
-        NXPLUGIN[NX C++ Plugin / Calculators]
+    subgraph GEOMETRY[Geometry Service API]
+        REGISTRY[GeometryBackendRegistry]
+        OCCT[OCCT Backend<br/>StepAnalyzer / Step Worker / OpenCascade]
+        NX[NX Backend<br/>HTTP Client / NX Server / C++ Plugin]
+        MEASUREMENT[Measurement-only Artifact]
     end
 
     subgraph DRAWING[图纸理解]
@@ -93,15 +96,24 @@ flowchart TB
 
     U --> UI --> SKILL --> TOOL --> SERVICE
     SERVICE <--> MANIFEST
-    SERVICE --> PLAN
-    PLAN --> STEP
-    PLAN --> NXCLIENT --> NXSERVER --> NXPLUGIN
+    MANIFEST --> FACTS
+    FACTS --> SELECTOR --> EFFECTIVE --> PLAN
+    PLAN --> REGISTRY
+    REGISTRY --> OCCT
+    REGISTRY --> NX
+    OCCT --> MEASUREMENT
+    NX --> MEASUREMENT
+    MEASUREMENT --> EVALUATION
+    EFFECTIVE --> EVALUATION
+    EVALUATION --> FINDING
     SERVICE --> PDF --> OCR --> LAYOUT
-    STEP --> RULE
-    NXPLUGIN --> RULE
-    LAYOUT --> MANIFEST
-    RULE --> FINDING --> UI
+    LAYOUT --> FACTS
+    FINDING --> UI
 ```
+
+其中 Rule Selector 在几何执行前决定适用规则和所需指标；Geometry Service 只生成
+Measurement；EvaluationEngine 在几何执行后使用 Effective Rule Set 生成独立
+Evaluation，最后由 Finding Engine 形成风险和报告。
 
 ## 5. 主流程讲解
 
@@ -392,12 +404,16 @@ tests/fixtures/dfm/drawings/
 | 提供方           | 消费方      | 接口/产物                                             | 负责人   |
 | ------------------ | ------------- | ------------------------------------------------------- | ---------- |
 | Hermes Intake    | DFM Service | InputRecord、sha256、format_id                        | B/C      |
-| ProcessAdapter   | Plan        | required_facts、operations、parameters、scope version | B        |
-| Plan             | OCC/NX      | operation DAG、parameters、input hash                 | B → C/D |
+| Confirmed Facts  | Rule Selector | process、material、feature、customer context        | B/F      |
+| Rule Selector    | Effective Rule Set | rule id/version/source/priority/hash             | B        |
+| Effective Rule Set | Plan Compiler | required metrics、parameters、scope snapshot        | B        |
+| Plan Compiler    | Geometry Service | calculator DAG、backend requirements、input hash   | B → C/D |
 | NX Server        | Hermes      | capability、JobStatus、Artifact manifest              | D → C   |
 | NX 插件          | NX Server   | plugin result、Measurement、evidence                  | E → D   |
-| OCC/NX           | Rule Engine | 标准 Measurement                                      | B/E      |
-| Rule Engine      | Reporting   | Evaluation、Finding、rule_ref                         | B        |
+| NX/OCCT Backend  | EvaluationEngine | Measurement-only Artifact                        | B/E      |
+| Effective Rule Set | EvaluationEngine | operator、expected、unit、provenance              | B        |
+| EvaluationEngine | Finding Engine | evaluations.json、rule_ref、provenance               | B        |
+| Finding Engine   | Reporting   | Finding、Evidence、Report                              | B/C      |
 | OCR Pipeline     | Manifest    | ExtractedField、evidence、Fact candidate              | F → B   |
 | Hermes clarify   | 用户        | clarification + candidates + evidence                 | C        |
 | 用户确认         | Manifest    | confirmed Fact                                        | B/C      |
