@@ -352,5 +352,6 @@ approved Ground Truth version
 
 - [DFM 长期路线图](2026-07-13-dfm-hermes-agent-development-roadmap.md)
 - [M2.5 多工艺与多格式架构](2026-07-22-dfm-m25-multi-process-geometry.md)
+- [11661116_07 黄金产品待分析项与候选指标清单](2026-07-28-dfm-golden-product-metric-candidates-11661116-07.md)
 - [NX Server/C++ 插件开发规格](2026-07-23-nx-server-plugin-development-spec.md)
 - [团队架构与分工](2026-07-23-dfm-team-architecture-and-ownership.md)
