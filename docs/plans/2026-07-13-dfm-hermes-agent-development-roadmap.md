@@ -745,23 +745,55 @@ HTTP NX Backend 插槽，为后续优先落地压铸 DFM 提供稳定边界。
 - 把材料、单位、拔模方向等澄清要求从 `_STEP_REQUIRED_FACTS` 迁移为按工艺、
   scope 和 operation 声明的前置事实；压铸可增加合金、压铸方法、关键质量目标等
   自己的要求，而不改变注塑问题集。
-- 引入 `GeometryReader`/`GeometryModel` 边界，将 STEP Reader 与可复用 B-Rep
+- 引入几何输入/Backend 边界，将 STEP Reader 与可复用 B-Rep
   检查解耦；先保持现有 STEP worker 行为等价，再逐步把通用检查从 `geometry/step`
   提升到 `geometry/brep`。
-- 为 `.x_t`/Parasolid 建立独立格式 ID、预检契约、Reader registry、依赖和许可
-  capability。没有经过真实 SDK/转换器验收时只返回不可用状态，不仅凭扩展名登记
-  为可分析输入。
+- 为 `.x_t`/Parasolid 建立独立格式 ID、轻量预检、HTTP NX Backend、依赖和许可
+  capability。没有经过真实 NX Server/插件验收时只返回不可用状态，不仅凭扩展名
+  登记为可分析输入。
 - 建立工艺 × 格式 × operation 能力矩阵和组合门控。例如“压铸 + STEP + 已实现
-  检查”可运行，“压铸 + x_t + Reader 缺失”明确阻塞，同时不影响“注塑 + STEP”。
+  检查”可运行，“压铸 + x_t + NX Backend 缺失”明确阻塞，同时不影响“注塑 + STEP”。
 - 增加兼容性、错误隔离和真实 E2E 回归，证明新增注册项不会改变现有注塑 Plan、
   Measurement、Evaluation、Finding、Artifact 和报告。
 
 **退出标准：** 现有注塑 STEP E2E 在相同输入和配置下保持批准的行为等价；项目可
 显式选择注塑或压铸并生成各自独立的 Plan/scope provenance；至少一条批准的压铸
 STEP 垂直检查链路能够运行，尚未实现的压铸检查明确阻塞；`x_t` capability 能准确
-说明 Reader/许可证/格式版本状态，未安装 Reader 时不会影响 STEP；不得出现跨工艺
+说明 NX Backend/许可证/格式版本状态，未配置 NX Backend 时不会影响 STEP；不得出现跨工艺
 阈值、规则引用或结果污染。详细实施计划见
 [M2.5 多工艺与多几何格式架构适配](2026-07-22-dfm-m25-multi-process-geometry.md)。
+
+### M2.6：NX 黄金产品 DFM 纵向闭环
+
+**目标：** 使用一个由模具工程师完成分析和标注的黄金产品 `.x_t` 文件，完成从
+项目事实、产品所需指标、初始压铸规则、Plan、NX Server/C++ calculator、Measurement、
+Evaluation、Finding、Evidence 到报告的第一条真实业务闭环。智能体生产输出在批准
+误差和匹配规则内与工程师基线一致，由模具工程师逐项人工核对并签字确认。
+
+**主要工作：**
+
+- 建立受控黄金产品包：原始/脱敏输入、确认事实、指标清单、初始规则、工程师问题、
+  区域标注、数值容差和签字记录；产品知识产权数据不提交公共源码仓库。
+- 建立“工程师需求 → Rule → Metric → Calculator → Measurement → Evaluation →
+  Finding → Evidence”的追溯矩阵，冻结第一阶段范围。
+- NX Server 完成真实 `.x_t` 上传、Job、许可证、Worker、取消、结果和 Artifact 链路；
+  NX C++ 插件实现黄金产品所需 calculator，不以 topology 冒烟代替业务闭环。
+- 在当前 ProcessAdapter/PlanCompiler/Geometry Backend 边界内实现产品闭环所需的最小
+  Rule Set 和 Plan；M5/M6 再将其泛化为完整 RuleSelector、GeometryService 和规则库。
+- Backend 只输出 Measurement；Hermes EvaluationEngine 生成独立 Evaluation；
+  FindingEngine 形成规则引用、严重程度、证据和报告。
+- 生产 Run 输出只读、版本化 Run Bundle，包含输入哈希、事实、规则/Plan 快照、Backend/
+  calculator 版本、Measurement、Evaluation、Finding、Evidence 和报告引用。
+- 模具工程师在生产 Run 完成后，使用工程师基线逐项人工核对 Run Bundle 中的指标、
+  数值、Finding、区域、严重程度、证据和报告，记录差异与处理结论；不开发自动比较程序。
+- 模具工程师与架构负责人确认所有差异已解释或修正，并完成第一阶段签字。
+
+**退出标准：** 黄金产品所需指标在 Plan 中覆盖率 100%；关键 Measurement 在逐指标
+批准误差内；工程师标注问题无未解释漏报，规则、区域、严重程度和证据达到批准标准；
+生产 Run 可完整追溯且相同版本重复运行工程等价；模具工程师逐项人工核对完成，所有
+差异均有结论，并与架构负责人共同签字。Ground Truth 不得进入生产 Run，也不得改变
+智能体 Finding 或 capability。
+详细计划见 [M2.6 NX 黄金产品闭环](2026-07-28-dfm-m26-nx-golden-product.md)。
 
 ### M3：2D 图纸文本理解与指标提取
 
@@ -941,7 +973,8 @@ STEP 垂直检查链路能够运行，尚未实现的压铸检查明确阻塞；
 | M1 现有行为基线与 STEP 分析器适配 | 已完成 | `tests/tools/dfm/test_m1_baseline.py`、`test_m1_e2e.py`；OCC 矩阵 130 passed；无 OCC 矩阵 128 passed、2 dependency-gated skipped；合成样件与 profile 位于 `tests/fixtures/dfm/step/` |
 | M1.2 STEP 指标拆解与检查族模块化 | 已完成 | `tests/tools/dfm/test_m12_measurements.py`、`test_m1_baseline.py`、`test_m1_e2e.py`；检查族物理模块、共享 STEP 索引、版本化 issue catalog、真实 Plan 门控、`measurements.json`、evidence/reporting 分层和完整 DFM 矩阵 |
 | M2 STEP DFM Hermes 端到端闭环     | 已完成 | [M2 实施记录](2026-07-21-dfm-m2-end-to-end.md)；STEP 预检、持久化澄清、Finding/Artifacts、输入版本/增量重跑、CLI/部署与 Desktop Artifacts 验收已覆盖 |
-| M2.5 多工艺与多几何格式架构适配 | 已完成 | [M2.5 实施计划](2026-07-22-dfm-m25-multi-process-geometry.md)；139 项 DFM 回归、真实 OCC 压铸 STEP E2E；保持注塑 STEP 基线，交付压铸拓扑门、Parasolid `x_t` Reader 和 HTTP-only NX Backend Client 契约 |
+| M2.5 多工艺与多几何格式架构适配 | 已完成 | [M2.5 实施计划](2026-07-22-dfm-m25-multi-process-geometry.md)；139 项 DFM 回归、真实 OCC 压铸 STEP E2E；保持注塑 STEP 基线，交付压铸拓扑门、Parasolid `x_t` 预检和 HTTP-only NX Backend Client 契约 |
+| M2.6 NX 黄金产品 DFM 纵向闭环 | 设计中 | [M2.6 实施计划](2026-07-28-dfm-m26-nx-golden-product.md)；真实 NX Server/插件、产品指标与初始规则、端到端结果、工程师人工核对和签字 |
 | M3 2D 图纸文本理解与指标提取      | 未开始 |           |
 | M4 2D 工程特征识别                | 未开始 |           |
 | M5 事实融合、分析规划与工具编排   | 未开始 |           |
@@ -952,16 +985,17 @@ STEP 垂直检查链路能够运行，尚未实现的压铸检查明确阻塞；
 
 ## 17. 下一步工作
 
-下一份可执行实施计划覆盖 M3；压铸规则扩展和 NX Server/C++ 插件 PoC 作为并行决策门推进，建议按以下顺序开展：
+下一份可执行实施计划优先覆盖 M2.6；M3 图纸文本理解可以由 OCR 负责人并行准备，建议按以下顺序开展：
 
-1. 启动 M3 页面渲染、原生 PDF 文本和 OCR Provider 设计，保持图纸-only 能力显式阻塞。
-2. 根据压铸代表性样件批准首批壁厚、拔模、倒扣或圆角规则，新增独立压铸 scope，不改写注塑 scope。
-3. 完成 NX Server/C++ 插件的 Parasolid `x_t` 版本、许可证和转换保真 PoC 后，再将 NX Backend capability 改为可执行状态。
-4. 持续执行工艺 × 格式能力矩阵、错误隔离和注塑无回归 E2E 验收。
+1. 由模具工程师、架构负责人和各模块负责人冻结黄金产品、确认事实、指标、问题、区域、规则和逐指标误差。
+2. 建立追溯矩阵，并据此开发 NX Server、C++ calculator、初始 Rule Set 和产品 Plan。
+3. 跑通真实生产链并生成只读 Run Bundle；模具工程师基于既有分析结果逐项人工核对，不开发自动比较程序。
+4. 修正可解释差异并由模具工程师签字，保持注塑 STEP 完整回归。
+5. OCR 负责人并行准备 M3 页面渲染、原生 PDF 文本、OCR Provider 和标注语料。
 
-M2.5 不训练 OCR/视觉模型、不开发第二套 Desktop 聊天页，也不因规划优先级变化而
-重写现有注塑规则。`x_t` 在 Reader 未验收前是明确预留能力，不是生产可用声明；
-2D 图纸文本理解仍由 M3 开始。
+M2.6 不把黄金产品特例硬编码进 Agent Prompt 或 NX 插件，不开发第二套 Desktop 聊天页，
+也不因验证需要重写现有注塑规则。Ground Truth 和人工核对记录属于研发验收资产；生产
+智能体只输出可追溯 Run Bundle。2D 图纸文本理解仍由 M3 开始。
 
 ## 18. 文档维护规则
 

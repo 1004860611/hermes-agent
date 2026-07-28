@@ -881,14 +881,26 @@ Server 应记录：
 - 完成取消、超时和崩溃回收；
 - 通过真实 Hermes E2E 后标记 `certified`。
 
-### 阶段 C：有限 Worker Pool
+Topology 垂直链路只是技术冒烟，不是 NX DFM 第一阶段业务完成标准。
+
+### 阶段 C：黄金产品所需 Calculator 和完整生产链
+
+- 冻结黄金产品追溯矩阵；
+- 实现该产品所需全部 calculator；
+- 返回 Measurement-only Artifact 和 Evidence；
+- 由 Hermes EvaluationEngine/FindingEngine 完成规则评价和报告；
+- 形成只读 Run Bundle；
+- 模具工程师在生产 Run 完成后使用 Ground Truth 人工核对结果，不开发自动比较程序，
+  Ground Truth 不进入 NX Server、插件或 Hermes 生产运行时。
+
+### 阶段 D：有限 Worker Pool
 
 - 按许可证槽建立 Worker Pool；
 - 队列、健康检查、定期回收；
 - 并发和许可证耗尽测试；
 - 部署、升级和回滚手册。
 
-### 阶段 D：逐项增加计算器
+### 阶段 E：逐项增加计算器和代表性产品
 
 - draft；
 - wall thickness；

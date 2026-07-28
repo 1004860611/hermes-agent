@@ -2,7 +2,7 @@
 
 > 用途：团队启动会、架构同步、任务认领、迭代计划和跨模块验收
 > 团队基线：6 人；如果实际为 5 人，按本文“5 人合并方案”合并角色
-> 当前阶段：M2.5 已完成，下一阶段并行推进 NX `.x_t` 真实能力和 M3 图纸文本理解
+> 当前阶段：M2.5 已完成；优先推进 M2.6 NX 黄金产品闭环，M3 图纸文本理解并行准备
 
 ## 1. 这次同步要达成什么
 
@@ -435,13 +435,16 @@ tests/fixtures/dfm/drawings/
 | E    | 盘点现有 C++ 插件、NX API、许可证和可抽取 calculator |
 | F    | 盘点图纸样本、字段字典、OCR 基线和标注需求           |
 
-### Sprint 1：两条最小链路
+### Sprint 1：黄金产品冻结与两条最小链路
 
 NX 线：
 
 ```text
 x_t 上传 → Mock Job → 真实 NX 打开 → inspect_topology → measurements.json
 ```
+
+同时由模具工程师和 A/B/E 冻结黄金产品事实、所需指标、问题、规则、区域、容差和追溯
+矩阵。Topology 是中间冒烟，不是 M2.6 完成标准。
 
 OCR 线：
 
@@ -451,13 +454,22 @@ PDF/图片 → 页面 → 原生文本/OCR TextBlock → 材料/单位候选 + b
 
 Python 线同时完善契约校验和 Hermes E2E。
 
-### Sprint 2：真实用户闭环
+### Sprint 2：黄金产品所需 calculator 与生产闭环
 
-- NX topology `certified`，压铸 `.x_t` 真实 E2E；
+- NX topology 及黄金产品所需 draft/thickness/undercut 等 calculator 逐项认证；
+- 完成压铸 `.x_t` 的 Fact → Rule/Plan → NX → Measurement → Evaluation → Finding → Report；
 - OCR 关键字段澄清/确认写回；
 - NX 取消、超时、崩溃和 Artifact 校验；
 - 图纸冲突、低置信度和证据展示；
 - 注塑 STEP 完整回归。
+
+### Sprint 3：人工核对和工程师签字
+
+- 从完成的生产 Run 形成只读 Run Bundle；
+- 模具工程师使用既有分析基线逐项人工核对指标、数值、Finding、区域和证据；
+- 记录每项差异、原因、处理结论和批准人，不开发自动比较程序；
+- 修正可解释差异，模具工程师完成签字；
+- M2.6 通过后再扩大产品和 calculator 认证范围。
 
 ### 后续 Sprint
 
@@ -598,6 +610,7 @@ Python 线同时完善契约校验和 Hermes E2E。
 
 - [DFM 长期路线图](2026-07-13-dfm-hermes-agent-development-roadmap.md)
 - [M2.5 多工艺与多几何格式实施计划](2026-07-22-dfm-m25-multi-process-geometry.md)
+- [M2.6 NX 黄金产品闭环](2026-07-28-dfm-m26-nx-golden-product.md)
 - [NX Server 与 NX C++ 插件开发交接规格](2026-07-23-nx-server-plugin-development-spec.md)
 - [NX HTTP Backend 简版契约](2026-07-23-dfm-nx-http-backend-contract.md)
 - [DFM 分析运行手册](../dfm-analysis-runbook.md)
