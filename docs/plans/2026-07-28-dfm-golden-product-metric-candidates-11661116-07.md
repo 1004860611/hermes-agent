@@ -22,19 +22,17 @@
 这些项目最适合当前 `.x_t → NX Server → NX C++ Plugin → Measurement` 链路。建议优先
 进入黄金产品追溯矩阵。
 
-| 候选 ID | 待回答的工程问题 | Measurement/输出建议 | 报告基线或候选判据 | 建议 Calculator | 依赖事实/区域 | 来源页 | M2.6 建议 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `dc.geometry.wall_thickness` | 壁厚是否合理、是否存在局部过厚/过薄和不均匀区域？ | min/max/mean、P5/P50/P95、厚度分布、超限面积比例、问题区域 | 基本壁厚 `3.5 mm`；报告均值 `5.06 mm`、最大值 `23.84 mm`；“均匀”的量化口径待确认 | `measure_wall_thickness` | `model_units`、目标壁厚、排除机加工/非功能区 | 3、13 | P0 |
-| `dc.geometry.draft.fixed_half` | 定模方向的成型面是否有足够拔模斜度？ | 每面最小拔模角、无斜度面积、低于阈值面积、问题区域 | 一般问题面要求 `≥1.5°` | `measure_draft_by_direction` | 定模方向、定模区域 | 4、20 | P0 |
-| `dc.geometry.draft.moving_half` | 动模方向的成型面是否有足够拔模斜度？ | 同上 | 一般问题面要求 `≥1.5°` | `measure_draft_by_direction` | 动模方向、动模区域 | 4、21 | P0 |
-| `dc.geometry.draft.slider_top` | 天侧滑块区域能否顺利出模？ | 同上 | 要求 `≥1.5°` | `measure_draft_by_direction` | 天侧滑块方向、分型区域 | 5、7、19、22 | P0 |
-| `dc.geometry.draft.slider_bottom` | 地侧滑块区域能否顺利出模？ | 同上 | 要求 `≥1.5°` | `measure_draft_by_direction` | 地侧滑块方向、分型区域 | 5、8、18、23 | P0 |
-| `dc.geometry.draft.slider_operator` | 操作侧滑块区域能否顺利出模？ | 同上 | 要求 `≥1.5°` | `measure_draft_by_direction` | 操作侧滑块方向、分型区域 | 5、9、24 | P0 |
-| `dc.geometry.draft.slider_reverse` | 反操作侧滑块区域能否顺利出模？ | 同上 | 要求 `≥1.5°` | `measure_draft_by_direction` | 反操作侧方向、分型区域 | 5、10、15、25 | P0 |
-| `dc.geometry.undercut_by_direction` | 各主出模/滑块方向是否存在阻碍出模的倒扣？ | 倒扣面数量、面积、深度/遮挡量、方向、区域和证据 | 报告在定模、天/地侧、反操作侧标有倒扣或方向冲突；允许的后机加工区域需排除 | `detect_undercut_by_direction` | 六个出模方向、区域归属、后加工例外 | 14、15、17–19、25 | P0 |
-| `dc.geometry.hole_axis_vs_pull` | 预铸孔轴线是否与对应滑块出模方向一致？ | 轴线夹角、冲突孔列表、需异形销/后加工的区域 | 地侧一处孔方向不一致，报告建议异形销并后机加工 | `inspect_feature_axis_against_pull` | 孔特征识别、区域所属滑块方向、后加工定义 | 17 | P1 |
-| `dc.geometry.local_boss_height` | 为消除局部倒扣而增加的搭子是否有足够高度？ | 两指定区域的相对高度/最小间距 | 黄色体需比红色小平面高 `>0.8 mm` | `measure_region_offset` | 两个工程师标注区域 | 14 | P1 |
-| `dc.geometry.gate_boss_draft` | 鹰嘴式进料附近搭子是否有足够拔模斜度？ | 指定区域最小拔模角和不足区域 | 候选范围 `0.5°–1°` | `measure_draft_by_direction` | 浇口/搭子区域、对应出模方向 | 16 | P1；需模具/浇口区域输入 |
+
+| 候选 ID                             | 待回答的工程问题                                  | Measurement/输出建议                                       | 报告基线或候选判据                                                                | 建议 Calculator              | 依赖事实/区域                                | 来源页        | M2.6 建议               |
+| ------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------- | --------------- | ------------------------- |
+| `dc.geometry.wall_thickness`        | 壁厚是否合理、是否存在局部过厚/过薄和不均匀区域？ | min/max/mean、P5/P50/P95、厚度分布、超限面积比例、问题区域 | 基本壁厚`3.5 mm`；报告均值 `5.06 mm`、最大值 `23.84 mm`；“均匀”的量化口径待确认 | `measure_wall_thickness`     | `model_units`、目标壁厚、排除机加工/非功能区 | 3、13         | P0                      |
+| `dc.geometry.draft.fixed_half`      | 定模方向的成型面是否有足够拔模斜度？              | 每面最小拔模角、无斜度面积、低于阈值面积、问题区域         | 一般问题面要求`≥1.5°`                                                           | `measure_draft_by_direction` | 定模方向、定模区域                           | 4、20         | P0                      |
+| `dc.geometry.draft.moving_half`     | 动模方向的成型面是否有足够拔模斜度？              | 同上                                                       | 一般问题面要求`≥1.5°`                                                           | `measure_draft_by_direction` | 动模方向、动模区域                           | 4、21         | P0                      |
+| `dc.geometry.draft.slider_top`      | 天侧滑块区域能否顺利出模？                        | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 天侧滑块方向、分型区域                       | 5、7、19、22  | P0                      |
+| `dc.geometry.draft.slider_bottom`   | 地侧滑块区域能否顺利出模？                        | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 地侧滑块方向、分型区域                       | 5、8、18、23  | P0                      |
+| `dc.geometry.draft.slider_operator` | 操作侧滑块区域能否顺利出模？                      | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 操作侧滑块方向、分型区域                     | 5、9、24      | P0                      |
+| `dc.geometry.draft.slider_reverse`  | 反操作侧滑块区域能否顺利出模？                    | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 反操作侧方向、分型区域                       | 5、10、15、25 | P0                      |
+| `dc.geometry.gate_boss_draft`       | 鹰嘴式进料附近搭子是否有足够拔模斜度？            | 指定区域最小拔模角和不足区域                               | 候选范围`0.5°–1°`                                                              | `measure_draft_by_direction` | 浇口/搭子区域、对应出模方向                  | 16            | P1；需模具/浇口区域输入 |
 
 ### 2.1 推荐的首条 NX 闭环范围
 
@@ -57,13 +55,14 @@
 以下项目可以由 NX 负责几何测量，再由 Hermes 的确定性领域计算器完成公式计算和评价；
 不应让 NX 插件直接输出“压铸机选型合格”结论。
 
-| 候选 ID | 待分析项 | NX Measurement | Hermes 计算/评价 | 报告数据 | 来源页 | 状态 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `dc.process.projected_area.part` | 产品在锁模方向的投影面积 | 产品投影面积 `cm²` | 作为锁模力公式输入 | `1200 cm²` | 27 | P1，可由产品 B-Rep 计算 |
-| `dc.process.projected_area.runner_overflow` | 浇道、渣包等浇排系统投影面积 | 浇排投影面积 `cm²` | 作为锁模力公式输入 | `650 cm²` | 27 | 需要包含浇排系统的模具/铸件模型，单个产品 `.x_t` 不足 |
-| `dc.process.projected_area.slider` | 滑块方向侧向投影面积 | 每个滑块方向投影面积 `cm²` | 侧向力/滑块结构评价输入 | `1085 cm²` | 27 | 需确认该值是合计还是单方向 |
-| `dc.process.slider_expansion_force` | 滑块涨形力是多少？ | 侧向投影/受压面积等几何量 | 报告公式 `1100 × tan(10°) = 193 kN` | `193 kN` | 27 | 公式变量含义、单位和 `1100` 来源待确认 |
-| `dc.process.clamping_force` | 所需锁模力及推荐压铸机吨位是多少？ | 产品/浇排投影面积 | 使用铸造压力、安全系数和滑块力确定性计算，再与设备能力比较 | 铸造压力 `80 MPa`、安全系数 `1.2`、报告选择 `2000T` | 3、27 | P1，但报告公式存在不一致，冻结前必须澄清 |
+
+| 候选 ID                                     | 待分析项                           | NX Measurement             | Hermes 计算/评价                                           | 报告数据                                           | 来源页 | 状态                                                 |
+| --------------------------------------------- | ------------------------------------ | ---------------------------- | ------------------------------------------------------------ | ---------------------------------------------------- | -------- | ------------------------------------------------------ |
+| `dc.process.projected_area.part`            | 产品在锁模方向的投影面积           | 产品投影面积`cm²`         | 作为锁模力公式输入                                         | `1200 cm²`                                        | 27     | P1，可由产品 B-Rep 计算                              |
+| `dc.process.projected_area.runner_overflow` | 浇道、渣包等浇排系统投影面积       | 浇排投影面积`cm²`         | 作为锁模力公式输入                                         | `650 cm²`                                         | 27     | 需要包含浇排系统的模具/铸件模型，单个产品`.x_t` 不足 |
+| `dc.process.projected_area.slider`          | 滑块方向侧向投影面积               | 每个滑块方向投影面积`cm²` | 侧向力/滑块结构评价输入                                    | `1085 cm²`                                        | 27     | 需确认该值是合计还是单方向                           |
+| `dc.process.slider_expansion_force`         | 滑块涨形力是多少？                 | 侧向投影/受压面积等几何量  | 报告公式`1100 × tan(10°) = 193 kN`                       | `193 kN`                                           | 27     | 公式变量含义、单位和`1100` 来源待确认                |
+| `dc.process.clamping_force`                 | 所需锁模力及推荐压铸机吨位是多少？ | 产品/浇排投影面积          | 使用铸造压力、安全系数和滑块力确定性计算，再与设备能力比较 | 铸造压力`80 MPa`、安全系数 `1.2`、报告选择 `2000T` | 3、27  | P1，但报告公式存在不一致，冻结前必须澄清             |
 
 ### 3.1 锁模力公式异常
 
@@ -87,12 +86,13 @@
 这些内容有价值，但不宜作为“单个产品 `.x_t` 的通用几何指标”。它们依赖模具设计、
 机加工区域或工艺方案，可先进入黄金产品人工核对清单，后续再决定是否建设专门输入模块。
 
-| 候选 ID | 待分析项 | 报告内容 | 所需额外输入 | 来源页 | 建议 |
-| --- | --- | --- | --- | --- | --- |
-| `dc.mold.parting_and_slider_layout` | 分型线及四向滑块布局是否合理？ | 定/动模分型；天、地、操作、反操作四侧滑块及各自分型线 | 模具方案、分型区域、六个出模方向 | 4–10 | 先作为项目事实和区域标注，不作为单一数值指标 |
-| `dc.mold.ejector_layout` | 顶针规格、数量、位置及残印处理是否满足要求？ | `Ø8 × 1`、`Ø10 × 35`；需顶杆凸台；非机加工面下凹 `0～-0.3 mm`，机加工面凸起 `0～+0.3 mm` | 动模/顶出方案、机加工面标注、允许顶针区域 | 11 | 属于模具设计检查，不由产品 B-Rep 单独判定 |
-| `dc.mold.gate_location` | 鹰嘴式进料口与机加工搭子孔是否冲突？ | 建议移动机加工搭子孔，保留顺畅充填的端面进料 | 浇口方案、加工孔/搭子语义 | 16 | 先人工核对；后续模具方案 Backend |
-| `dc.manufacturing.machining_allowance` | 各机加工区域余量是否足够？ | 大平面 `1.2 mm`；其他小平面 `0.8 mm`；孔径单边 `0.5～0.8 mm` | 毛坯模型、成品模型、机加工区域映射 | 26 | 有两版模型时可做几何差分，单个成品 `.x_t` 不足 |
+
+| 候选 ID                                | 待分析项                                     | 报告内容                                                                                     | 所需额外输入                              | 来源页 | 建议                                          |
+| ---------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------- | -------- | ----------------------------------------------- |
+| `dc.mold.parting_and_slider_layout`    | 分型线及四向滑块布局是否合理？               | 定/动模分型；天、地、操作、反操作四侧滑块及各自分型线                                        | 模具方案、分型区域、六个出模方向          | 4–10  | 先作为项目事实和区域标注，不作为单一数值指标  |
+| `dc.mold.ejector_layout`               | 顶针规格、数量、位置及残印处理是否满足要求？ | `Ø8 × 1`、`Ø10 × 35`；需顶杆凸台；非机加工面下凹 `0～-0.3 mm`，机加工面凸起 `0～+0.3 mm` | 动模/顶出方案、机加工面标注、允许顶针区域 | 11     | 属于模具设计检查，不由产品 B-Rep 单独判定     |
+| `dc.mold.gate_location`                | 鹰嘴式进料口与机加工搭子孔是否冲突？         | 建议移动机加工搭子孔，保留顺畅充填的端面进料                                                 | 浇口方案、加工孔/搭子语义                 | 16     | 先人工核对；后续模具方案 Backend              |
+| `dc.manufacturing.machining_allowance` | 各机加工区域余量是否足够？                   | 大平面`1.2 mm`；其他小平面 `0.8 mm`；孔径单边 `0.5～0.8 mm`                                  | 毛坯模型、成品模型、机加工区域映射        | 26     | 有两版模型时可做几何差分，单个成品`.x_t` 不足 |
 
 ## 5. 模流与凝固仿真候选指标
 
@@ -100,36 +100,38 @@
 Measurement 得到。建议登记到长期指标清单，但 M2.6 第一条 NX 几何闭环默认不承诺计算；
 后续需要 Simulation Backend 或标准化仿真结果导入器。
 
-| 候选 ID | 工程问题 | 候选 Measurement | 报告判据/基线 | 来源页 | Backend 建议 |
-| --- | --- | --- | --- | --- | --- |
-| `dc.sim.fill_temperature_drop` | 充型过程温降是否过大？ | 初始/结束温度及最大温降 `°C` | 温降 `<30°C` | 28–29 | Simulation Result Backend |
-| `dc.sim.end_of_fill_temperature` | 充型完成时温度是否高于液相线？ | 充型结束最小温度和低温区域 | `>580°C`；该值依赖合金材料，需确认 | 28–29 | Simulation Result Backend + alloy fact |
-| `dc.sim.ingate_velocity` | 各内浇口速度是否处于工艺窗口？ | 每个内浇口 min/max/mean、超限时长/面积 | `30–55 m/s`；本报告约 `45 m/s` | 30–31 | Simulation Result Backend + gate regions |
-| `dc.sim.material_flow_stability` | 各浇口是否平稳填充并避免异常混合？ | 流股交汇、异常混合区域和时刻 | 不允许异常混合 | 32–33 | 仿真时序/材料追踪算法；当前为定性判据 |
-| `dc.sim.turbulence_and_backflow` | 是否存在紊流或回卷？ | 紊流/回卷事件、位置、持续时间 | 不允许明显紊流、回卷 | 34–35 | 仿真粒子/速度场算法；需量化定义 |
-| `dc.sim.air_pressure` | 高气压区域是否超过风险阈值？ | 最大气压、超限区域/体积/持续时间 | 非真空 `>10 bar`、真空 `>5 bar` 为关注区域；挤压铸造等特殊工艺例外 | 36–37 | Simulation Result Backend + casting method/vacuum facts |
-| `dc.sim.air_entrapment` | 关键区域卷气风险是否可接受？ | 卷气率最大值、P95、超限区域 | 产品基线 `<20%`；螺栓孔、高压油道、轴承孔等关键位置 `<25%` | 38–39 | Simulation Result Backend + critical regions |
-| `dc.sim.last_solidification_region` | 最晚凝固区在哪里，冷却水/点冷是否覆盖？ | 最晚凝固时间和热点区域 | 以最晚凝固位置作为重点水路布置参考 | 40–41 | Simulation Result Backend；评价需冷却方案输入 |
-| `dc.sim.hotspot_feeding_time` | 热节有效补缩时间是否超限？ | 最大值、`>12 s` 区域、超限区域 | 关注 `>12 s` 区域；最终要求 `≤15 s` | 42–43 | Simulation Result Backend |
-| `dc.sim.porosity` | 缩孔/孔隙风险是否超限？ | 最大孔隙率、超限区域和体积分数 | `≤10%` | 44–45 | Simulation Result Backend |
+
+| 候选 ID                             | 工程问题                                | 候选 Measurement                       | 报告判据/基线                                                     | 来源页 | Backend 建议                                            |
+| ------------------------------------- | ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------- | -------- | --------------------------------------------------------- |
+| `dc.sim.fill_temperature_drop`      | 充型过程温降是否过大？                  | 初始/结束温度及最大温降`°C`           | 温降`<30°C`                                                      | 28–29 | Simulation Result Backend                               |
+| `dc.sim.end_of_fill_temperature`    | 充型完成时温度是否高于液相线？          | 充型结束最小温度和低温区域             | `>580°C`；该值依赖合金材料，需确认                               | 28–29 | Simulation Result Backend + alloy fact                  |
+| `dc.sim.ingate_velocity`            | 各内浇口速度是否处于工艺窗口？          | 每个内浇口 min/max/mean、超限时长/面积 | `30–55 m/s`；本报告约 `45 m/s`                                   | 30–31 | Simulation Result Backend + gate regions                |
+| `dc.sim.material_flow_stability`    | 各浇口是否平稳填充并避免异常混合？      | 流股交汇、异常混合区域和时刻           | 不允许异常混合                                                    | 32–33 | 仿真时序/材料追踪算法；当前为定性判据                   |
+| `dc.sim.turbulence_and_backflow`    | 是否存在紊流或回卷？                    | 紊流/回卷事件、位置、持续时间          | 不允许明显紊流、回卷                                              | 34–35 | 仿真粒子/速度场算法；需量化定义                         |
+| `dc.sim.air_pressure`               | 高气压区域是否超过风险阈值？            | 最大气压、超限区域/体积/持续时间       | 非真空`>10 bar`、真空 `>5 bar` 为关注区域；挤压铸造等特殊工艺例外 | 36–37 | Simulation Result Backend + casting method/vacuum facts |
+| `dc.sim.air_entrapment`             | 关键区域卷气风险是否可接受？            | 卷气率最大值、P95、超限区域            | 产品基线`<20%`；螺栓孔、高压油道、轴承孔等关键位置 `<25%`         | 38–39 | Simulation Result Backend + critical regions            |
+| `dc.sim.last_solidification_region` | 最晚凝固区在哪里，冷却水/点冷是否覆盖？ | 最晚凝固时间和热点区域                 | 以最晚凝固位置作为重点水路布置参考                                | 40–41 | Simulation Result Backend；评价需冷却方案输入           |
+| `dc.sim.hotspot_feeding_time`       | 热节有效补缩时间是否超限？              | 最大值、`>12 s` 区域、超限区域         | 关注`>12 s` 区域；最终要求 `≤15 s`                               | 42–43 | Simulation Result Backend                               |
+| `dc.sim.porosity`                   | 缩孔/孔隙风险是否超限？                 | 最大孔隙率、超限区域和体积分数         | `≤10%`                                                           | 44–45 | Simulation Result Backend                               |
 
 ## 6. 黄金产品事实候选
 
 以下是报告中的项目数据，应该先由用户/模具工程师确认，再写入 Project Manifest 或黄金
 产品基线；它们不是由 `.x_t` 必然可靠读取的事实。
 
-| Fact | 报告候选值 | 来源页 | 说明 |
-| --- | --- | --- | --- |
-| `process` | `die_casting` | 全文 | 可由项目选择确认 |
-| `part_weight` | `4.89 kg` | 3 | 需确认是净重、毛坯重还是含浇排重量 |
-| `nominal_wall_thickness` | `3.5 mm` | 3、13 | 作为规则/目标输入，不应由平均壁厚替代 |
-| `cavity_count` | `1` | 3、27 | 报告写“1 出 1” |
-| `slider_count` | `4` | 3、5 | 天、地、操作、反操作四侧 |
-| `machine_candidate` | `1600T/2000T`；后页选择 `2000T` | 3、27 | 最终值及选型公式待确认 |
-| `casting_pressure` | `80 MPa` | 27 | 工艺输入，不从产品几何读取 |
-| `clamping_safety_factor` | `1.2` | 27 | 候选规则参数，需确认规则适用范围 |
-| `alloy/material` | 报告产品信息页为空 | 3 | 必须澄清；`580°C` 液相线规则依赖材料 |
-| `pull_directions` | 定模、动模及四个滑块方向 | 4–10 | 需要向量和区域，不只保存中文名称 |
+
+| Fact                     | 报告候选值                      | 来源页 | 说明                                  |
+| -------------------------- | --------------------------------- | -------- | --------------------------------------- |
+| `process`                | `die_casting`                   | 全文   | 可由项目选择确认                      |
+| `part_weight`            | `4.89 kg`                       | 3      | 需确认是净重、毛坯重还是含浇排重量    |
+| `nominal_wall_thickness` | `3.5 mm`                        | 3、13  | 作为规则/目标输入，不应由平均壁厚替代 |
+| `cavity_count`           | `1`                             | 3、27  | 报告写“1 出 1”                      |
+| `slider_count`           | `4`                             | 3、5   | 天、地、操作、反操作四侧              |
+| `machine_candidate`      | `1600T/2000T`；后页选择 `2000T` | 3、27  | 最终值及选型公式待确认                |
+| `casting_pressure`       | `80 MPa`                        | 27     | 工艺输入，不从产品几何读取            |
+| `clamping_safety_factor` | `1.2`                           | 27     | 候选规则参数，需确认规则适用范围      |
+| `alloy/material`         | 报告产品信息页为空              | 3      | 必须澄清；`580°C` 液相线规则依赖材料 |
+| `pull_directions`        | 定模、动模及四个滑块方向        | 4–10  | 需要向量和区域，不只保存中文名称      |
 
 ## 7. 工程师冻结前必须澄清的问题
 
@@ -147,13 +149,13 @@ Measurement 得到。建议登记到长期指标清单，但 M2.6 第一条 NX �
 
 ## 8. 建议的追溯矩阵起点
 
-| Engineer Issue | Rule ID | Metric | Calculator | Backend | Measurement | Evaluation | Finding/Evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 定模/动模/四侧滑块区域拔模不足 | `die_casting.min_draft.*` | `draft_angle_deg` | `measure_draft_by_direction` | NX | 每区域最小角/不足面积 | 与确认阈值比较 | 不足区域、方向、彩色面证据 |
-| 各方向倒扣影响出模 | `die_casting.no_undercut.*` | `undercut_area_mm2` | `detect_undercut_by_direction` | NX | 数量/面积/深度/区域 | 无倒扣或允许例外 | 倒扣区域及后加工建议 |
-| 壁厚不均或局部过厚 | `die_casting.wall_thickness.*` | `thickness_mm` | `measure_wall_thickness` | NX | min/max/mean/分位数/区域 | 与冻结后的厚度规则比较 | 过薄/过厚区域热图 |
-| 压铸机锁模能力不足 | `die_casting.clamping_capacity` | `required_clamping_force` | `calculate_clamping_force` | Hermes domain | NX 投影面积 + 工艺事实 | 所需力与设备能力比较 | 公式、输入、单位和选型证据 |
+
+| Engineer Issue                 | Rule ID                         | Metric                    | Calculator                     | Backend       | Measurement              | Evaluation             | Finding/Evidence           |
+| -------------------------------- | --------------------------------- | --------------------------- | -------------------------------- | --------------- | -------------------------- | ------------------------ | ---------------------------- |
+| 定模/动模/四侧滑块区域拔模不足 | `die_casting.min_draft.*`       | `draft_angle_deg`         | `measure_draft_by_direction`   | NX            | 每区域最小角/不足面积    | 与确认阈值比较         | 不足区域、方向、彩色面证据 |
+| 各方向倒扣影响出模             | `die_casting.no_undercut.*`     | `undercut_area_mm2`       | `detect_undercut_by_direction` | NX            | 数量/面积/深度/区域      | 无倒扣或允许例外       | 倒扣区域及后加工建议       |
+| 壁厚不均或局部过厚             | `die_casting.wall_thickness.*`  | `thickness_mm`            | `measure_wall_thickness`       | NX            | min/max/mean/分位数/区域 | 与冻结后的厚度规则比较 | 过薄/过厚区域热图          |
+| 压铸机锁模能力不足             | `die_casting.clamping_capacity` | `required_clamping_force` | `calculate_clamping_force`     | Hermes domain | NX 投影面积 + 工艺事实   | 所需力与设备能力比较   | 公式、输入、单位和选型证据 |
 
 上述只是追溯矩阵起点。工程师完成第 7 节澄清并冻结区域、阈值和输入版本后，才能把候选
 项转成 M2.6 的正式 `required_metrics`、Rule Set、Plan 和人工验收清单。
-
