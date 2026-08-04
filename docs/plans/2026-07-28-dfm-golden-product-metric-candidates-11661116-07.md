@@ -26,13 +26,13 @@
 | 候选 ID                             | 待回答的工程问题                                  | Measurement/输出建议                                       | 报告基线或候选判据                                                                | 建议 Calculator              | 依赖事实/区域                                | 来源页        | M2.6 建议               |
 | ------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------- | --------------- | ------------------------- |
 | `dc.geometry.wall_thickness`        | 壁厚是否合理、是否存在局部过厚/过薄和不均匀区域？ | min/max/mean、P5/P50/P95、厚度分布、超限面积比例、问题区域 | 基本壁厚`3.5 mm`；报告均值 `5.06 mm`、最大值 `23.84 mm`；“均匀”的量化口径待确认 | `measure_wall_thickness`     | `model_units`、目标壁厚、排除机加工/非功能区 | 3、13         | P0                      |
-| `dc.geometry.draft.fixed_half`      | 定模方向的成型面是否有足够拔模斜度？              | 每面最小拔模角、无斜度面积、低于阈值面积、问题区域         | 一般问题面要求`≥1.5°`                                                           | `measure_draft_by_direction` | 定模方向、定模区域                           | 4、20         | P0                      |
-| `dc.geometry.draft.moving_half`     | 动模方向的成型面是否有足够拔模斜度？              | 同上                                                       | 一般问题面要求`≥1.5°`                                                           | `measure_draft_by_direction` | 动模方向、动模区域                           | 4、21         | P0                      |
-| `dc.geometry.draft.slider_top`      | 天侧滑块区域能否顺利出模？                        | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 天侧滑块方向、分型区域                       | 5、7、19、22  | P0                      |
-| `dc.geometry.draft.slider_bottom`   | 地侧滑块区域能否顺利出模？                        | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 地侧滑块方向、分型区域                       | 5、8、18、23  | P0                      |
-| `dc.geometry.draft.slider_operator` | 操作侧滑块区域能否顺利出模？                      | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 操作侧滑块方向、分型区域                     | 5、9、24      | P0                      |
-| `dc.geometry.draft.slider_reverse`  | 反操作侧滑块区域能否顺利出模？                    | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft_by_direction` | 反操作侧方向、分型区域                       | 5、10、15、25 | P0                      |
-| `dc.geometry.gate_boss_draft`       | 鹰嘴式进料附近搭子是否有足够拔模斜度？            | 指定区域最小拔模角和不足区域                               | 候选范围`0.5°–1°`                                                              | `measure_draft_by_direction` | 浇口/搭子区域、对应出模方向                  | 16            | P1；需模具/浇口区域输入 |
+| `dc.geometry.draft.fixed_half`      | 定模方向的成型面是否有足够拔模斜度？              | 每面最小拔模角、无斜度面积、低于阈值面积、问题区域         | 一般问题面要求`≥1.5°`                                                           | `measure_draft` | 定模方向、定模区域                           | 4、20         | P0                      |
+| `dc.geometry.draft.moving_half`     | 动模方向的成型面是否有足够拔模斜度？              | 同上                                                       | 一般问题面要求`≥1.5°`                                                           | `measure_draft` | 动模方向、动模区域                           | 4、21         | P0                      |
+| `dc.geometry.draft.slider_top`      | 天侧滑块区域能否顺利出模？                        | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft` | 天侧滑块方向、分型区域                       | 5、7、19、22  | P0                      |
+| `dc.geometry.draft.slider_bottom`   | 地侧滑块区域能否顺利出模？                        | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft` | 地侧滑块方向、分型区域                       | 5、8、18、23  | P0                      |
+| `dc.geometry.draft.slider_operator` | 操作侧滑块区域能否顺利出模？                      | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft` | 操作侧滑块方向、分型区域                     | 5、9、24      | P0                      |
+| `dc.geometry.draft.slider_reverse`  | 反操作侧滑块区域能否顺利出模？                    | 同上                                                       | 要求`≥1.5°`                                                                     | `measure_draft` | 反操作侧方向、分型区域                       | 5、10、15、25 | P0                      |
+| `dc.geometry.gate_boss_draft`       | 鹰嘴式进料附近搭子是否有足够拔模斜度？            | 指定区域最小拔模角和不足区域                               | 候选范围`0.5°–1°`                                                              | `measure_draft` | 浇口/搭子区域、对应出模方向                  | 16            | P1；需模具/浇口区域输入 |
 
 ### 2.1 推荐的首条 NX 闭环范围
 
@@ -49,6 +49,9 @@
 ```
 
 其中六个出模方向和分型区域不能由 Agent 猜测，应作为工程师确认事实或受控模具方案输入。
+六个业务 Metric 分别生成 Plan Operation，但复用稳定 Calculator ID `measure_draft`；方向和
+区域通过任务级 `arguments` 引用，不编码到 Calculator ID。正式契约见
+[DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md)。
 
 ## 3. NX 测量与领域公式组合项
 
@@ -152,8 +155,8 @@ Measurement 得到。建议登记到长期指标清单，但 M2.6 第一条 NX �
 
 | Engineer Issue                 | Rule ID                         | Metric                    | Calculator                     | Backend       | Measurement              | Evaluation             | Finding/Evidence           |
 | -------------------------------- | --------------------------------- | --------------------------- | -------------------------------- | --------------- | -------------------------- | ------------------------ | ---------------------------- |
-| 定模/动模/四侧滑块区域拔模不足 | `die_casting.min_draft.*`       | `draft_angle_deg`         | `measure_draft_by_direction`   | NX            | 每区域最小角/不足面积    | 与确认阈值比较         | 不足区域、方向、彩色面证据 |
-| 各方向倒扣影响出模             | `die_casting.no_undercut.*`     | `undercut_area_mm2`       | `detect_undercut_by_direction` | NX            | 数量/面积/深度/区域      | 无倒扣或允许例外       | 倒扣区域及后加工建议       |
+| 定模/动模/四侧滑块区域拔模不足 | `die_casting.min_draft.*`       | `draft_angle_deg`         | `measure_draft`   | NX            | 每区域最小角/不足面积    | 与确认阈值比较         | 不足区域、方向、彩色面证据 |
+| 各方向倒扣影响出模             | `die_casting.no_undercut.*`     | `undercut_area_mm2`       | `inspect_undercut` | NX            | 数量/面积/深度/区域      | 无倒扣或允许例外       | 倒扣区域及后加工建议       |
 | 壁厚不均或局部过厚             | `die_casting.wall_thickness.*`  | `thickness_mm`            | `measure_wall_thickness`       | NX            | min/max/mean/分位数/区域 | 与冻结后的厚度规则比较 | 过薄/过厚区域热图          |
 | 压铸机锁模能力不足             | `die_casting.clamping_capacity` | `required_clamping_force` | `calculate_clamping_force`     | Hermes domain | NX 投影面积 + 工艺事实   | 所需力与设备能力比较   | 公式、输入、单位和选型证据 |
 

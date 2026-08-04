@@ -1,0 +1,18 @@
+{
+  "status": "available",
+  "backend_version": "NX2406",
+  "plugin_version": "plugin-2.0",
+  "formats": {"parasolid_xt": "available"},
+  "calculators": {
+    "inspect_topology": "certified",
+    "measure_draft": {
+      "status": "certified",
+      "contract_version": 2,
+      "implementation_version": "nx-draft-v1",
+      "required_arguments": ["pull_direction", "region"],
+      "optional_arguments": ["excluded_regions"],
+      "output_quantities": ["draft_angle_deg"],
+      "certification_scope": {"supports_region_filter": true}
+    }
+  }
+}

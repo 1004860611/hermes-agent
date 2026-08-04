@@ -1,0 +1,10 @@
+{
+  "operation_id": "draft.fixed_half",
+  "calculator_id": "measure_draft",
+  "depends_on": ["geometry.topology"],
+  "metric_refs": ["dc.geometry.draft.fixed_half"],
+  "arguments": {
+    "pull_direction": {"fact_ref": "pull_direction.fixed_half"},
+    "region": {"region_ref": "region.fixed_half"}
+  }
+}

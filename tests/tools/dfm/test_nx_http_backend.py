@@ -3,19 +3,26 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from tools.dfm.analyzers.base import AnalyzerContext, CancellationToken
 from tools.dfm.analyzers.parasolid import ParasolidAnalyzer
 from tools.dfm.backends.nx.contracts import NXArtifact, NXCapability, NXJobStatus
 from tools.dfm.contracts import InputRecord, PlanOperation, PlanRecord
+from tools.dfm.errors import DFMError
+
+FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "fixtures" / "dfm" / "nx"
 
 
 class FakeNXClient:
     def __init__(self):
         self.cancelled = []
         self.submitted = []
-        self.payload = json.dumps(
-            {"process": "die_casting", "measurements": [], "evaluations": []}
-        ).encode()
+        self.payload = json.dumps({
+            "process": "die_casting",
+            "measurements": [],
+            "evaluations": [],
+        }).encode()
 
     def capability(self):
         return NXCapability(
@@ -53,6 +60,19 @@ class FakeNXClient:
         target.write(self.payload)
 
 
+class TaskContractNXClient(FakeNXClient):
+    def __init__(self):
+        super().__init__()
+        self.payload = (
+            FIXTURE_ROOT / "task_contract_v2_measurements.json"
+        ).read_bytes()
+
+    def capability(self):
+        return NXCapability.from_dict(
+            json.loads((FIXTURE_ROOT / "task_contract_v2_capability.json").read_text())
+        )
+
+
 def _context(tmp_path: Path):
     input_path = tmp_path / "inputs" / "part.x_t"
     input_path.parent.mkdir(exist_ok=True)
@@ -88,7 +108,9 @@ def _context(tmp_path: Path):
     )
 
 
-def test_parasolid_analyzer_uses_http_client_contract_and_downloads_measurements(tmp_path):
+def test_parasolid_analyzer_uses_http_client_contract_and_downloads_measurements(
+    tmp_path,
+):
     client = FakeNXClient()
     analyzer = ParasolidAnalyzer(client, poll_interval_seconds=0)
 
@@ -109,3 +131,80 @@ def test_http_client_is_not_replaced_by_local_execution_when_unconfigured(tmp_pa
 
     assert capability.status.value == "dependency_missing"
     assert capability.details["transport"] == "http"
+
+
+def test_parasolid_analyzer_uses_v2_for_metric_scoped_task_operations(tmp_path):
+    client = TaskContractNXClient()
+    context = _context(tmp_path)
+    context.plan.operations.append(
+        PlanOperation(
+            "draft.fixed_half",
+            "measure_draft",
+            ["geometry.topology"],
+            ["dc.geometry.draft.fixed_half"],
+            {
+                "pull_direction": {"fact_ref": "pull_direction.fixed_half"},
+                "region": {"region_ref": "region.fixed_half"},
+            },
+        )
+    )
+
+    analyzer = ParasolidAnalyzer(client, poll_interval_seconds=0)
+    artifacts = analyzer.run(context, CancellationToken())
+
+    request = client.submitted[0][0]
+    assert request["schema_version"] == 2
+    assert request["operations"][-1] == json.loads(
+        (FIXTURE_ROOT / "task_contract_v2_request.json").read_text()
+    )
+    assert artifacts[0].kind == "measurements"
+
+
+def test_parasolid_capability_rejects_v2_arguments_outside_certification_scope(
+    tmp_path,
+):
+    client = TaskContractNXClient()
+    context = _context(tmp_path)
+    context.plan.operations.append(
+        PlanOperation(
+            "draft.fixed_half",
+            "measure_draft",
+            ["geometry.topology"],
+            ["dc.geometry.draft.fixed_half"],
+            {"pull_direction": {"fact_ref": "pull_direction.fixed_half"}},
+        )
+    )
+
+    capability = ParasolidAnalyzer(client).capability(context)
+
+    assert capability.status.value == "not_implemented"
+    assert capability.details["incompatible_operation_contracts"][0]["reasons"] == [
+        "required_arguments"
+    ]
+
+
+def test_parasolid_analyzer_rejects_measurement_linked_to_wrong_metric(tmp_path):
+    client = TaskContractNXClient()
+    payload = json.loads(client.payload)
+    payload["measurements"][0]["metric_id"] = "dc.geometry.draft.moving_half"
+    client.payload = json.dumps(payload).encode()
+    context = _context(tmp_path)
+    context.plan.operations.append(
+        PlanOperation(
+            "draft.fixed_half",
+            "measure_draft",
+            ["geometry.topology"],
+            ["dc.geometry.draft.fixed_half"],
+            {
+                "pull_direction": {"fact_ref": "pull_direction.fixed_half"},
+                "region": {"region_ref": "region.fixed_half"},
+            },
+        )
+    )
+
+    with pytest.raises(DFMError) as exc_info:
+        ParasolidAnalyzer(client, poll_interval_seconds=0).run(
+            context, CancellationToken()
+        )
+
+    assert exc_info.value.code == "nx_result_invalid"

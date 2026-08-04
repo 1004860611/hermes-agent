@@ -143,7 +143,21 @@ Ground Truth 由模具工程师、架构负责人和模块负责人共同整理�
 
 ## 5. 追溯矩阵
 
-M2.6 开发开始前必须完成：
+M2.6 业务 Calculator 开发开始前必须完成黄金产品追溯矩阵和
+[DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md) 冻结。稳定 ID 的职责如下：
+
+| ID | 含义 | 示例 |
+| --- | --- | --- |
+| Rule ID | 确定性工程判据 | `die_casting.min_draft.fixed_half` |
+| Metric ID | 业务上要回答的问题 | `dc.geometry.draft.fixed_half` |
+| Calculator ID | 通用、Backend 无关的算法能力 | `measure_draft` |
+| Operation ID | 当前 Plan 中的一次任务实例 | `draft.fixed_half` |
+| Measurement ID | 当前 Run 中的一条客观结果 | `measurement_draft_fixed_half_min` |
+
+方向、区域、工艺和黄金产品身份不能编码进 Calculator ID。六方向拔模生成六个 Operation，
+通过任务级 `arguments` 分别引用方向和区域，但共同使用 `measure_draft`。
+
+黄金产品追溯矩阵必须完成：
 
 | 工程问题 | Rule ID | Metric | Calculator | Backend | Measurement | Evaluation | Finding | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,6 +167,19 @@ M2.6 开发开始前必须完成：
 “尽可能多做功能”代替闭环验收。
 
 ## 6. 生产模块工作包
+
+### WP0：M2.6 数据契约冻结
+
+- 冻结 Rule/Metric/Calculator/Operation/Measurement/Region ID 词典；
+- 正式 Calculator ID 使用 `inspect_topology`、`measure_draft`、
+  `measure_wall_thickness` 和 `inspect_undercut`；
+- 冻结 Plan/NX Request v2 的 `calculator_id`、`metric_refs` 和任务级 `arguments`；
+- 冻结结构化 Calculator capability、认证范围及 Measurement 回链字段；
+- Hermes 与 NX Server/C++ 使用同一组 JSON fixture 做双向契约测试；
+- NX Server 在迁移期同时接受 v1/v2；现有 STEP、NX topology 和历史 Run 保持 v1 行为。
+
+WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Server 上传/Job/topology 技术链
+并行；WP2、WP4、WP5 的 P0 业务实现必须在 WP0 通过后开始。
 
 ### WP1：产品事实和初始 Rule Set
 
@@ -166,7 +193,9 @@ M2.6 开发开始前必须完成：
 
 - required metrics 与 calculator 一一映射；
 - 生成依赖有序 calculator DAG；
+- 六方向任务分别使用唯一 Operation ID，并通过 `arguments` 引用方向和区域；
 - 所需 calculator 必须在 NX capability 中为 `certified`；
+- v2 任务还必须通过 Calculator 参数契约和认证范围校验；
 - Plan 保存输入哈希、事实、规则、Backend 和版本快照；
 - 不将黄金产品文件名/哈希写成长期业务分支，Plan 来源必须是规则和事实。
 
@@ -318,15 +347,16 @@ approved Ground Truth version
 同时满足以下条件才完成 M2.6：
 
 1. 黄金产品事实、指标、规则、问题、区域和误差已冻结；
-2. 追溯矩阵完整，指标覆盖率 100%；
-3. NX Server/C++ 插件完成所需真实 calculator；
-4. 生产链输出完整 Run Bundle，不读取 Ground Truth；
-5. 关键 Measurement 在批准误差内；
-6. 工程师问题无未解释漏报，规则、区域、severity 和证据符合批准标准；
-7. 同一版本重复运行工程等价；
-8. 模具工程师完成逐项人工核对，所有差异都有结论；
-9. 模具工程师和架构负责人签字；
-10. 注塑 STEP 回归通过。
+2. Task Contract v2 冻结，Hermes/NX 双向契约测试通过且 v1 兼容；
+3. 追溯矩阵完整，指标覆盖率 100%；
+4. NX Server/C++ 插件完成所需真实 calculator；
+5. 生产链输出完整 Run Bundle，不读取 Ground Truth；
+6. 关键 Measurement 在批准误差内；
+7. 工程师问题无未解释漏报，规则、区域、severity 和证据符合批准标准；
+8. 同一版本重复运行工程等价；
+9. 模具工程师完成逐项人工核对，所有差异都有结论；
+10. 模具工程师和架构负责人签字；
+11. 注塑 STEP 回归通过。
 
 完成后可以声明“NX 黄金产品第一条真实 DFM 纵向闭环通过”，不能据此声明所有压铸
 产品或所有 calculator 已具备普适生产能力。后续使用更多代表性产品扩展认证语料。
@@ -355,3 +385,4 @@ approved Ground Truth version
 - [11661116_07 黄金产品待分析项与候选指标清单](2026-07-28-dfm-golden-product-metric-candidates-11661116-07.md)
 - [NX Server/C++ 插件开发规格](2026-07-23-nx-server-plugin-development-spec.md)
 - [团队架构与分工](2026-07-23-dfm-team-architecture-and-ownership.md)
+- [DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md)

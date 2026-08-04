@@ -2,6 +2,8 @@
 
 > 面向实施团队的完整模块、接口、数据 Schema、错误、安全、测试和验收要求见
 > [NX Server 与 NX C++ 插件开发交接规格](2026-07-23-nx-server-plugin-development-spec.md)。
+> M2.6 方向/区域任务的稳定 ID、任务参数、Capability 和 Measurement 回链见
+> [DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md)。
 
 ## 1. 边界
 
@@ -21,7 +23,7 @@ Hermes DFM JobManager
 NX Server 不能修改 Hermes Manifest。Hermes Run 是用户侧权威状态，远端 `job_id` 只是
 执行引用。服务不可用只影响 NX/Parasolid 组合，不影响 OpenCascade STEP。
 
-## 2. HTTP API v1
+## 2. HTTP API v1 与请求 Schema v1/v2
 
 ```text
 GET  /v1/capabilities
@@ -55,7 +57,9 @@ GET  /v1/jobs/{job_id}/artifacts/{artifact_id}
 ```
 
 只有 `certified` calculator 可以产生生产 Finding。`experimental` 只允许诊断
-Measurement，`not_implemented`/`license_missing` 必须在 Plan 前阻塞。
+Measurement，`not_implemented`/`license_missing` 必须在 Plan 前阻塞。上述字符串状态保留
+给 v1 任务；带 `metric_refs`/`arguments` 的 v2 任务必须使用结构化 Calculator Definition，
+并通过参数和认证范围校验。
 
 ## 3. NX Server 伪代码
 
@@ -71,7 +75,7 @@ class NXServer:
         atomically_publish_input(input_id)
 
     def create_job(request):
-        validate_schema(request, version=1)
+        validate_schema(request, versions={1, 2})
         validate_calculator_allowlist(request.operations)
         require_certified_capabilities(request)
         return queue.enqueue(request)
@@ -116,7 +120,7 @@ BridgeResult ExecuteRequest(const BridgeRequest& request) {
     ValidateSchema(request);
     NXPart part = OpenPart(request.inputPath);
     for (const auto& operation : request.operations) {
-        auto& calculator = registry.RequireAllowlisted(operation.operation);
+        auto& calculator = registry.RequireAllowlisted(operation.calculatorId());
         result.measurements += calculator.Execute(part, operation, cancellation);
     }
     ClosePartAndClearSession(part);

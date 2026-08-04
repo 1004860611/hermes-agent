@@ -1,7 +1,7 @@
 # NX Server 与 NX C++ 插件开发交接规格
 
 > 状态：待 NX 团队实施  
-> Hermes 对接版本：NX HTTP API `v1`、请求 Schema `1`  
+> Hermes 对接版本：NX HTTP API `v1`、请求 Schema `1`/`2`
 > 目标读者：NX Server 开发团队、NX Open C++ 插件团队、测试/部署团队  
 > Hermes 参考实现：`tools/dfm/backends/nx/`、`tools/dfm/analyzers/parasolid.py`
 
@@ -11,6 +11,10 @@
 可以通过远程 NX Server 调用 NX C++ 插件执行确定性几何计算，并将标准
 Measurement 和证据返回 Hermes；Hermes 再根据注塑或压铸规则生成 Evaluation 和
 Finding。
+
+M2.6 方向/区域任务遵循 [DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md)。本文中的
+请求 v1 示例继续服务已有 topology 链路；NX Server 在迁移期必须同时接受请求 Schema
+v1 和 v2。
 
 目标调用链：
 
@@ -212,14 +216,25 @@ GET /v1/capabilities
     "inspect_face_quality": "not_implemented",
     "inspect_cylindrical_features": "not_implemented",
     "measure_wall_thickness": "experimental",
-    "measure_draft": "experimental",
+    "measure_draft": {
+      "status": "experimental",
+      "contract_version": 2,
+      "implementation_version": "nx-draft-v1",
+      "required_arguments": ["pull_direction", "region"],
+      "optional_arguments": ["excluded_regions"],
+      "output_quantities": ["draft_angle_deg", "below_threshold_area_mm2"],
+      "certification_scope": {
+        "supports_directional_analysis": true,
+        "supports_region_filter": true
+      }
+    },
     "inspect_surface_continuity": "not_implemented",
     "inspect_undercut": "license_missing"
   },
   "details": {
     "nx_version": "2406.4000",
-    "api_schema_versions": [1],
-    "plugin_schema_versions": [1],
+    "api_schema_versions": [1, 2],
+    "plugin_schema_versions": [1, 2],
     "license_slots": 2,
     "busy_slots": 0,
     "queue_depth": 0
@@ -347,6 +362,35 @@ Hermes 当前发送的完整请求：
 兼容要求：v1 的 `load_step` 是历史 operation 名。对于 `format_id=parasolid_xt`，
 Server/插件必须把它解释为“加载当前几何输入”，不能要求输入一定是 STEP。若改为
 `load_geometry`，必须发布新的请求 Schema 或在服务端同时兼容旧名。
+
+M2.6 六方向/区域任务使用请求 Schema v2。v2 将 v1 的 `operation` 明确命名为
+`calculator_id`，并增加业务 Metric 引用和任务级参数：
+
+```json
+{
+  "schema_version": 2,
+  "operations": [
+    {
+      "operation_id": "draft.fixed_half",
+      "calculator_id": "measure_draft",
+      "depends_on": ["geometry.topology"],
+      "metric_refs": ["dc.geometry.draft.fixed_half"],
+      "arguments": {
+        "pull_direction": {"fact_ref": "pull_direction.fixed_half"},
+        "region": {"region_ref": "region.fixed_half"}
+      }
+    }
+  ]
+}
+```
+
+字符串状态是 v1 Calculator 的兼容形式；包含 `metric_refs` 或 `arguments` 的 v2 任务必须
+匹配结构化 Definition。Hermes 会校验状态、`contract_version`、必需参数和允许参数，不能
+用一个笼统的 `certified` 声明覆盖尚未认证的方向或区域能力。
+
+`operation_id` 标识本次 Plan 的任务实例，`calculator_id` 标识通用算法。六个方向分别
+使用唯一 `operation_id` 和参数，但共同使用 `measure_draft`。Server 必须拒绝缺少必需
+参数或超出 capability 认证范围的 v2 任务。
 
 `parameters` 的值结构为：
 
@@ -546,6 +590,32 @@ GET /v1/jobs/{job_id}/artifacts/{artifact_id}
   "diagnostics": {}
 }
 ```
+
+请求 Schema v2 对应的 Measurement 增加以下稳定回链字段：
+
+```json
+{
+  "measurement_id": "measurement_draft_fixed_half_min",
+  "check_id": "draft.fixed_half",
+  "operation_ref": "draft.fixed_half",
+  "calculator_id": "measure_draft",
+  "metric_id": "dc.geometry.draft.fixed_half",
+  "metric": "draft_angle_deg",
+  "value": 1.2,
+  "unit": "degree",
+  "status": "measured",
+  "geometry_refs": [],
+  "method": "nx_open_draft_analysis",
+  "algorithm_version": "nx-draft-v1",
+  "input_sha256": "64位小写十六进制",
+  "quality": {},
+  "diagnostics": {}
+}
+```
+
+`operation_ref` 必须引用提交 Plan 中的任务；`calculator_id` 必须与该任务一致；`metric_id`
+必须属于该任务的 `metric_refs`；v2 中 `check_id` 与 `operation_ref` 相同。`metric` 表示具体
+测量量，不代替业务 Metric ID。
 
 几何引用：
 
@@ -886,6 +956,7 @@ Topology 垂直链路只是技术冒烟，不是 NX DFM 第一阶段业务完成
 ### 阶段 C：黄金产品所需 Calculator 和完整生产链
 
 - 冻结黄金产品追溯矩阵；
+- 冻结 Task Contract v2，并通过 Hermes/NX 共用 fixture 的双向契约测试；
 - 实现该产品所需全部 calculator；
 - 返回 Measurement-only Artifact 和 Evidence；
 - 由 Hermes EvaluationEngine/FindingEngine 完成规则评价和报告；

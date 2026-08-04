@@ -195,13 +195,71 @@ class PlanOperation:
     operation_id: str
     operation: str
     depends_on: list[str] = field(default_factory=list)
+    metric_refs: list[str] = field(default_factory=list)
+    arguments: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = {
+            "operation_id": self.operation_id,
+            "operation": self.operation,
+            "depends_on": list(self.depends_on),
+        }
+        # Keep persisted v1 plans byte-compatible unless they use the v2 task contract.
+        if self.metric_refs:
+            payload["metric_refs"] = list(self.metric_refs)
+        if self.arguments:
+            payload["arguments"] = dict(self.arguments)
+        return payload
+
+    def to_nx_dict(self, schema_version: int) -> dict[str, Any]:
+        if schema_version >= 2 and self.uses_task_contract_v2:
+            self._validate_task_contract()
+        payload = self.to_dict()
+        if schema_version >= 2:
+            payload["calculator_id"] = payload.pop("operation")
+            payload.setdefault("metric_refs", [])
+            payload.setdefault("arguments", {})
+        return payload
+
+    @property
+    def uses_task_contract_v2(self) -> bool:
+        return bool(self.metric_refs or self.arguments)
+
+    def _validate_task_contract(self) -> None:
+        if not self.metric_refs:
+            raise DFMError(
+                "plan_operation_invalid",
+                "Plan task contract v2 requires at least one metric_ref.",
+                {"operation_id": self.operation_id},
+            )
+        for name, argument in self.arguments.items():
+            if not isinstance(name, str) or not name or not isinstance(argument, dict):
+                raise DFMError(
+                    "plan_operation_invalid",
+                    "Plan task arguments must be named JSON objects.",
+                    {"operation_id": self.operation_id},
+                )
+            selectors = {"fact_ref", "region_ref", "value"}.intersection(argument)
+            if len(selectors) != 1:
+                raise DFMError(
+                    "plan_operation_invalid",
+                    "Each Plan task argument must contain exactly one value or reference selector.",
+                    {"operation_id": self.operation_id, "argument": name},
+                )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PlanOperation":
-        return cls(**payload)
+        values = dict(payload)
+        calculator_id = values.pop("calculator_id", None)
+        if calculator_id is not None:
+            if values.get("operation") not in {None, calculator_id}:
+                raise DFMError(
+                    "plan_operation_invalid",
+                    "Plan operation and calculator_id must identify the same calculator.",
+                    {"operation_id": values.get("operation_id")},
+                )
+            values["operation"] = calculator_id
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -236,12 +294,19 @@ class MeasurementRecord:
     input_sha256: str
     quality: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    operation_ref: str = ""
+    calculator_id: str = ""
+    metric_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             **asdict(self),
             "geometry_refs": [item.to_dict() for item in self.geometry_refs],
         }
+        for key in ("operation_ref", "calculator_id", "metric_id"):
+            if not payload[key]:
+                payload.pop(key)
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "MeasurementRecord":
@@ -292,6 +357,7 @@ class WorkerRequest:
             "parameters": {
                 key: value.to_dict() for key, value in self.parameters.items()
             },
+            "operations": [operation.to_dict() for operation in self.operations],
         }
 
     @classmethod

@@ -12,6 +12,8 @@ from tools.dfm.contracts import (
     FeatureRecord,
     FindingRecord,
     InputRecord,
+    MeasurementRecord,
+    PlanOperation,
     PlanRecord,
     ProjectManifest,
     RunRecord,
@@ -168,3 +170,47 @@ def test_manifest_carries_m0_workflow_records():
     assert restored == manifest
     assert restored.revision == 0
     assert restored.facts[0].status == "confirmed"
+
+
+def test_plan_operation_v2_round_trips_and_keeps_v1_shape_stable():
+    legacy = PlanOperation("geometry.topology", "inspect_topology", ["geometry.load"])
+    operation = PlanOperation(
+        "draft.fixed_half",
+        "measure_draft",
+        ["geometry.topology"],
+        ["dc.geometry.draft.fixed_half"],
+        {
+            "pull_direction": {"fact_ref": "pull_direction.fixed_half"},
+            "region": {"region_ref": "region.fixed_half"},
+        },
+    )
+
+    assert legacy.to_dict() == {
+        "operation_id": "geometry.topology",
+        "operation": "inspect_topology",
+        "depends_on": ["geometry.load"],
+    }
+    payload = operation.to_nx_dict(2)
+    assert payload["calculator_id"] == "measure_draft"
+    assert "operation" not in payload
+    assert PlanOperation.from_dict(payload) == operation
+
+
+def test_measurement_v2_references_plan_operation_metric_and_calculator():
+    measurement = MeasurementRecord(
+        "measurement_draft_fixed_half_min",
+        "draft.fixed_half",
+        "draft_angle_deg",
+        1.2,
+        "degree",
+        "measured",
+        [],
+        "nx_open_draft_analysis",
+        "nx-draft-v1",
+        "a" * 64,
+        operation_ref="draft.fixed_half",
+        calculator_id="measure_draft",
+        metric_id="dc.geometry.draft.fixed_half",
+    )
+
+    assert MeasurementRecord.from_dict(measurement.to_dict()) == measurement
