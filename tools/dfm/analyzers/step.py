@@ -24,6 +24,7 @@ from ..errors import DFMError
 from ..runtime.process import ProcessRunner
 from ..workers.step_worker import WORKER_VERSION
 from .base import AnalyzerContext, CancellationToken
+from .objective_result import validate_objective_result
 
 
 def _utc_now() -> str:
@@ -52,7 +53,7 @@ def _module_available(python_executable: str, module: str) -> bool:
 def dependency_statuses(python_executable: str) -> dict[str, bool]:
     return {
         "pythonocc-core": _module_available(python_executable, "OCC"),
-        "python-pptx": _module_available(python_executable, "pptx"),
+        "vtk": _module_available(python_executable, "vtk"),
     }
 
 
@@ -93,10 +94,10 @@ class StepAnalyzer:
             return Capability(
                 self.key,
                 CapabilityStatus.DEPENDENCY_MISSING,
-                "pythonocc-core/OpenCascade and python-pptx are required by the STEP analyzer.",
+                "pythonocc-core/OpenCascade and VTK are required by the STEP analyzer.",
                 "dependency_missing",
                 {
-                    "dependencies": ["pythonocc-core", "python-pptx"],
+                    "dependencies": ["pythonocc-core", "vtk"],
                     "install_extra": "hermes-agent[dfm]",
                     "worker_version": self.version,
                 },
@@ -255,13 +256,23 @@ class StepAnalyzer:
             path = self._contained_file(output_dir, str(item.get("path") or ""))
             artifacts.append(
                 ArtifactRecord(
-                    f"artifact_{context.run_id}_{index}",
+                    str(item.get("artifact_id") or f"artifact_{context.run_id}_{index}"),
                     str(item.get("kind") or "artifact"),
                     path.relative_to(context.project_dir).as_posix(),
                     str(item.get("media_type") or "application/octet-stream"),
                     _utc_now(),
                 )
             )
+        validate_objective_result(
+            context.plan.operations,
+            context.project_dir,
+            artifacts,
+            run_id=context.run_id,
+            input_sha256=input_record.sha256,
+            process=context.plan.process,
+            scope_id=context.plan.scope_id,
+            error_code="worker_result_invalid",
+        )
         return artifacts
 
     @staticmethod

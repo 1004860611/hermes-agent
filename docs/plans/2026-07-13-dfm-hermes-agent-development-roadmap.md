@@ -69,7 +69,7 @@ Input → Confirmed Fact → Effective Rule → Plan Task
 - **可扩展**：新增格式、工艺、Calculator 或 OCR Provider 不需要修改 Hermes Agent Loop；
 - **不破坏 Hermes**：DFM 是默认关闭的独立 toolset，不扩大无关会话的工具 Schema，保持
   会话内提示词和工具 Schema 稳定；
-- **可回归**：新增压铸、NX 或图纸能力不改变已批准的注塑 STEP 结果。
+- **可回归**：PythonOCC demo 与 NX production 走同一客观场契约和后处理流程；允许数值精度不同，但不允许数据流分叉。
 
 ## 2. 产品范围与能力边界
 
@@ -77,7 +77,7 @@ Input → Confirmed Fact → Effective Rule → Plan Task
 
 | 工艺 | 当前定位 | 近期目标 |
 | --- | --- | --- |
-| 注塑 `injection` | 已交付 STEP 生产基线 | 保持行为兼容，逐步迁移到统一 Rule/Plan/Evaluation 架构 |
+| 注塑 `injection` | 壁厚/拔模角统一契约已落地 | PythonOCC 用于 demo 与契约验证，NX 完成认证后用于生产 |
 | 压铸 `die_casting` | 已有工艺适配和 STEP 拓扑冒烟 | 通过 `.x_t` 黄金产品打通 NX Server、插件、规则和报告闭环 |
 | 其他工艺 | 不在当前承诺范围 | 复用 ProcessAdapter 和规则范围逐项评估，不共享阈值冒充支持 |
 
@@ -85,7 +85,7 @@ Input → Confirmed Fact → Effective Rule → Plan Task
 
 | 输入 | 当前能力 | 目标能力 | 明确限制 |
 | --- | --- | --- | --- |
-| STEP/STP 产品模型 | 注塑完整链路；压铸拓扑检查 | 继续由 OCCT Backend 提供认证 Calculator | 不能可靠提供材料、工艺、图纸公差和客户要求 |
+| STEP/STP 产品模型 | PythonOCC demo 支持壁厚与拔模角客观场 | 验证与 NX 相同的数据流和证据闭环，不作为认证 Calculator | 网格/采样精度低于 NX，不能作为生产认证结论 |
 | Parasolid `.x_t` 产品模型 | 轻量预检和 HTTP NX Client 契约已具备；真实分析未交付 | NX Server + NX C++ Plugin 产生 Measurement | 本地不解析 B-Rep；NX 服务、许可证、格式版本和 Calculator 未认证时必须阻塞 |
 | PDF/PNG/JPG 2D 图纸 | 尚未实现生产提取 | OCR、版面、字段和工程特征识别 | 无可靠比例或明确尺寸时不得从像素推断精确几何值 |
 | 三维模型 + 2D 图纸 | 尚未实现融合 | 图纸要求与几何测量交叉校验、局部规则应用 | 二维区域映射到三维拓扑有歧义时必须请求确认 |
@@ -170,13 +170,13 @@ Project Facts
 | Clarification/Fact | 提出缺失事实问题并将用户确认写回 Manifest | 基础能力已完成 | 冻结合金、单位、六个出模方向、区域和工艺参数 |
 | Rule Repository/Selector | 管理版本化规则，根据工艺、材料、特征和区域形成 Effective Rule Set | 当前有版本化 scope/规则文件，通用管理能力未完成 | M2.6 建立最小压铸规则；M5/M6 完成选择、审核、发布和后台管理边界 |
 | Plan Compiler | 把 required metrics 转换为依赖有序的 Calculator DAG 和 Backend 要求 | 已有 Plan 门控和操作白名单 | 迁移为稳定、格式无关的 Calculator ID，并解析 NX capability |
-| Geometry Service | 统一格式、Calculator、Backend 和 certification resolution | 目标边界已确定，正式服务待收敛 | M2.6 贯通 NX；M5 形成 NX/OCCT 统一注册与解析接口 |
-| OCCT Backend | STEP B-Rep 读取、几何 Measurement 和证据 | 注塑生产基线及压铸拓扑冒烟已完成 | 继续回归，按价值迁移可复用 Calculator |
+| Geometry Service | 统一格式、Calculator、Backend 和 certification resolution | 目标边界已确定，正式服务待收敛 | M2.6 贯通 NX；M5 形成 NX/PythonOCC 统一注册与解析接口 |
+| PythonOCC Backend | STEP B-Rep 读取，输出壁厚/拔模角 Measurement、ScalarField、RenderScene、TopologyMap | demo 适配层已统一 | 用同一契约验证 NX 链路；保持 `certified=false` |
 | NX Backend | `.x_t` 上传、Job、NX Open、C++ Calculator、Measurement 和 Evidence | HTTP Client/契约完成；Server/插件未交付 | 完成黄金产品所需真实 NX 服务和 Calculator |
 | Drawing/OCR Backend | 页面渲染、原生文本、OCR、字段和区域证据 | 未开始 | M3 提取材料、单位、尺寸、公差和技术说明 |
 | Feature/Fusion | 识别工程特征并关联图纸区域、项目事实和三维区域 | 未开始 | M4 特征识别；M5 完成事实融合与二维/三维关联 |
-| EvaluationEngine | 使用 Effective Rule Set 对 Measurement 做确定性评价 | 已从 STEP Worker 独立；保留旧规则兼容层 | M2.6 支持压铸规则；M6 去除遗留阈值提示 |
-| Finding/Reporting | 形成 Finding、Evidence、JSON/Markdown 报告和 Artifacts | STEP 闭环已完成 | 支持 NX 区域证据、黄金产品报告和后续图纸证据 |
+| EvaluationEngine | 使用 Effective Rule Set 对 Measurement 做确定性评价 | 已从所有 Geometry Backend 独立；无旧阈值兼容路径 | M2.6 接入经审核的生产规则 |
+| Finding/Reporting | 形成 Finding、Evidence、JSON/Markdown/PPTX 报告和 Artifacts | 已改为后端无关的统一装配 | 支持 NX 黄金产品报告和后续图纸证据 |
 | Runtime/Capability | Job 生命周期、取消、超时、外部 Job ID、Artifact 校验和能力状态 | 本地 Run 完成，NX Client 契约完成 | 对接 NX Worker、许可证、取消、恢复和幂等 |
 
 ### 4.1 模块间核心契约
@@ -213,7 +213,8 @@ roadmap 只约束以下稳定关系，字段级 Schema 以代码和专项契约�
 ### 5.2 已交付基线（M0–M2.5）
 
 - 注塑 STEP 已支持项目、持久化澄清、Plan、后台 Run、取消、Finding、Artifacts 和报告；
-- STEP Worker 的 Measurement 与 Hermes EvaluationEngine 已分离；
+- STEP Worker 已改为 PythonOCC demo Geometry Backend，只输出客观 Measurement 与中立场；
+- PythonOCC/NX 共用 ObjectiveResult 校验、EvaluationEngine、FieldEvidenceEngine、evaluated Finding 和报告装配；
 - 注塑与压铸具有独立 ProcessAdapter、required facts 和 scope；
 - `.x_t` 只做 opaque preflight，真实分析固定走 `HttpNXBackendClient`，没有本地脚本兜底；
 - NX Backend 已定义 capability、上传、Job、取消、结果和 Artifact 契约；
@@ -255,7 +256,6 @@ Golden .x_t + Confirmed Facts
 | --- | --- | --- | --- |
 | P0 | 壁厚分布：min/max/mean/分位数、过厚/过薄区域 | NX Calculator | 目标范围、“均匀”定义、排除区域 |
 | P0 | 定模、动模、天/地/操作/反操作侧六方向拔模 | NX Calculator | 六个方向向量、区域、`1.5°` 适用范围 |
-| P0 | 六方向倒扣数量、面积、深度和区域 | NX Calculator | 后机加工和允许例外 |
 | P1 | 孔轴与滑块方向、局部搭子高度、浇口搭子拔模 | NX Calculator | 语义区域和模具方案输入 |
 | P1 | 产品/浇排/滑块投影面积 | NX Calculator | 输入模型是否包含浇排、方向和区域 |
 | P1 | 锁模力和压铸机选型 | Hermes Domain Calculator | 报告公式、单位和 `2000T` 选择逻辑存在疑问 |
@@ -276,8 +276,8 @@ B-Rep 闭环；它们登记为后续 Simulation Result Backend 候选。
    `required_quantities` 和已解析 `arguments` 表达六方向/区域调用；评审结构化 capability、
    Region、Measurement 回链和唯一 Schema 1，并通过 Hermes/NX 双向契约测试。
 4. **交付 NX 运行链**：NX Server 完成上传、Job、许可证、Worker、取消、结果和 Artifact；
-   C++ 插件实现黄金产品所需全部 P0 Calculator 并声明认证范围。
-5. **交付 Hermes 领域链**：建立最小压铸 Rule Set 和 Product Plan；EvaluationEngine、
+   C++ 插件先实现壁厚和拔模角两个 Calculator 并声明认证范围。
+5. **交付 Hermes 领域链**：建立最小压铸 Rule Set 和 Product Plan；
    EvaluationEngine、FieldEvidenceEngine、evaluated Finding 和报告消费 NX Measurement/中性场，不在插件中判断规则或生成截图。
 6. **执行真实 E2E**：固化输入、规则、Plan、Backend、Calculator 和结果版本，生成不可变
    Run Bundle，并证明重复运行工程等价。
@@ -327,7 +327,7 @@ B-Rep 闭环；它们登记为后续 Simulation Result Backend 候选。
 - 格式无关的稳定 Metric/Calculator ID；
 - `PlanCompiler` 对参数来源、依赖和认证 Backend 的解析；
 - 正式 `GeometryService`、`GeometryBackend` 和 Registry；
-- NX/OCCT Measurement-only 一致性和旧 Run 只读兼容。
+- NX/PythonOCC Measurement-only、ScalarField、RenderScene、TopologyMap 一致性。
 
 ### 5.7 M6：规则库管理与确定性评价
 
@@ -394,7 +394,7 @@ Desktop 增强不能重写主聊天或形成第二个会话状态源。
 ### M2.6 主线
 
 1. 由模具工程师冻结黄金产品 `.x_t`、报告版本、合金、单位、六个出模方向和问题区域；
-2. 确认壁厚、拔模、倒扣 P0 指标的定义、容差和例外；
+2. 确认壁厚、拔模角两个 P0 指标的定义、容差和例外；
 3. 解决锁模力公式、投影面积来源及设备吨位的单位问题；
 4. 完成黄金产品追溯矩阵并据此拆分 NX Server、插件、Rule/Plan 和 E2E 任务；
 5. 联合评审 [DFM/NX Production Task Contract](../dfm-nx-task-contract.md)，统一 Calculator ID、

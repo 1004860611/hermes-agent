@@ -19,6 +19,7 @@ from ..contracts import (
 )
 from ..errors import DFMError
 from .base import AnalyzerContext, CancellationToken
+from .objective_result import validate_objective_result
 
 
 def _utc_now() -> str:
@@ -274,22 +275,15 @@ class ParasolidAnalyzer:
                 "nx_result_invalid",
                 "NX backend result must include a measurements artifact.",
             )
-        measurements = next(item for item in artifacts if item.kind == "measurements")
-        self._validate_measurements(
-            context.plan.operations,
-            context.project_dir / measurements.relative_path,
-            run_id=context.run_id,
-            input_sha256=input_record.sha256,
-            process=context.plan.process,
-            scope_id=context.plan.scope_id,
-            artifact_by_id={item.artifact_id: item for item in artifacts},
-        )
-        self._validate_evidence_artifacts(
+        validate_objective_result(
             context.plan.operations,
             context.project_dir,
             artifacts,
             run_id=context.run_id,
             input_sha256=input_record.sha256,
+            process=context.plan.process,
+            scope_id=context.plan.scope_id,
+            error_code="nx_result_invalid",
         )
         self._emit(context, "complete", 100, job.job_id)
         return artifacts

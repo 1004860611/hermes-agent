@@ -1,10 +1,9 @@
 import json
 
-from tools.dfm.contracts import ArtifactRecord, PlanRecord
+from tools.dfm.contracts import ArtifactRecord, MeasurementRecord, PlanRecord
 from tools.dfm.evaluation import EvaluationEngine
-from tools.dfm.findings import materialize_legacy_step_findings
+from tools.dfm.findings import materialize_evaluated_findings
 from tools.dfm.geometry.brep.checks import resolve_brep_check
-from tools.dfm.geometry.step.measurements import normalize_legacy_measurements
 
 
 def test_step_operations_resolve_through_format_independent_brep_registry():
@@ -15,13 +14,22 @@ def test_step_operations_resolve_through_format_independent_brep_registry():
 def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
     tmp_path,
 ):
-    measurements = normalize_legacy_measurements(
-        [],
-        input_sha256="c" * 64,
-        algorithm_version="step-m12-v1",
-        stats={"valid_brep": False},
-        process="die_casting",
-    )
+    measurements = [
+        MeasurementRecord(
+            "measurement-valid-brep",
+            "geometry.topology",
+            "inspect_topology",
+            "geometry.model",
+            "valid_brep",
+            False,
+            None,
+            "measured",
+            [],
+            "pythonocc_topology",
+            "pythonocc-objective-v1",
+            "c" * 64,
+        )
+    ]
     plan = PlanRecord(
         "plan_1",
         "step",
@@ -63,7 +71,7 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
         ),
         encoding="utf-8",
     )
-    findings = materialize_legacy_step_findings(
+    findings = materialize_evaluated_findings(
         tmp_path,
         [
             ArtifactRecord(
@@ -75,4 +83,4 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
         ],
     )
 
-    assert findings[0].rule_refs[0] == "die_casting.baseline-issues@1.0.0:valid_brep_required"
+    assert findings[0].rule_refs[0] == "valid_brep_required@1.0.0"

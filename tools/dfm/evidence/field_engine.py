@@ -29,7 +29,7 @@ def _utc_now() -> str:
 
 
 class FieldEvidenceEngine:
-    """Hermes-side evaluator and renderer for NX objective scalar fields."""
+    """Render precise evidence from any backend's objective scalar fields."""
 
     version = "hermes-field-evidence-v1"
 
@@ -94,12 +94,17 @@ class FieldEvidenceEngine:
                         measurement,
                         artifact_by_id,
                     )
+                    scene = _read_json(
+                        project_dir,
+                        artifact_by_id[str(field.get("scene_ref") or "")],
+                    )
                     patches.extend(
                         self._failed_patches(
                             evaluation,
                             measurement,
                             field_ref=str(field_ref),
                             field=field,
+                            scene=scene,
                             comparison=comparison,
                         )
                     )
@@ -289,6 +294,7 @@ class FieldEvidenceEngine:
         *,
         field_ref: str,
         field: dict[str, Any],
+        scene: dict[str, Any],
         comparison: Callable[[Any, Any], bool],
     ) -> list[dict[str, Any]]:
         expected = evaluation.get("expected")
@@ -314,7 +320,7 @@ class FieldEvidenceEngine:
             if isinstance(item, dict)
             and failed_samples.intersection(str(value) for value in item.get("sample_ids", []))
         ]
-        groups = _connected_cells(failed_cells)
+        groups = _connected_cells(failed_cells, scene)
         if not groups and failed_samples:
             groups = [[]]
 
@@ -468,21 +474,44 @@ def _read_json(project_dir: Path, artifact: ArtifactRecord) -> dict[str, Any]:
     return payload
 
 
-def _connected_cells(cells: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _connected_cells(
+    cells: list[dict[str, Any]], scene: dict[str, Any]
+) -> list[list[dict[str, Any]]]:
+    triangle_vertices = {
+        (str(primitive.get("primitive_id")), triangle_id): {
+            tuple(round(float(value), 9) for value in vertices[int(vertex_id)])
+            for vertex_id in triangle
+        }
+        for primitive in scene.get("primitives", [])
+        for vertices in [primitive.get("vertices", [])]
+        for triangle_id, triangle in enumerate(primitive.get("triangles", []))
+    }
+
+    def mesh_vertices(cell: dict[str, Any]) -> set[tuple[float, ...]]:
+        ref = cell.get("triangle_ref", {})
+        return triangle_vertices.get(
+            (str(ref.get("primitive_id")), int(ref.get("triangle_id", -1))), set()
+        )
+
     remaining = list(cells)
     groups: list[list[dict[str, Any]]] = []
     while remaining:
         group = [remaining.pop()]
         sample_ids = set(str(item) for item in group[0].get("sample_ids", []))
+        vertices = set(mesh_vertices(group[0]))
         changed = True
         while changed:
             changed = False
             for cell in list(remaining):
                 cell_samples = set(str(item) for item in cell.get("sample_ids", []))
-                if sample_ids.intersection(cell_samples):
+                cell_vertices = mesh_vertices(cell)
+                if sample_ids.intersection(cell_samples) or len(
+                    vertices.intersection(cell_vertices)
+                ) >= 2:
                     remaining.remove(cell)
                     group.append(cell)
                     sample_ids.update(cell_samples)
+                    vertices.update(cell_vertices)
                     changed = True
         groups.append(group)
     return groups

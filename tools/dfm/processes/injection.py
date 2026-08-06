@@ -1,4 +1,4 @@
-"""Injection-molding adapter for the M1 legacy STEP baseline."""
+"""Backend-neutral injection plan for wall-thickness and draft checks."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from ..contracts import (
     EffectiveRule,
     PlanOperation,
     ResolvedArgument,
+    RuleBinding,
 )
 from ..errors import DFMError
 from .base import ProcessPlan
@@ -24,21 +25,21 @@ _TRUSTED_SOURCES = {"project_fact", "user_confirmed"}
 
 class InjectionProcessAdapter:
     key = "injection"
-    version = "legacy-injection-v1"
+    version = "injection-wall-draft-v1"
 
     def __init__(self, scope_path: Path | None = None) -> None:
         self.scope_path = scope_path or (
             Path(__file__).resolve().parents[1]
             / "scopes"
             / "injection"
-            / "legacy_baseline_v1.json"
+            / "wall_draft_v1.json"
         )
 
     def capability(self, context: AnalyzerContext) -> Capability:
         return Capability(
             self.key,
             CapabilityStatus.AVAILABLE,
-            "The injection process adapter and legacy baseline scope are available.",
+            "The backend-neutral injection wall/draft scope is available.",
             details={"adapter_version": self.version},
         )
 
@@ -64,7 +65,7 @@ class InjectionProcessAdapter:
             key: {
                 "value": self._normalize_value(key, definition["value"]),
                 "unit": definition.get("unit"),
-                "source": "injection_legacy_default",
+                "source": "injection_scope_default",
                 "source_ref": (
                     f"scope:{scope['scope_id']}@{scope['version']}/parameters/{key}"
                 ),
@@ -108,17 +109,10 @@ class InjectionProcessAdapter:
         for operation in operations:
             arguments = dict(operation.arguments)
             algorithm_options = dict(operation.algorithm_options)
-            if operation.calculator_id in {"measure_draft", "inspect_undercut"}:
+            if operation.calculator_id == "measure_draft":
                 pull = resolved["pull_dir"]
                 arguments["pull_direction"] = ResolvedArgument(
                     pull["value"], pull["source_ref"], pull["unit"]
-                )
-            if operation.calculator_id == "measure_planar_spacing":
-                option = resolved["max_local_boss_span_mm"]
-                algorithm_options["max_local_boss_span_mm"] = ResolvedArgument(
-                    option["value"],
-                    f"scope:{scope['scope_id']}@{scope['version']}",
-                    option["unit"],
                 )
             enriched_operations.append(
                 PlanOperation(
@@ -141,6 +135,10 @@ class InjectionProcessAdapter:
             rules=rules,
             operations=enriched_operations,
             accepted_inputs=set(defaults),
+            rule_bindings=[
+                RuleBinding.from_dict(item)
+                for item in scope["rule_bindings"]
+            ],
         )
 
     def _load_scope(self) -> dict[str, Any]:
@@ -153,11 +151,12 @@ class InjectionProcessAdapter:
                 {"path": str(self.scope_path)},
             ) from exc
         if (
-            scope.get("scope_id") != "injection.legacy-baseline"
-            or scope.get("version") != "1.1.0"
+            scope.get("scope_id") != "injection.wall-draft"
+            or scope.get("version") != "1.0.0"
             or scope.get("process") != self.key
             or not isinstance(scope.get("parameters"), dict)
             or not isinstance(scope.get("operations"), list)
+            or not isinstance(scope.get("rule_bindings"), list)
         ):
             raise DFMError(
                 "process_scope_invalid",

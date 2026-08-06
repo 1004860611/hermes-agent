@@ -26,7 +26,8 @@ worker.
 4. Pass `process=injection` or `process=die_casting` when the user has selected it; never infer the process from part shape. Ask only the process adapter's returned missing facts. If `dfm_analysis(plan)` returns `status=clarification_required`, it is a hard stop: do **not** answer the questions yourself and do **not** call `confirm_fact` in the same turn. Call the Hermes `clarify` tool for each open question so Desktop shows its blocking question panel; wait for the user's response, then call `confirm_fact` with exactly that response. Use the canonical fact names returned by the service; keep them `confirmed`, not inferred.
 5. Call `dfm_analysis` with `plan`. Omitted process selection keeps the project's
    current process; a new project defaults to the compatible `injection` adapter
-   and `injection.legacy-baseline` scope. Die casting currently exposes only its
+   and `injection.wall-draft` scope. This scope contains only wall thickness and
+   draft angle. Die casting currently exposes only its
    approved topology gate. Inspect the returned process, scope version, input hashes, operations,
    and parameter provenance. Explain blocked checks and assumptions before
    execution.
@@ -37,17 +38,21 @@ worker.
    sleep loops or rapid status polling. Use `status` when the user asks, after
    reconnecting, or after a meaningful external wait. Use `cancel` when
    requested. Call `result` only after `succeeded`.
-8. Summarize Findings with measurement, rule, evidence, confidence, and artifact path. State unresolved checks separately. For a successful STEP run, present `dfm_report.pptx` as the primary human-readable report; retain JSON and Markdown as traceable engineering artifacts. Do not ask the model to recreate the deterministic PPTX.
+8. Summarize Findings with measurement, rule, evidence, confidence, backend quality, and artifact path. State unresolved checks separately. Present `dfm_report.pptx`, when available, as the primary human-readable report for either geometry backend; retain JSON and Markdown as traceable engineering artifacts. Do not ask the model to recreate the deterministic PPTX.
 
 ## Capability handling
 
-- `dependency_missing`: explain the missing backend (OpenCascade or python-pptx) and suggest `hermes dfm doctor`; never install automatically.
+- `dependency_missing`: explain the missing backend (PythonOCC/VTK, NX, or optional python-pptx reporting) and suggest `hermes dfm doctor`; never install automatically.
 - `not_implemented` or `unsupported_capability`: state the limitation and offer supported partial analysis.
 - `disabled`: ask the user to configure and enable the capability in a new session.
 - `unhealthy`: preserve project and Run IDs and report diagnostics.
 
-STEP geometry supports the established injection scope and the initial die-casting
-topology gate. Do not run injection thresholds under a die-casting label. If the
+PythonOCC STEP geometry is a non-certified demo backend for the same objective
+wall-thickness and draft-angle contract used by the production NX path. Both
+backends must return Measurement, ScalarField, RenderScene, and TopologyMap;
+Hermes alone performs Evaluation, evidence rendering, Finding, and reporting.
+The initial die-casting scope remains a topology gate. Do not run injection
+thresholds under a die-casting label. If the
 user requests machining, sheet metal, or another process, report
 `unsupported_capability` and the supported process list. Parasolid x_t remains
 an explicit reserved capability until an approved licensed reader is installed.
@@ -57,7 +62,7 @@ Drawing-only and Fusion execution remain explicit unavailable capabilities.
 
 - Never invent measurements, thresholds, risk scores, Findings, or successful checks.
 - Never invent engineering standards, standard codes, drawing requirements, or
-  claim that the legacy default scope is a customer or regulatory standard.
+  claim that the default wall/draft scope is a customer or regulatory standard.
 - Never convert visual impression or model inference into a confirmed engineering fact.
 - Never claim a STEP-only check ran against drawing-only input.
 - Never treat a technical test artifact as a production DFM conclusion.

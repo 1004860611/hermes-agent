@@ -29,12 +29,10 @@ from ..contracts import (
 from ..errors import DFMError
 from ..evidence import FieldEvidenceEngine
 from ..evaluation import EvaluationEngine
-from ..findings import (
-    materialize_evaluated_findings,
-    materialize_legacy_step_findings,
-)
+from ..findings import materialize_evaluated_findings
 from ..project.manifest import ManifestStore
 from ..project.workspace import DFMWorkspace
+from ..reporting.result_assembler import materialize_result_reports
 
 
 logger = logging.getLogger(__name__)
@@ -238,9 +236,7 @@ class JobManager:
                 checked.append(
                     self._validate_artifact(context.project_dir, evaluation_artifact)
                 )
-                if analyzer.key == "parasolid" and any(
-                    item.kind == "scalar_field" for item in checked
-                ):
+                if any(item.kind == "scalar_field" for item in checked):
                     evidence_artifacts = self.field_evidence_engine.materialize(
                         context.project_dir,
                         run_id,
@@ -251,7 +247,17 @@ class JobManager:
                         self._validate_artifact(context.project_dir, item)
                         for item in evidence_artifacts
                     )
-            self._complete_success(project_id, run_id, checked, analyzer.key)
+                report_artifacts = materialize_result_reports(
+                    context.project_dir,
+                    run_id,
+                    plan,
+                    checked,
+                )
+                checked.extend(
+                    self._validate_artifact(context.project_dir, item)
+                    for item in report_artifacts
+                )
+            self._complete_success(project_id, run_id, checked)
         except DFMError as exc:
             logger.warning(
                 "DFM run failed: project_id=%s run_id=%s code=%s",
@@ -303,7 +309,6 @@ class JobManager:
         project_id: str,
         run_id: str,
         artifacts: list[ArtifactRecord],
-        analyzer_key: str,
     ) -> None:
         now = _utc_now()
 
@@ -332,12 +337,7 @@ class JobManager:
             if not found:
                 raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
             known = {item.artifact_id for item in current.artifacts}
-            finding_materializer = (
-                materialize_legacy_step_findings
-                if analyzer_key == "step"
-                else materialize_evaluated_findings
-            )
-            findings = finding_materializer(
+            findings = materialize_evaluated_findings(
                 self.workspace.project_dir(project_id), artifacts
             )
             finding_ids = {item.finding_id for item in findings}

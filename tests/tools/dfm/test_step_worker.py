@@ -21,20 +21,28 @@ def _request(
         input_path=str(input_path),
         output_dir=str(tmp_path / "artifacts"),
         process=process,
-        scope_id="injection.legacy-baseline",
-        analyzer_version="legacy-step-v1",
+        scope_id="injection.wall-draft",
+        analyzer_version="pythonocc-objective-v1",
         rules={
             "min_wall_mm": EffectiveRule(
-                1.2, "mm", "injection_legacy_default"
+                1.2, "mm", "injection_scope_default"
             ),
         },
         operations=[
+            PlanOperation("geometry.load", "load_geometry"),
+            PlanOperation(
+                "geometry.topology", "inspect_topology", ["geometry.load"]
+            ),
             PlanOperation(
                 "geometry.draft",
                 "measure_draft",
+                ["geometry.topology"],
+                ["injection.geometry.draft"],
+                ["draft_angle_deg"],
+                ["scalar_field", "render_scene", "topology_map"],
                 arguments={
                     "pull_direction": ResolvedArgument(
-                        [0.0, 0.0, 1.0], "fact:pull_dir:injection_legacy_default"
+                        [0.0, 0.0, 1.0], "fact:pull_dir:injection_scope_default"
                     )
                 },
             )
@@ -80,49 +88,25 @@ def test_worker_reports_dependency_missing_without_result(tmp_path, monkeypatch,
     assert not (tmp_path / "artifacts" / "worker_result.json").exists()
 
 
-def test_worker_builds_legacy_config_from_rules_and_resolved_arguments(tmp_path):
-    from tools.dfm.workers.step_worker import _legacy_config
-
-    request_path = _request(tmp_path)
-    request = WorkerRequest.from_dict(json.loads(request_path.read_text(encoding="utf-8")))
-
-    config = _legacy_config(request)
-
-    assert config == {
-        "process": "injection",
-        "thresholds": {"min_wall_mm": 1.2, "pull_dir": [0.0, 0.0, 1.0]},
-    }
-
-
-def test_worker_passes_evidence_budget_to_legacy_config(tmp_path):
-    from tools.dfm.workers.step_worker import _legacy_config
-
-    request_path = _request(tmp_path, max_evidence_findings=12)
-    request = WorkerRequest.from_dict(json.loads(request_path.read_text(encoding="utf-8")))
-
-    assert _legacy_config(request)["max_evidence_issues"] == 12
-
-
-def test_die_casting_uses_generic_legacy_geometry_mode(tmp_path):
-    from tools.dfm.workers.step_worker import _legacy_config
-
-    request_path = _request(tmp_path, process="die_casting")
-    request = WorkerRequest.from_dict(
-        json.loads(request_path.read_text(encoding="utf-8"))
-    )
-
-    assert request.process == "die_casting"
-    assert _legacy_config(request)["process"] == "generic"
-
-
-def test_worker_classifies_powerpoint_report_artifact(tmp_path):
+@pytest.mark.parametrize(
+    ("filename", "artifact_id", "kind"),
+    [
+        ("measurements.json", "measurements", "measurements"),
+        ("render_scene.json", "scene_geometry", "render_scene"),
+        ("topology_map.json", "topology_geometry", "topology_map"),
+        ("scalar_field_draft.json", "field_draft", "scalar_field"),
+    ],
+)
+def test_worker_assigns_stable_neutral_artifact_ids(
+    tmp_path, filename, artifact_id, kind
+):
     from tools.dfm.workers.step_worker import _artifact_metadata
 
-    report = tmp_path / "dfm_report.pptx"
-    report.write_bytes(b"pptx")
+    artifact = tmp_path / filename
+    artifact.write_text("{}", encoding="utf-8")
 
-    assert _artifact_metadata(report, tmp_path) == {
-        "kind": "report_presentation",
-        "path": "dfm_report.pptx",
-        "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    }
+    metadata = _artifact_metadata(artifact, tmp_path)
+
+    assert metadata["artifact_id"] == artifact_id
+    assert metadata["kind"] == kind
+    assert metadata["media_type"] == "application/json"

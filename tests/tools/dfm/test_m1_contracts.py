@@ -21,8 +21,8 @@ def test_m1_plan_and_run_round_trip_preserves_execution_snapshot():
         "ready",
         "2026-07-15T00:00:00Z",
         process="injection",
-        process_adapter_version="legacy-injection-v1",
-        scope_id="injection.legacy-baseline",
+        process_adapter_version="injection-wall-draft-v1",
+        scope_id="injection.wall-draft",
         scope_version="1.0.0",
         input_ids=["input_1"],
         input_hashes={"input_1": "a" * 64},
@@ -30,7 +30,7 @@ def test_m1_plan_and_run_round_trip_preserves_execution_snapshot():
             "min_wall_mm": EffectiveRule(
                 value=1.2,
                 unit="mm",
-                source="injection_legacy_default",
+                source="injection_scope_default",
             )
         },
         operations=[PlanOperation("geometry.load", "load_geometry", [])],
@@ -49,7 +49,7 @@ def test_m1_plan_and_run_round_trip_preserves_execution_snapshot():
     assert PlanRecord.from_dict(plan.to_dict()) == plan
     restored = RunRecord.from_dict(run.to_dict())
     assert restored.plan_id == "plan_1"
-    assert restored.plan_snapshot["scope_id"] == "injection.legacy-baseline"
+    assert restored.plan_snapshot["scope_id"] == "injection.wall-draft"
 
 
 @pytest.mark.parametrize(
@@ -75,7 +75,7 @@ def test_worker_request_and_result_round_trip():
         input_path="inputs/part.step",
         output_dir="runs/run_1/artifacts",
         process="injection",
-        scope_id="injection.legacy-baseline",
+        scope_id="injection.wall-draft",
         analyzer_version="worker-v1",
         rules={"min_draft_deg": rule},
     )
@@ -84,7 +84,7 @@ def test_worker_request_and_result_round_trip():
         worker_version="worker-v1",
         input_sha256="b" * 64,
         process="injection",
-        scope_id="injection.legacy-baseline",
+        scope_id="injection.wall-draft",
         rules={"min_draft_deg": rule},
         result_path="runs/run_1/artifacts/worker_result.json",
         artifacts=[{"kind": "report_json", "path": "runs/run_1/artifacts/dfm_report.json"}],

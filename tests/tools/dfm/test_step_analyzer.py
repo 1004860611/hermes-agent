@@ -7,6 +7,7 @@ from tools.dfm.contracts import (
     CapabilityStatus,
     EffectiveRule,
     InputRecord,
+    PlanOperation,
     PlanRecord,
     WorkerEvent,
     WorkerRequest,
@@ -42,27 +43,104 @@ class SuccessfulRunner:
         )
         output = Path(self.request.output_dir)
         output.mkdir(parents=True, exist_ok=True)
-        report = output / "dfm_report.json"
-        report.write_text('{"issue_count": 0}', encoding="utf-8")
+        scene = output / "render_scene.json"
+        scene.write_text(json.dumps({
+            "schema_version": 1,
+            "scene_id": "scene_geometry",
+            "run_id": "run_1",
+            "input_sha256": "a" * 64,
+            "coordinate_system": "model",
+            "unit": "mm",
+            "primitives": [{
+                "primitive_id": "face-1",
+                "vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+                "triangles": [[0, 1, 2]],
+            }],
+        }), encoding="utf-8")
+        topology = output / "topology_map.json"
+        topology.write_text(json.dumps({
+            "schema_version": 1,
+            "map_id": "topology_geometry",
+            "run_id": "run_1",
+            "input_sha256": "a" * 64,
+            "scene_ref": "scene_geometry",
+            "faces": [],
+        }), encoding="utf-8")
+        field = output / "scalar_field_draft.json"
+        field.write_text(json.dumps({
+            "schema_version": 1,
+            "field_id": "field_draft",
+            "run_id": "run_1",
+            "input_sha256": "a" * 64,
+            "operation_id": "geometry.draft",
+            "metric_id": "injection.geometry.draft",
+            "quantity_id": "draft_angle_deg",
+            "unit": "degree",
+            "scene_ref": "scene_geometry",
+            "topology_map_ref": "topology_geometry",
+            "interpolation": "linear_on_triangle",
+            "samples": [],
+            "cells": [],
+            "quality": {"backend": "pythonocc_demo", "certified": False},
+        }), encoding="utf-8")
         measurements = output / "measurements.json"
-        measurements.write_text('{"measurements": []}', encoding="utf-8")
+        measurements.write_text(json.dumps({
+            "schema_version": 1,
+            "run_id": "run_1",
+            "input_sha256": "a" * 64,
+            "process": "injection",
+            "scope_id": "injection.wall-draft",
+            "producer_contract": "measurement_only",
+            "measurements": [{
+                "measurement_id": "measurement-draft",
+                "operation_id": "geometry.draft",
+                "calculator_id": "measure_draft",
+                "metric_id": "injection.geometry.draft",
+                "quantity_id": "draft_angle_deg",
+                "value": 0.5,
+                "unit": "degree",
+                "status": "measured",
+                "geometry_refs": [],
+                "method": "pythonocc_triangulated_field",
+                "algorithm_version": WORKER_VERSION,
+                "input_sha256": "a" * 64,
+                "quality": {"backend": "pythonocc_demo", "certified": False},
+                "diagnostics": {},
+                "region_refs": [],
+                "field_refs": ["field_draft"],
+            }],
+        }), encoding="utf-8")
         result = WorkerResult(
             1,
             WORKER_VERSION,
             "a" * 64,
             "injection",
-            "injection.legacy-baseline",
+            "injection.wall-draft",
             self.request.rules,
             "worker_result.json",
             [
                 {
-                    "kind": "report_json",
-                    "path": report.name,
+                    "artifact_id": "measurements",
+                    "kind": "measurements",
+                    "path": measurements.name,
                     "media_type": "application/json",
                 },
                 {
-                    "kind": "measurements",
-                    "path": measurements.name,
+                    "artifact_id": "scene_geometry",
+                    "kind": "render_scene",
+                    "path": scene.name,
+                    "media_type": "application/json",
+                },
+                {
+                    "artifact_id": "topology_geometry",
+                    "kind": "topology_map",
+                    "path": topology.name,
+                    "media_type": "application/json",
+                },
+                {
+                    "artifact_id": "field_draft",
+                    "kind": "scalar_field",
+                    "path": field.name,
                     "media_type": "application/json",
                 },
             ],
@@ -71,7 +149,7 @@ class SuccessfulRunner:
         (output / result.result_path).write_text(
             json.dumps(result.to_dict()), encoding="utf-8"
         )
-        on_event(WorkerEvent(1, "artifact", kind="report_json", path=report.name))
+        on_event(WorkerEvent(1, "artifact", kind="measurements", path=measurements.name))
         on_event(WorkerEvent(1, "completed", path=result.result_path))
         return ProcessResult(0, "", "")
 
@@ -100,14 +178,23 @@ def test_step_analyzer_runs_persisted_plan_and_returns_contained_artifacts(tmp_p
         "ready",
         "now",
         process="injection",
-        process_adapter_version="legacy-injection-v1",
-        scope_id="injection.legacy-baseline",
+        process_adapter_version="injection-wall-draft-v1",
+        scope_id="injection.wall-draft",
         scope_version="1.0.0",
         input_ids=["input_1"],
         input_hashes={"input_1": "a" * 64},
         rules={
-            "min_wall_mm": EffectiveRule(1.2, "mm", "injection_legacy_default")
+            "min_draft_deg": EffectiveRule(1.0, "degree", "scope")
         },
+        operations=[
+            PlanOperation(
+                "geometry.draft",
+                "measure_draft",
+                metric_ids=["injection.geometry.draft"],
+                required_quantities=["draft_angle_deg"],
+                required_artifacts=["scalar_field", "render_scene", "topology_map"],
+            )
+        ],
     )
     runner = SuccessfulRunner()
     analyzer = StepAnalyzer(
@@ -121,14 +208,22 @@ def test_step_analyzer_runs_persisted_plan_and_returns_contained_artifacts(tmp_p
     artifacts = analyzer.run(context, CancellationToken())
 
     assert runner.request.process == "injection"
-    assert runner.request.scope_id == "injection.legacy-baseline"
+    assert runner.request.scope_id == "injection.wall-draft"
     assert runner.argv[0] == "C:/dfm/python.exe"
     assert runner.cwd == Path(__file__).resolve().parents[3]
     assert runner.timeout_seconds == 123
     assert runner.request.max_evidence_findings == 12
     assert {artifact.kind for artifact in artifacts} == {
-        "report_json",
         "measurements",
+        "render_scene",
+        "topology_map",
+        "scalar_field",
         "worker_result",
+    }
+    assert {artifact.artifact_id for artifact in artifacts} >= {
+        "measurements",
+        "scene_geometry",
+        "topology_geometry",
+        "field_draft",
     }
     assert all((tmp_path / artifact.relative_path).is_file() for artifact in artifacts)

@@ -1,0 +1,84 @@
+{
+  "scope_id": "injection.wall-draft",
+  "version": "1.0.0",
+  "process": "injection",
+  "parameters": {
+    "pull_dir": {
+      "value": [0, 0, 1],
+      "unit": null,
+      "kind": "engineering_context"
+    },
+    "min_wall_mm": {
+      "value": 1.2,
+      "unit": "mm",
+      "kind": "rule"
+    },
+    "min_draft_deg": {
+      "value": 1.0,
+      "unit": "degree",
+      "kind": "rule"
+    }
+  },
+  "operations": [
+    {
+      "operation_id": "geometry.load",
+      "calculator_id": "load_geometry",
+      "depends_on": [],
+      "metric_ids": [],
+      "required_quantities": [],
+      "required_artifacts": [],
+      "arguments": {},
+      "algorithm_options": {}
+    },
+    {
+      "operation_id": "geometry.topology",
+      "calculator_id": "inspect_topology",
+      "depends_on": ["geometry.load"],
+      "metric_ids": [],
+      "required_quantities": [],
+      "required_artifacts": [],
+      "arguments": {},
+      "algorithm_options": {}
+    },
+    {
+      "operation_id": "geometry.wall_thickness",
+      "calculator_id": "measure_wall_thickness",
+      "depends_on": ["geometry.topology"],
+      "metric_ids": ["injection.geometry.wall_thickness"],
+      "required_quantities": ["thickness_mm"],
+      "required_artifacts": ["scalar_field", "render_scene", "topology_map"],
+      "arguments": {},
+      "algorithm_options": {}
+    },
+    {
+      "operation_id": "geometry.draft",
+      "calculator_id": "measure_draft",
+      "depends_on": ["geometry.topology"],
+      "metric_ids": ["injection.geometry.draft"],
+      "required_quantities": ["draft_angle_deg"],
+      "required_artifacts": ["scalar_field", "render_scene", "topology_map"],
+      "arguments": {},
+      "algorithm_options": {}
+    }
+  ],
+  "rule_bindings": [
+    {
+      "binding_id": "binding.wall_thickness.minimum",
+      "operation_id": "geometry.wall_thickness",
+      "metric_id": "injection.geometry.wall_thickness",
+      "quantity_id": "thickness_mm",
+      "rule_id": "min_wall_mm",
+      "operator": ">=",
+      "aggregation": "minimum"
+    },
+    {
+      "binding_id": "binding.draft.minimum",
+      "operation_id": "geometry.draft",
+      "metric_id": "injection.geometry.draft",
+      "quantity_id": "draft_angle_deg",
+      "rule_id": "min_draft_deg",
+      "operator": ">=",
+      "aggregation": "minimum"
+    }
+  ]
+}

@@ -412,6 +412,16 @@ class DFMService:
                 process_plan.operations if process_plan else [],
                 parent_plan.affected_operation_ids if parent_plan else [],
             )
+            operation_ids = {item.operation_id for item in operations}
+            rule_bindings = (
+                [
+                    item
+                    for item in process_plan.rule_bindings
+                    if item.operation_id in operation_ids
+                ]
+                if process_plan
+                else []
+            )
             active_inputs = self._active_inputs(manifest)
             now = _utc_now()
             plan = PlanRecord(
@@ -427,7 +437,7 @@ class DFMService:
                 input_ids=[item.input_id for item in active_inputs],
                 input_hashes={item.input_id: item.sha256 for item in active_inputs},
                 rules=process_plan.rules if process_plan else {},
-                rule_bindings=process_plan.rule_bindings if process_plan else [],
+                rule_bindings=rule_bindings,
                 operations=operations,
                 parent_plan_id=parent_plan_id,
             )

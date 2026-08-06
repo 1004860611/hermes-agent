@@ -154,15 +154,15 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
 
     assert plan["plan"]["analyzer_keys"] == ["step"]
     assert plan["plan"]["process"] == "injection"
-    assert plan["plan"]["scope_id"] == "injection.legacy-baseline"
-    assert plan["plan"]["scope_version"] == "1.1.0"
+    assert plan["plan"]["scope_id"] == "injection.wall-draft"
+    assert plan["plan"]["scope_version"] == "1.0.0"
     assert plan["plan"]["input_ids"] == [plan["plan"]["input_ids"][0]]
     assert set(plan["plan"]["input_hashes"].values()) == {added["input"]["sha256"]}
     assert plan["plan"]["rules"]["min_draft_deg"] == {
         "value": 1.0,
         "unit": "degree",
-        "source": "scope:injection.legacy-baseline@1.1.0/parameters/min_draft_deg",
-        "version": "1.1.0",
+        "source": "scope:injection.wall-draft@1.0.0/parameters/min_draft_deg",
+        "version": "1.0.0",
     }
     assert plan["capability"]["status"] == "dependency_missing"
     with pytest.raises(DFMError) as exc_info:
@@ -233,7 +233,9 @@ def test_pull_direction_rebuild_only_includes_affected_operation_closure(service
         "geometry.load",
         "geometry.topology",
         "geometry.draft",
-        "geometry.undercut",
+    ]
+    assert [item["quantity_id"] for item in rebuilt["rule_bindings"]] == [
+        "draft_angle_deg"
     ]
 
 

@@ -49,14 +49,33 @@ def test_injection_default_scope_has_versioned_parameter_provenance(context):
     plan = adapter.compile(context, {})
 
     assert plan.process == "injection"
-    assert plan.scope_id == "injection.legacy-baseline"
-    assert plan.scope_version == "1.1.0"
+    assert plan.scope_id == "injection.wall-draft"
+    assert plan.scope_version == "1.0.0"
     assert plan.rules["min_draft_deg"].value == 1.0
     assert plan.rules["min_draft_deg"].source == (
-        "scope:injection.legacy-baseline@1.1.0/parameters/min_draft_deg"
+        "scope:injection.wall-draft@1.0.0/parameters/min_draft_deg"
     )
     assert plan.rules["min_draft_deg"].unit == "degree"
     assert plan.operations[0].calculator_id == "load_geometry"
+    assert [item.calculator_id for item in plan.operations] == [
+        "load_geometry",
+        "inspect_topology",
+        "measure_wall_thickness",
+        "measure_draft",
+    ]
+    assert {item.quantity_id for item in plan.rule_bindings} == {
+        "thickness_mm",
+        "draft_angle_deg",
+    }
+    measured = plan.operations[2:]
+    assert all(
+        item.required_artifacts == [
+            "scalar_field",
+            "render_scene",
+            "topology_map",
+        ]
+        for item in measured
+    )
 
 
 def test_confirmed_parameter_override_is_normalized_and_traced(context):

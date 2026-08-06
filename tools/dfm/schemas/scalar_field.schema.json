@@ -30,7 +30,12 @@
           "surface_normal": {"$ref": "#/$defs/vector3"},
           "value": {"type": "number"},
           "geometry_ref": {"$ref": "#/$defs/geometryRef"},
-          "mesh_vertex_ref": {"$ref": "#/$defs/vertexRef"}
+          "mesh_vertex_ref": {
+            "oneOf": [
+              {"$ref": "#/$defs/vertexRef"},
+              {"type": "null"}
+            ]
+          }
         }
       }
     },

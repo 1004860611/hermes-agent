@@ -53,7 +53,7 @@ def test_pptx_report_contains_bounded_ordered_evidence(tmp_path):
         artifact_dir=tmp_path,
         result=result,
         process="injection",
-        scope_id="injection.legacy-baseline",
+        scope_id="injection.wall-draft",
     )
 
     assert len(artifacts) == 1

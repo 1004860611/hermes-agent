@@ -296,7 +296,7 @@ class PythonPptxReportRenderer(ReportRenderer):
     @staticmethod
     def _summary(slide, context: ReportContext, issues: list[Mapping[str, Any]]) -> None:
         _base(slide)
-        _title(slide, "分析摘要", "结果来自 OpenCascade 确定性几何计算及已生成证据")
+        _title(slide, "分析摘要", "结果来自几何后端的确定性计算及 Hermes 生成的证据")
         counts = Counter(str(item.get("severity") or "info").lower() for item in issues)
         cards = [
             ("问题总数", len(issues), _NAVY),

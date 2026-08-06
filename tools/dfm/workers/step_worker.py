@@ -1,4 +1,4 @@
-"""Isolated worker wrapper for the migrated legacy STEP analyzer."""
+"""Isolated PythonOCC demo backend for neutral DFM objective fields."""
 
 from __future__ import annotations
 
@@ -14,14 +14,15 @@ from typing import Any
 from ..contracts import WORKER_SCHEMA_VERSION, WorkerEvent, WorkerRequest, WorkerResult
 from ..errors import DFMError
 from ..runtime.events import encode_worker_event
-from ..geometry.step.measurements import (
-    MEASUREMENT_SCHEMA_VERSION,
-    normalize_legacy_measurements,
+from ..geometry.step.field_export import (
+    SCENE_ARTIFACT_ID,
+    TOPOLOGY_ARTIFACT_ID,
+    export_objective_fields,
 )
 from ..geometry.step.pipeline import validate_operations
 
 
-WORKER_VERSION = "step-m12-v1"
+WORKER_VERSION = "pythonocc-objective-v1"
 
 
 def _emit(event_type: str, **values: Any) -> None:
@@ -42,33 +43,6 @@ def _occ_available() -> bool:
         return importlib.util.find_spec("OCC") is not None
     except (ImportError, AttributeError, ValueError):
         return False
-
-
-def _pptx_available() -> bool:
-    from ..reporting.pptx import pptx_available
-
-    return pptx_available()
-
-
-def _legacy_config(request: WorkerRequest) -> dict[str, Any]:
-    thresholds = {key: rule.value for key, rule in request.rules.items()}
-    for operation in request.operations:
-        for name, argument in {
-            **operation.arguments,
-            **operation.algorithm_options,
-        }.items():
-            legacy_name = "pull_dir" if name == "pull_direction" else name
-            thresholds[legacy_name] = argument.value
-    config = {
-        # The migrated analyzer knows only its historical generic/injection/
-        # machining labels. The persisted Run keeps the real process; generic
-        # is only the geometry-execution compatibility mode for die casting.
-        "process": "injection" if request.process == "injection" else "generic",
-        "thresholds": thresholds,
-    }
-    if request.max_evidence_findings is not None:
-        config["max_evidence_issues"] = request.max_evidence_findings
-    return config
 
 
 def _load_request(path: Path) -> WorkerRequest:
@@ -92,23 +66,17 @@ def _load_request(path: Path) -> WorkerRequest:
 def _artifact_metadata(path: Path, output_dir: Path) -> dict[str, str]:
     suffix = path.suffix.lower()
     if path.name == "measurements.json":
-        kind, media_type = "measurements", "application/json"
-    elif path.name == "dfm_report.json":
-        kind, media_type = "report_json", "application/json"
-    elif path.name == "dfm_report.md":
-        kind, media_type = "report_markdown", "text/markdown"
-    elif path.name == "dfm_report.pptx":
-        kind = "report_presentation"
-        media_type = (
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        )
-    elif suffix in {".step", ".stp"}:
-        kind, media_type = "highlighted_step", "model/step"
-    elif suffix == ".png":
-        kind, media_type = "evidence_image", "image/png"
+        artifact_id, kind, media_type = "measurements", "measurements", "application/json"
+    elif path.name == "render_scene.json":
+        artifact_id, kind, media_type = SCENE_ARTIFACT_ID, "render_scene", "application/json"
+    elif path.name == "topology_map.json":
+        artifact_id, kind, media_type = TOPOLOGY_ARTIFACT_ID, "topology_map", "application/json"
+    elif path.name.startswith("scalar_field_") and suffix == ".json":
+        artifact_id, kind, media_type = path.stem.removeprefix("scalar_"), "scalar_field", "application/json"
     else:
-        kind, media_type = "diagnostic", "application/octet-stream"
+        artifact_id, kind, media_type = path.stem, "diagnostic", "application/octet-stream"
     return {
+        "artifact_id": artifact_id,
         "kind": kind,
         "path": path.relative_to(output_dir).as_posix(),
         "media_type": media_type,
@@ -139,14 +107,7 @@ def _execute(request: WorkerRequest) -> WorkerResult:
             "pythonocc-core/OpenCascade is required by the STEP worker.",
             {"dependency": "pythonocc-core"},
         )
-    if not _pptx_available():
-        raise DFMError(
-            "dependency_missing",
-            "python-pptx is required to generate the DFM PowerPoint report.",
-            {"dependency": "python-pptx", "install_extra": "hermes-agent[dfm]"},
-        )
-
-    operations = validate_operations(request.operations)
+    validate_operations(request.operations)
 
     input_path = Path(request.input_path).expanduser().resolve()
     output_dir = Path(request.output_dir).expanduser().resolve()
@@ -156,91 +117,27 @@ def _execute(request: WorkerRequest) -> WorkerResult:
             "The STEP worker input must be an existing STEP/STP file.",
         )
     output_dir.mkdir(parents=True, exist_ok=True)
-    profile_path = output_dir / ".legacy_profile.json"
-    profile_path.write_text(
-        json.dumps(_legacy_config(request), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    from ..geometry.step import legacy_analyzer
-
-    def bridge_legacy_event(event: str, **payload: Any) -> None:
-        if event == "progress":
-            _emit(
-                "progress",
-                stage=str(payload.get("stage") or "legacy_analysis"),
-                percent=int(payload.get("percent") or 0),
-            )
-            return
-        if event != "artifact":
-            return
-        raw_path = Path(str(payload.get("path") or ""))
-        try:
-            relative = raw_path.resolve().relative_to(output_dir).as_posix()
-        except (OSError, ValueError):
-            return
-        _emit("artifact", kind=str(payload.get("type") or "artifact"), path=relative)
-
-    legacy_analyzer.emit_dfm_event = bridge_legacy_event
-    _emit("progress", stage="legacy_analysis", percent=5)
-    legacy_argv = [
-        str(input_path),
-        "--out",
-        str(output_dir),
-        "--config",
-        str(profile_path),
-        "--process",
-        "injection" if request.process == "injection" else "generic",
-        "--highlight-step-name",
-        "dfm_highlighted.step",
-    ]
-    for operation in operations:
-        legacy_argv.extend(["--operation", operation])
-    returncode = legacy_analyzer.main(legacy_argv)
-    if returncode != 0:
-        raise DFMError(
-            "analyzer_failed",
-            "The legacy STEP analyzer exited unsuccessfully.",
-            {"returncode": returncode},
-        )
-
-    report_path = output_dir / "dfm_report.json"
-    try:
-        report_result = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError) as exc:
-        raise DFMError(
-            "report_generation_failed",
-            "The DFM JSON report could not be loaded for PowerPoint generation.",
-        ) from exc
-    if not isinstance(report_result, dict):
-        raise DFMError(
-            "report_generation_failed",
-            "The DFM JSON report must contain an object.",
-        )
-
     input_sha256 = _input_sha256(input_path)
-    measurements = normalize_legacy_measurements(
-        list(report_result.get("issues") or []),
+    _emit("progress", stage="objective_geometry", percent=10)
+    exported = export_objective_fields(
+        input_path,
+        run_id=request.run_id,
         input_sha256=input_sha256,
-        algorithm_version=WORKER_VERSION,
-        stats=report_result.get("stats")
-        if isinstance(report_result.get("stats"), dict)
-        else {},
-        thresholds=report_result.get("thresholds")
-        if isinstance(report_result.get("thresholds"), dict)
-        else {},
-        process=request.process,
+        operations=request.operations,
     )
+    _emit("progress", stage="write_objective_artifacts", percent=85)
     measurement_path = output_dir / "measurements.json"
     measurement_path.write_text(
         json.dumps(
             {
-                "schema_version": MEASUREMENT_SCHEMA_VERSION,
+                "schema_version": 1,
                 "run_id": request.run_id,
                 "input_sha256": input_sha256,
                 "process": request.process,
                 "scope_id": request.scope_id,
-                "measurements": [item.to_dict() for item in measurements],
+                "measurements": [
+                    item.to_dict() for item in exported["measurements"]
+                ],
                 "producer_contract": "measurement_only",
             },
             ensure_ascii=False,
@@ -248,27 +145,21 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         ),
         encoding="utf-8",
     )
-    _emit("artifact", kind="measurements", path=measurement_path.name)
-
-    from ..reporting import render_default_reports
-
-    _emit("progress", stage="render_presentation", percent=97)
-    for report in render_default_reports(
-        artifact_dir=output_dir,
-        result=report_result,
-        process=request.process,
-        scope_id=request.scope_id,
-    ):
-        _emit(
-            "artifact",
-            kind=report.kind,
-            path=report.path.relative_to(output_dir).as_posix(),
+    (output_dir / "render_scene.json").write_text(
+        json.dumps(exported["scene"], ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (output_dir / "topology_map.json").write_text(
+        json.dumps(exported["topology"], ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    for field_id, field in exported["fields"]:
+        (output_dir / f"scalar_{field_id}.json").write_text(
+            json.dumps(field, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
     artifacts = [
         _artifact_metadata(path, output_dir)
         for path in sorted(output_dir.iterdir())
-        if path.is_file() and path.name not in {profile_path.name, "worker_result.json"}
+        if path.is_file() and path.name != "worker_result.json"
     ]
     result = WorkerResult(
         schema_version=WORKER_SCHEMA_VERSION,

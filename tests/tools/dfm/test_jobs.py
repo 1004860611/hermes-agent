@@ -201,7 +201,7 @@ def test_run_executes_and_persists_the_named_plan_snapshot(job_env):
         "ready",
         "2026-07-15T00:00:00Z",
         process="injection",
-        scope_id="injection.legacy-baseline",
+        scope_id="injection.wall-draft",
         scope_version="1.0.0",
     )
 
