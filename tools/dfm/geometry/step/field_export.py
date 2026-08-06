@@ -139,6 +139,7 @@ def _mesh(shape: Any, occ: SimpleNamespace, input_sha256: str) -> list[dict[str,
             {
                 "face": face,
                 "location": location,
+                "surface": occ.BRepAdaptor_Surface(face),
                 "vertices": vertices,
                 "uvs": uvs,
                 "primitive": {
@@ -388,23 +389,18 @@ def _surface_normal(item: dict[str, Any], uv: list[float] | None) -> list[float]
     if uv is None:
         return None
     try:
-        from OCC.Core.BRep import BRep_Tool
         from OCC.Core.BRepLProp import BRepLProp_SLProps
         from OCC.Core.TopAbs import TopAbs_REVERSED
 
-        surface = BRep_Tool.Surface(item["face"])
-        props = BRepLProp_SLProps(surface, uv[0], uv[1], 1, 1e-7)
+        props = BRepLProp_SLProps(item["surface"], uv[0], uv[1], 1, 1e-7)
         if not props.IsNormalDefined():
             return None
         direction = props.Normal()
-        location = item["location"]
-        if not location.IsIdentity():
-            direction.Transform(location.Transformation())
         normal = [float(direction.X()), float(direction.Y()), float(direction.Z())]
         if item["face"].Orientation() == TopAbs_REVERSED:
             normal = [-value for value in normal]
         return _unit(normal)
-    except (AttributeError, RuntimeError, ValueError):
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         return None
 
 
