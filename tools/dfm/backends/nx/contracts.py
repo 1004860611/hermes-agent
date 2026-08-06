@@ -19,6 +19,7 @@ class NXCalculatorCapability:
     optional_arguments: tuple[str, ...] = ()
     supported_algorithm_options: tuple[str, ...] = ()
     output_quantities: tuple[str, ...] = ()
+    output_artifact_kinds: tuple[str, ...] = ()
     supported_formats: tuple[str, ...] = ()
     supported_region_modes: tuple[str, ...] = ()
     supported_nx_versions: tuple[str, ...] = ()
@@ -33,6 +34,7 @@ class NXCalculatorCapability:
             "optional_arguments": list(self.optional_arguments),
             "supported_algorithm_options": list(self.supported_algorithm_options),
             "output_quantities": list(self.output_quantities),
+            "output_artifact_kinds": list(self.output_artifact_kinds),
             "supported_formats": list(self.supported_formats),
             "supported_region_modes": list(self.supported_region_modes),
             "supported_nx_versions": list(self.supported_nx_versions),
@@ -53,6 +55,7 @@ class NXCalculatorCapability:
             "optional_arguments",
             "supported_algorithm_options",
             "output_quantities",
+            "output_artifact_kinds",
             "supported_formats",
             "supported_region_modes",
             "supported_nx_versions",
@@ -79,6 +82,7 @@ class NXCalculatorCapability:
             optional_arguments=_strings("optional_arguments"),
             supported_algorithm_options=_strings("supported_algorithm_options"),
             output_quantities=_strings("output_quantities"),
+            output_artifact_kinds=_strings("output_artifact_kinds"),
             supported_formats=_strings("supported_formats"),
             supported_region_modes=_strings("supported_region_modes"),
             supported_nx_versions=_strings("supported_nx_versions"),

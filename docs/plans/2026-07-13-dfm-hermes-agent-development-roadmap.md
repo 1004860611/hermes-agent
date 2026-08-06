@@ -188,7 +188,7 @@ roadmap 只约束以下稳定关系，字段级 Schema 以代码和专项契约�
 | Project Fact | 名称、值、单位、确认状态、来源和证据；假设不能伪装成 confirmed |
 | Effective Rule | Rule ID、版本、适用条件、Metric、Operator、阈值参数、单位、来源和哈希 |
 | Plan Task | Metric/Calculator ID、参数来源、依赖、Backend 要求、认证要求和预期制品 |
-| Measurement | Calculator、客观值/区域、单位、质量、诊断、证据和 Backend/版本 provenance |
+| Measurement | Calculator、客观值/区域、单位、质量、诊断、客观场引用和 Backend/版本 provenance |
 | Evaluation | Measurement 引用、Rule 引用、实际值、期望值、Operator、Outcome 和参数来源 |
 | Finding | Evaluation/Measurement/Rule 引用、区域、severity、证据、建议和未解决项 |
 | Run Bundle | 输入哈希、Facts、Effective Rules、Plan、Backend/Calculator 版本及全部结果制品引用 |
@@ -278,7 +278,7 @@ B-Rep 闭环；它们登记为后续 Simulation Result Backend 候选。
 4. **交付 NX 运行链**：NX Server 完成上传、Job、许可证、Worker、取消、结果和 Artifact；
    C++ 插件实现黄金产品所需全部 P0 Calculator 并声明认证范围。
 5. **交付 Hermes 领域链**：建立最小压铸 Rule Set 和 Product Plan；EvaluationEngine、
-   FindingEngine 和报告消费 NX Measurement，不在插件中判断规则。
+   EvaluationEngine、FieldEvidenceEngine、evaluated Finding 和报告消费 NX Measurement/中性场，不在插件中判断规则或生成截图。
 6. **执行真实 E2E**：固化输入、规则、Plan、Backend、Calculator 和结果版本，生成不可变
    Run Bundle，并证明重复运行工程等价。
 7. **人工验收**：第 21 步由模具工程师逐项核对指标、数值、区域、severity 和证据；记录

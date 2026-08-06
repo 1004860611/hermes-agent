@@ -17,6 +17,7 @@
       "status": "measured",
       "geometry_refs": [],
       "region_refs": ["region.fixed_half"],
+      "field_refs": ["field_draft_fixed_half"],
       "method": "nx_open_draft_analysis",
       "algorithm_version": "nx-draft-1",
       "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

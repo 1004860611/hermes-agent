@@ -20,10 +20,12 @@ M2.6 验证的是“第一条业务纵向闭环”，不是仅验证 NX 能打�
 → Rule Set / Plan
 → HttpNXBackendClient
 → NX Server / NX C++ Plugin
-→ measurements.json
+→ measurements.json + scalar_field + render_scene + topology_map
 → Hermes EvaluationEngine
 → evaluations.json
-→ Finding / Evidence / Report
+→ Hermes FieldEvidenceEngine
+→ evidence_geometry.json + PNG + evidence_records.json
+→ evaluated Finding / Report
 → 只读 Run Bundle
 ```
 
@@ -153,6 +155,8 @@ M2.6 业务 Calculator 开发开始前必须完成黄金产品追溯矩阵和
 | Calculator ID | 通用、Backend 无关的算法能力 | `measure_draft` |
 | Operation ID | 当前 Plan 中的一次任务实例 | `draft.fixed_half` |
 | Measurement ID | 当前 Run 中的一条客观结果 | `measurement_draft_fixed_half_min` |
+| Field/Scene/Map Artifact ID | 客观局部场、渲染网格和拓扑映射 | `field_draft_fixed_half` |
+| Evidence ID | Hermes 判定后生成的截图证据 | `evidence_run_01_1` |
 
 方向、区域、工艺和黄金产品身份不能编码进 Calculator ID。六方向拔模生成六个 Operation，
 通过任务级 `arguments` 分别引用方向和区域，但共同使用 `measure_draft`。
@@ -173,8 +177,8 @@ M2.6 业务 Calculator 开发开始前必须完成黄金产品追溯矩阵和
 - 冻结 Rule/Metric/Calculator/Operation/Measurement/Region ID 词典；
 - 正式 Calculator ID 使用 `inspect_topology`、`measure_draft`、
   `measure_wall_thickness` 和 `inspect_undercut`；
-- 评审唯一 Schema 1 的 `calculator_id`、`metric_ids`、`required_quantities` 和已解析 `arguments`；
-- 评审结构化 Calculator capability、Region、认证范围及 Measurement 回链字段；
+- 评审唯一 Schema 1 的 `calculator_id`、`metric_ids`、`required_quantities`、`required_artifacts` 和已解析 `arguments`；
+- 评审 RuleBinding、结构化 Calculator capability、Region、Measurement、ScalarField、RenderScene、TopologyMap 和 EvidenceRecord 回链字段；
 - Hermes 与 NX Server/C++ 使用同一组 JSON fixture 做双向契约测试；
 - NX Server 和 Hermes 只实现同一份生产数据契约，不维护 demo 双轨。
 
@@ -195,7 +199,8 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 - 生成依赖有序 calculator DAG；
 - 六方向任务分别使用唯一 Operation ID，并通过 `arguments` 引用方向和区域；
 - 所需 calculator 必须在 NX capability 中为 `certified`；
-- 每个任务必须通过 Calculator 参数、输出 Quantity 和认证范围校验；
+- 每个任务必须通过 Calculator 参数、输出 Quantity/Artifact 和认证范围校验；
+- Plan 使用 RuleBinding 显式连接 Operation/Metric/Quantity 与 Rule，不依赖 NX diagnostics；
 - Plan 保存输入哈希、事实、规则、Backend 和版本快照；
 - 不将黄金产品文件名/哈希写成长期业务分支，Plan 来源必须是规则和事实。
 
@@ -211,7 +216,8 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 
 - `inspect_topology` 作为基础门；
 - 实现追溯矩阵要求的所有 calculator；
-- 只输出 Measurement、几何引用、quality、diagnostics 和 evidence；
+- 只输出 Measurement、几何引用、quality、diagnostics，以及中性的 ScalarField、RenderScene 和 TopologyMap；
+- 不输出失败区域、pass/fail 或截图；
 - 支持取消安全点和进度；
 - 输出插件/NX/calculator 版本；
 - 相同输入和版本重复运行工程等价。
@@ -219,8 +225,10 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 ### WP5：Hermes Evaluation/Finding/Report
 
 - NX 只返回 `producer_contract=measurement_only`；
-- EvaluationEngine 使用 Effective Rule Set 生成 `evaluations.json`；
-- FindingEngine 生成 rule_ref、严重程度、证据和建议；
+- EvaluationEngine 使用 RuleBinding 和 Effective Rule Set 生成 `evaluations.json`；
+- FieldEvidenceEngine 只对失败 Evaluation 筛选场数据、连接失败 Cell、生成局部 Patch 和截图；
+- `materialize_evaluated_findings()` 使用 Evaluation 与 EvidenceRecord 生成精确引用；
+- STEP 历史链路继续使用 Worker 证据与 `materialize_legacy_step_findings()`，不与 NX 生产链混用；
 - 报告展示事实、规则、实际值、期望值、结果、区域和未解决项；
 - 生产链不读取 Ground Truth。
 
@@ -328,7 +336,8 @@ approved Ground Truth version
 - 确认事实、Rule Set 和 Plan；
 - 所有所需 calculator 的真实 NX 执行；
 - Measurement-only 契约；
-- Evaluation、Finding、Evidence 和报告；
+- RuleBinding、Evaluation、失败 Patch、Hermes 截图、EvidenceRecord、Finding 和报告；
+- 平面失败、曲面局部失败、通过不截图、错误拓扑/输入哈希和并发 Run 不串证据；
 - 取消、超时、崩溃、幂等和许可证回收；
 - 相同版本重复运行工程等价；
 - 注塑 STEP 全量回归。

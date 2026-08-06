@@ -427,6 +427,7 @@ class DFMService:
                 input_ids=[item.input_id for item in active_inputs],
                 input_hashes={item.input_id: item.sha256 for item in active_inputs},
                 rules=process_plan.rules if process_plan else {},
+                rule_bindings=process_plan.rule_bindings if process_plan else [],
                 operations=operations,
                 parent_plan_id=parent_plan_id,
             )

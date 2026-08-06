@@ -9,7 +9,13 @@ import operator
 from pathlib import Path
 from typing import Any, Callable
 
-from ..contracts import ArtifactRecord, EvaluationRecord, MeasurementRecord, PlanRecord
+from ..contracts import (
+    ArtifactRecord,
+    EvaluationRecord,
+    MeasurementRecord,
+    PlanRecord,
+    RuleBinding,
+)
 from ..errors import DFMError
 
 
@@ -100,7 +106,16 @@ class EvaluationEngine:
         results: list[EvaluationRecord] = []
         provenance: dict[str, dict[str, Any]] = {}
         for measurement in measurements:
-            spec = self._spec(measurement, plan)
+            binding = self._binding(measurement, plan)
+            spec = (
+                {
+                    "rule_id": binding.rule_id,
+                    "operator": binding.operator,
+                    "aggregation": binding.aggregation,
+                }
+                if binding is not None
+                else (None if plan.rule_bindings else self._legacy_spec(measurement, plan))
+            )
             if spec is None:
                 continue
             rule_id = str(spec["rule_id"])
@@ -120,11 +135,23 @@ class EvaluationEngine:
                 expected = parameter.value
                 source = {
                     "type": "effective_rule",
+                    "binding_id": binding.binding_id if binding else None,
+                    "aggregation": spec.get("aggregation"),
                     "source": parameter.source,
                     "version": parameter.version,
                     "unit": parameter.unit,
                 }
             else:
+                if binding is not None:
+                    raise DFMError(
+                        "evaluation_rule_missing",
+                        "A bound production rule is absent from the effective rule set.",
+                        {
+                            "binding_id": binding.binding_id,
+                            "rule_id": rule_id,
+                            "measurement_id": measurement.measurement_id,
+                        },
+                    )
                 expected = spec.get("fallback_expected")
                 source = {
                     "type": "measurement_rule_snapshot",
@@ -151,7 +178,7 @@ class EvaluationEngine:
                 measurement.diagnostics.get("legacy_issue_id")
                 or measurement.measurement_id
             )
-            rule_version = plan.scope_version or "1"
+            rule_version = parameter.version if parameter is not None else plan.scope_version or "1"
             rule_hash = hashlib.sha256(
                 json.dumps(
                     {
@@ -183,7 +210,28 @@ class EvaluationEngine:
         return results, provenance
 
     @staticmethod
-    def _spec(
+    def _binding(
+        measurement: MeasurementRecord, plan: PlanRecord
+    ) -> RuleBinding | None:
+        matches = [
+            item
+            for item in plan.rule_bindings
+            if item.operation_id == measurement.operation_id
+            and item.metric_id == measurement.metric_id
+            and item.quantity_id == measurement.quantity_id
+        ]
+        if len(matches) > 1:
+            raise DFMError(
+                "evaluation_binding_invalid",
+                "More than one rule binding matches a measurement.",
+                {"measurement_id": measurement.measurement_id},
+            )
+        if matches:
+            return matches[0]
+        return None
+
+    @staticmethod
+    def _legacy_spec(
         measurement: MeasurementRecord, plan: PlanRecord
     ) -> dict[str, Any] | None:
         if (

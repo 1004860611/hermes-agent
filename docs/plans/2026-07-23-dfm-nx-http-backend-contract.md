@@ -5,7 +5,7 @@
 
 ## 1. 边界
 
-Hermes 只通过 `HttpNXBackendClient` 访问独立 NX Server，不提供本地 NX fallback。Server 负责认证、输入上传、Job 队列、许可证、Worker、取消和 Artifact；C++ 插件只执行 capability 声明的 Calculator。NX 只返回 Measurement，Hermes 负责 Rule、Evaluation 和 Finding。
+Hermes 只通过 `HttpNXBackendClient` 访问独立 NX Server，不提供本地 NX fallback。Server 负责认证、输入上传、Job 队列、许可证、Worker、取消和 Artifact；C++ 插件只执行 capability 声明的 Calculator。NX 返回 Measurement 与中性场/场景/拓扑映射，Hermes 负责 Rule、Evaluation、局部截图和 Finding。
 
 ## 2. API
 
@@ -43,6 +43,7 @@ GET  /v1/jobs/{job_id}/artifacts/{artifact_id}
       "depends_on": ["geometry.load"],
       "metric_ids": ["geometry.model"],
       "required_quantities": ["valid_brep"],
+      "required_artifacts": [],
       "arguments": {},
       "algorithm_options": {}
     }
@@ -50,7 +51,7 @@ GET  /v1/jobs/{job_id}/artifacts/{artifact_id}
 }
 ```
 
-请求不含 Rule 阈值。每个参数必须是已解析值并带 `source_ref`。Server 依据结构化 capability 校验 Calculator、参数、输出 Quantity、格式、Region mode 和 Schema；任何不匹配都拒绝，不尝试另一种请求形状。
+请求不含 Rule 阈值。每个参数必须是已解析值并带 `source_ref`。Server 依据结构化 capability 校验 Calculator、参数、输出 Quantity、Artifact kind、格式、Region mode 和 Schema；任何不匹配都拒绝，不尝试另一种请求形状。
 
 相同授权域中的相同 `run_id + input.sha256 + schema_version` 重复提交必须幂等。
 
@@ -66,9 +67,9 @@ queued/starting/running -> cancelling -> cancelled
 
 ## 5. Result 与 Artifact
 
-成功 Result 至少且只能包含一个 `kind=measurements` Artifact。每个 Artifact 提供 `artifact_id`、单层安全 `filename`、`media_type`、`sha256` 和 `size_bytes`。Hermes 下载后重新校验大小和哈希。
+成功 Result 必须且只能包含一个 `kind=measurements` Artifact，并包含每个 Operation 声明的 `required_artifacts`。局部证据链使用 `scalar_field`、`render_scene` 和 `topology_map`。每个 Artifact 提供稳定且唯一的 `artifact_id`、单层安全 `filename`、`media_type`、`sha256` 和 `size_bytes`。Hermes 下载后重新校验大小和哈希，保留远端 Artifact ID，不以下载顺序重新编号。
 
-Measurement artifact 必须满足 `measurement.schema.json`，且 `producer_contract=measurement_only`。NX 不得返回生产 Evaluation 或 Finding。
+Measurement artifact 必须满足 `measurement.schema.json`，且 `producer_contract=measurement_only`。场、场景和映射必须满足各自 Schema，并与同一 Run/输入哈希交叉校验。NX 不得返回生产 Evaluation、失败 Patch、截图或 Finding。
 
 ## 6. 错误
 
@@ -77,7 +78,7 @@ Measurement artifact 必须满足 `measurement.schema.json`，且 `producer_cont
 ## 7. 验收
 
 - 共用 `tests/fixtures/dfm/nx/task_contract_*.json`；
-- capability、请求和 measurement 通过正式 Schema；
+- capability、请求、measurement、scalar field、render scene 和 topology map 通过正式 Schema；
 - 上传、幂等、轮询、取消、崩溃恢复、Artifact 安全和哈希校验有真实 Server E2E；
-- golden part 的 required Quantities 全部返回并能由 Hermes 生成 Evaluation/Finding；
+- golden part 的 required Quantities/Artifacts 全部返回并能由 Hermes 生成 Evaluation、局部截图和 Finding；
 - STEP/OpenCascade 回归不受 NX 服务状态影响。

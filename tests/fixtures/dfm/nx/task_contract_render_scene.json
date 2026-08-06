@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scene_id": "scene_golden_part",
+  "run_id": "run_1",
+  "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "coordinate_system": "model",
+  "unit": "mm",
+  "primitives": [
+    {
+      "primitive_id": "body-1",
+      "vertices": [[0, 0, 0], [10, 0, 0], [10, 10, 1], [0, 10, 2]],
+      "triangles": [[0, 1, 2], [0, 2, 3]]
+    }
+  ]
+}

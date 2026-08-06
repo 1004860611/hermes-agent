@@ -181,7 +181,7 @@ Python/智能体开发者之一，同时担任总体负责人。
 | B：DFM 领域平台负责人            |        1 | Python                              | 待填写     | Manifest、ProcessAdapter、Plan、Measurement/Evaluation/Finding、规则和状态机 |
 | C：Hermes 集成与质量负责人       |        1 | Python、Hermes、Desktop/Django 经验 | 待填写     | 工具/Skill、Desktop 闭环、配置部署、E2E、回归和联调环境                      |
 | D：NX Server/Runtime 负责人      |        1 | C++、Windows、服务开发              | 待填写     | HTTP Server、上传、Job、Worker Pool、许可证、取消、结果和部署                |
-| E：NX C++ 插件/Calculator 负责人 |        1 | C++、NX Open/UFUN                   | 待填写     | 插件桥、模型加载、几何索引、calculator、证据和数值认证                       |
+| E：NX C++ 插件/Calculator 负责人 |        1 | C++、NX Open/UFUN                   | 待填写     | 插件桥、模型加载、几何索引、calculator、中性场/场景/拓扑映射和数值认证        |
 | F：图纸理解/OCR 负责人           |        1 | OCR、CV、模型训练、Python           | 待填写     | PDF/OCR、版面、字段提取、标注语料、指标评估和 M3 闭环                        |
 
 ### 6.1 如果实际只有 5 人
@@ -409,7 +409,7 @@ tests/fixtures/dfm/drawings/
 | Effective Rule Set | Plan Compiler | required metrics、parameters、scope snapshot        | B        |
 | Plan Compiler    | Geometry Service | calculator DAG、backend requirements、input hash   | B → C/D |
 | NX Server        | Hermes      | capability、JobStatus、Artifact manifest              | D → C   |
-| NX 插件          | NX Server   | plugin result、Measurement、evidence                  | E → D   |
+| NX 插件          | NX Server   | plugin result、Measurement、ScalarField/RenderScene/TopologyMap | E → D   |
 | NX/OCCT Backend  | EvaluationEngine | Measurement-only Artifact                        | B/E      |
 | Effective Rule Set | EvaluationEngine | operator、expected、unit、provenance              | B        |
 | EvaluationEngine | Finding Engine | evaluations.json、rule_ref、provenance               | B        |

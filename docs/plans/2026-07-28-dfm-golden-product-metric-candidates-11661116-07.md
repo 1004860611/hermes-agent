@@ -160,5 +160,10 @@ Measurement 得到。建议登记到长期指标清单，但 M2.6 第一条 NX �
 | 壁厚不均或局部过厚             | `die_casting.wall_thickness.*`  | `thickness_mm`            | `measure_wall_thickness`       | NX            | min/max/mean/分位数/区域 | 与冻结后的厚度规则比较 | 过薄/过厚区域热图          |
 | 压铸机锁模能力不足             | `die_casting.clamping_capacity` | `required_clamping_force` | `calculate_clamping_force`     | Hermes domain | NX 投影面积 + 工艺事实   | 所需力与设备能力比较   | 公式、输入、单位和选型证据 |
 
+其中“彩色面证据”不由 NX 直接生成。NX 对拔模角、壁厚等局部指标输出中性的
+ScalarField、RenderScene 和 TopologyMap；Hermes 使用批准规则形成失败 Patch，再在对应
+三角形上生成截图和 EvidenceRecord。这样修改规则阈值时无需让 NX 重新解释 pass/fail，
+同时截图仍能精确回链 Measurement、Evaluation、输入哈希和 Run。
+
 上述只是追溯矩阵起点。工程师完成第 7 节澄清并冻结区域、阈值和输入版本后，才能把候选
 项转成 M2.6 的正式 `required_metrics`、Rule Set、Plan 和人工验收清单。

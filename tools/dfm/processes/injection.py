@@ -122,13 +122,14 @@ class InjectionProcessAdapter:
                 )
             enriched_operations.append(
                 PlanOperation(
-                    operation.operation_id,
-                    operation.calculator_id,
-                    operation.depends_on,
-                    operation.metric_ids,
-                    operation.required_quantities,
-                    arguments,
-                    algorithm_options,
+                    operation_id=operation.operation_id,
+                    calculator_id=operation.calculator_id,
+                    depends_on=operation.depends_on,
+                    metric_ids=operation.metric_ids,
+                    required_quantities=operation.required_quantities,
+                    required_artifacts=operation.required_artifacts,
+                    arguments=arguments,
+                    algorithm_options=algorithm_options,
                 )
             )
 

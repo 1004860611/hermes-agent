@@ -138,12 +138,14 @@ class PlanRecord:
     input_ids: list[str] = field(default_factory=list)
     input_hashes: dict[str, str] = field(default_factory=dict)
     rules: dict[str, "EffectiveRule"] = field(default_factory=dict)
+    rule_bindings: list["RuleBinding"] = field(default_factory=list)
     operations: list["PlanOperation"] = field(default_factory=list)
     parent_plan_id: str | None = None
     invalidated_by: str | None = None
     affected_operation_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        self.validate()
         return {
             "plan_id": self.plan_id,
             "input_mode": self.input_mode,
@@ -159,11 +161,35 @@ class PlanRecord:
             "rules": {
                 key: value.to_dict() for key, value in self.rules.items()
             },
+            "rule_bindings": [item.to_dict() for item in self.rule_bindings],
             "operations": [operation.to_dict() for operation in self.operations],
             "parent_plan_id": self.parent_plan_id,
             "invalidated_by": self.invalidated_by,
             "affected_operation_ids": list(self.affected_operation_ids),
         }
+
+    def validate(self) -> None:
+        binding_ids = [item.binding_id for item in self.rule_bindings]
+        if len(binding_ids) != len(set(binding_ids)):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Plan rule binding IDs must be unique.",
+            )
+        operations = {item.operation_id: item for item in self.operations}
+        for binding in self.rule_bindings:
+            binding.validate()
+            operation = operations.get(binding.operation_id)
+            if (
+                operation is None
+                or binding.metric_id not in operation.metric_ids
+                or binding.quantity_id not in operation.required_quantities
+                or binding.rule_id not in self.rules
+            ):
+                raise DFMError(
+                    "plan_rule_binding_invalid",
+                    "A rule binding does not resolve within its plan.",
+                    {"binding_id": binding.binding_id},
+                )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PlanRecord":
@@ -172,10 +198,16 @@ class PlanRecord:
             key: EffectiveRule.from_dict(value)
             for key, value in values.get("rules", {}).items()
         }
+        values["rule_bindings"] = [
+            RuleBinding.from_dict(value)
+            for value in values.get("rule_bindings", [])
+        ]
         values["operations"] = [
             PlanOperation.from_dict(value) for value in values.get("operations", [])
         ]
-        return cls(**values)
+        plan = cls(**values)
+        plan.validate()
+        return plan
 
 
 @dataclass(frozen=True)
@@ -194,12 +226,69 @@ class EffectiveRule:
 
 
 @dataclass(frozen=True)
+class RuleBinding:
+    """Bind one objective quantity to a Hermes-owned engineering rule."""
+
+    binding_id: str
+    operation_id: str
+    metric_id: str
+    quantity_id: str
+    rule_id: str
+    operator: str
+    aggregation: str
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RuleBinding":
+        binding = cls(**payload)
+        binding.validate()
+        return binding
+
+    def validate(self) -> None:
+        identities = (
+            self.binding_id,
+            self.operation_id,
+            self.metric_id,
+            self.quantity_id,
+            self.rule_id,
+        )
+        if any(not isinstance(value, str) or not value for value in identities):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule bindings require non-empty stable identities.",
+            )
+        if self.operator not in {">=", "<=", ">", "<", "==", "!="}:
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule binding operator is unsupported.",
+                {"binding_id": self.binding_id, "operator": self.operator},
+            )
+        if self.aggregation not in {
+            "minimum",
+            "maximum",
+            "mean",
+            "sum",
+            "count",
+            "identity",
+        }:
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule binding aggregation is unsupported.",
+                {"binding_id": self.binding_id, "aggregation": self.aggregation},
+            )
+
+
+@dataclass(frozen=True)
 class PlanOperation:
     operation_id: str
     calculator_id: str
     depends_on: list[str] = field(default_factory=list)
     metric_ids: list[str] = field(default_factory=list)
     required_quantities: list[str] = field(default_factory=list)
+    required_artifacts: list[str] = field(default_factory=list)
     arguments: dict[str, "ResolvedArgument"] = field(default_factory=dict)
     algorithm_options: dict[str, "ResolvedArgument"] = field(default_factory=dict)
 
@@ -211,6 +300,7 @@ class PlanOperation:
             "depends_on": list(self.depends_on),
             "metric_ids": list(self.metric_ids),
             "required_quantities": list(self.required_quantities),
+            "required_artifacts": list(self.required_artifacts),
             "arguments": {
                 key: value.to_dict() for key, value in self.arguments.items()
             },
@@ -235,6 +325,12 @@ class PlanOperation:
             raise DFMError(
                 "plan_operation_invalid",
                 "Plan operation required_quantities must be unique.",
+                {"operation_id": self.operation_id},
+            )
+        if len(self.required_artifacts) != len(set(self.required_artifacts)):
+            raise DFMError(
+                "plan_operation_invalid",
+                "Plan operation required_artifacts must be unique.",
                 {"operation_id": self.operation_id},
             )
         for values in (self.arguments, self.algorithm_options):
@@ -333,7 +429,7 @@ class RegionRecord:
 
 @dataclass(frozen=True)
 class GeometryRef:
-    """A topology reference valid for one immutable STEP input/version."""
+    """A topology reference valid for one immutable geometry input/version."""
 
     kind: str
     index: int
@@ -366,6 +462,7 @@ class MeasurementRecord:
     quality: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     region_refs: list[str] = field(default_factory=list)
+    field_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -404,6 +501,37 @@ class EvaluationRecord:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "EvaluationRecord":
         return cls(**payload)
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    """Bind one Hermes-rendered image to the exact evaluated geometry."""
+
+    evidence_id: str
+    run_id: str
+    input_sha256: str
+    operation_id: str
+    metric_id: str
+    measurement_ids: list[str]
+    evaluation_ids: list[str]
+    geometry_refs: list[GeometryRef]
+    region_refs: list[str]
+    artifact_ref: str
+    render: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "geometry_refs": [item.to_dict() for item in self.geometry_refs],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "EvidenceRecord":
+        values = dict(payload)
+        values["geometry_refs"] = [
+            GeometryRef.from_dict(item) for item in values.get("geometry_refs", [])
+        ]
+        return cls(**values)
 
 
 @dataclass(frozen=True)

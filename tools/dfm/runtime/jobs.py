@@ -27,8 +27,12 @@ from ..contracts import (
     ensure_run_transition,
 )
 from ..errors import DFMError
+from ..evidence import FieldEvidenceEngine
 from ..evaluation import EvaluationEngine
-from ..findings import materialize_findings
+from ..findings import (
+    materialize_evaluated_findings,
+    materialize_legacy_step_findings,
+)
 from ..project.manifest import ManifestStore
 from ..project.workspace import DFMWorkspace
 
@@ -63,6 +67,7 @@ class JobManager:
         self._lock = RLock()
         self.runtime_id = f"runtime_{uuid4().hex[:16]}"
         self.evaluation_engine = EvaluationEngine()
+        self.field_evidence_engine = FieldEvidenceEngine()
         if reconcile:
             self.reconcile_incomplete_runs()
 
@@ -233,7 +238,20 @@ class JobManager:
                 checked.append(
                     self._validate_artifact(context.project_dir, evaluation_artifact)
                 )
-            self._complete_success(project_id, run_id, checked)
+                if analyzer.key == "parasolid" and any(
+                    item.kind == "scalar_field" for item in checked
+                ):
+                    evidence_artifacts = self.field_evidence_engine.materialize(
+                        context.project_dir,
+                        run_id,
+                        checked,
+                        max_images=self.config.max_evidence_findings,
+                    )
+                    checked.extend(
+                        self._validate_artifact(context.project_dir, item)
+                        for item in evidence_artifacts
+                    )
+            self._complete_success(project_id, run_id, checked, analyzer.key)
         except DFMError as exc:
             logger.warning(
                 "DFM run failed: project_id=%s run_id=%s code=%s",
@@ -280,7 +298,13 @@ class JobManager:
         except DFMError:
             return
 
-    def _complete_success(self, project_id: str, run_id: str, artifacts: list[ArtifactRecord]) -> None:
+    def _complete_success(
+        self,
+        project_id: str,
+        run_id: str,
+        artifacts: list[ArtifactRecord],
+        analyzer_key: str,
+    ) -> None:
         now = _utc_now()
 
         def complete(current: ProjectManifest) -> ProjectManifest:
@@ -308,7 +332,14 @@ class JobManager:
             if not found:
                 raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
             known = {item.artifact_id for item in current.artifacts}
-            findings = materialize_findings(self.workspace.project_dir(project_id), artifacts)
+            finding_materializer = (
+                materialize_legacy_step_findings
+                if analyzer_key == "step"
+                else materialize_evaluated_findings
+            )
+            findings = finding_materializer(
+                self.workspace.project_dir(project_id), artifacts
+            )
             finding_ids = {item.finding_id for item in findings}
             return replace(
                 current,

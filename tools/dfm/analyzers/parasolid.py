@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import re
 import time
 from pathlib import Path
 
@@ -122,6 +123,10 @@ class ParasolidAnalyzer:
                     definition.output_quantities
                 ):
                     reasons.append("output_quantities")
+                if set(operation.required_artifacts) - set(
+                    definition.output_artifact_kinds
+                ):
+                    reasons.append("output_artifacts")
                 if definition.supported_formats and "parasolid_xt" not in set(
                     definition.supported_formats
                 ):
@@ -229,13 +234,24 @@ class ParasolidAnalyzer:
         output_dir = context.project_dir / "runs" / context.run_id / "artifacts"
         output_dir.mkdir(parents=True, exist_ok=True)
         artifacts: list[ArtifactRecord] = []
+        artifact_ids: set[str] = set()
+        filenames: set[str] = set()
         for index, remote in enumerate(self.client.artifacts(job.job_id), start=1):
             filename = Path(remote.filename).name
-            if not filename or filename != remote.filename or remote.size_bytes < 0:
+            if (
+                not filename
+                or filename != remote.filename
+                or filename in filenames
+                or remote.size_bytes < 0
+                or not re.fullmatch(r"[A-Za-z0-9._-]+", remote.artifact_id)
+                or remote.artifact_id in artifact_ids
+            ):
                 raise DFMError(
                     "nx_artifact_invalid",
-                    "NX backend returned an unsafe artifact filename.",
+                    "NX backend returned an unsafe or duplicate artifact identity.",
                 )
+            filenames.add(filename)
+            artifact_ids.add(remote.artifact_id)
             target = output_dir / filename
             temporary = output_dir / f".{filename}.part"
             try:
@@ -246,7 +262,7 @@ class ParasolidAnalyzer:
                 temporary.unlink(missing_ok=True)
             artifacts.append(
                 ArtifactRecord(
-                    f"artifact_{context.run_id}_{index}",
+                    remote.artifact_id,
                     remote.kind,
                     target.relative_to(context.project_dir).as_posix(),
                     remote.media_type,
@@ -262,6 +278,18 @@ class ParasolidAnalyzer:
         self._validate_measurements(
             context.plan.operations,
             context.project_dir / measurements.relative_path,
+            run_id=context.run_id,
+            input_sha256=input_record.sha256,
+            process=context.plan.process,
+            scope_id=context.plan.scope_id,
+            artifact_by_id={item.artifact_id: item for item in artifacts},
+        )
+        self._validate_evidence_artifacts(
+            context.plan.operations,
+            context.project_dir,
+            artifacts,
+            run_id=context.run_id,
+            input_sha256=input_record.sha256,
         )
         self._emit(context, "complete", 100, job.job_id)
         return artifacts
@@ -270,6 +298,12 @@ class ParasolidAnalyzer:
     def _validate_measurements(
         operations: list[PlanOperation],
         path: Path,
+        *,
+        run_id: str,
+        input_sha256: str,
+        process: str,
+        scope_id: str,
+        artifact_by_id: dict[str, ArtifactRecord],
     ) -> None:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -283,6 +317,10 @@ class ParasolidAnalyzer:
             or payload.get("schema_version") != NX_REQUEST_SCHEMA_VERSION
             or payload.get("producer_contract") != "measurement_only"
             or not isinstance(payload.get("measurements"), list)
+            or payload.get("run_id") != run_id
+            or payload.get("input_sha256") != input_sha256
+            or payload.get("process") != process
+            or payload.get("scope_id") != scope_id
         ):
             raise DFMError(
                 "nx_result_invalid",
@@ -312,12 +350,37 @@ class ParasolidAnalyzer:
                 or measurement.get("calculator_id") != operation.calculator_id
                 or metric_id not in operation.metric_ids
                 or quantity_id not in operation.required_quantities
+                or measurement.get("input_sha256") != input_sha256
             ):
                 raise DFMError(
                     "nx_result_invalid",
                     "NX Measurement does not link to the submitted task contract.",
                     {"measurement_id": measurement.get("measurement_id")},
                 )
+            field_refs = measurement.get("field_refs")
+            if not isinstance(field_refs, list) or any(
+                not isinstance(ref, str)
+                or ref not in artifact_by_id
+                or artifact_by_id[ref].kind != "scalar_field"
+                for ref in field_refs
+            ):
+                raise DFMError(
+                    "nx_result_invalid",
+                    "NX Measurement field_refs do not resolve to scalar fields.",
+                    {"measurement_id": measurement.get("measurement_id")},
+                )
+            if "scalar_field" in operation.required_artifacts and not field_refs:
+                raise DFMError(
+                    "nx_result_invalid",
+                    "A field-backed operation returned a Measurement without field_refs.",
+                    {"measurement_id": measurement.get("measurement_id")},
+                )
+            for ref in measurement.get("geometry_refs") or []:
+                if not isinstance(ref, dict) or ref.get("input_sha256") != input_sha256:
+                    raise DFMError(
+                        "nx_result_invalid",
+                        "NX Measurement geometry_refs belong to another input.",
+                    )
             received.add((operation_id, metric_id, quantity_id))
         missing = sorted(expected - received)
         if missing:
@@ -326,6 +389,98 @@ class ParasolidAnalyzer:
                 "NX task measurements are missing required metric results.",
                 {"missing_operation_metrics": missing},
             )
+
+    @staticmethod
+    def _validate_evidence_artifacts(
+        operations: list[PlanOperation],
+        project_dir: Path,
+        artifacts: list[ArtifactRecord],
+        *,
+        run_id: str,
+        input_sha256: str,
+    ) -> None:
+        by_id = {item.artifact_id: item for item in artifacts}
+        kinds = {item.kind for item in artifacts}
+        required_kinds = {
+            kind for operation in operations for kind in operation.required_artifacts
+        }
+        missing = sorted(required_kinds - kinds)
+        if missing:
+            raise DFMError(
+                "nx_result_invalid",
+                "NX results are missing required objective geometry artifacts.",
+                {"missing_artifact_kinds": missing},
+            )
+
+        payloads: dict[str, dict] = {}
+        for artifact in artifacts:
+            if artifact.kind not in {"scalar_field", "render_scene", "topology_map"}:
+                continue
+            try:
+                payload = json.loads(
+                    (project_dir / artifact.relative_path).read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                raise DFMError(
+                    "nx_result_invalid",
+                    f"NX {artifact.kind} artifact is not valid JSON.",
+                ) from exc
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema_version") != NX_REQUEST_SCHEMA_VERSION
+                or payload.get("run_id") != run_id
+                or payload.get("input_sha256") != input_sha256
+            ):
+                raise DFMError(
+                    "nx_result_invalid",
+                    f"NX {artifact.kind} artifact belongs to another run or input.",
+                )
+            payloads[artifact.artifact_id] = payload
+
+        operations_by_id = {item.operation_id: item for item in operations}
+        for artifact in artifacts:
+            if artifact.kind != "scalar_field":
+                continue
+            field = payloads[artifact.artifact_id]
+            operation = operations_by_id.get(str(field.get("operation_id") or ""))
+            if (
+                operation is None
+                or field.get("metric_id") not in operation.metric_ids
+                or field.get("quantity_id") not in operation.required_quantities
+            ):
+                raise DFMError(
+                    "nx_result_invalid",
+                    "NX scalar field does not link to its submitted operation.",
+                )
+            scene_ref = str(field.get("scene_ref") or "")
+            topology_ref = str(field.get("topology_map_ref") or "")
+            if (
+                scene_ref not in by_id
+                or by_id[scene_ref].kind != "render_scene"
+                or topology_ref not in by_id
+                or by_id[topology_ref].kind != "topology_map"
+                or payloads.get(topology_ref, {}).get("scene_ref") != scene_ref
+            ):
+                raise DFMError(
+                    "nx_result_invalid",
+                    "NX scalar field scene/topology references are inconsistent.",
+                )
+            sample_ids = {
+                str(item.get("sample_id"))
+                for item in field.get("samples", [])
+                if isinstance(item, dict) and item.get("sample_id")
+            }
+            if any(
+                not isinstance(cell, dict)
+                or not set(str(value) for value in cell.get("sample_ids", [])).issubset(
+                    sample_ids
+                )
+                for cell in field.get("cells", [])
+            ):
+                raise DFMError(
+                    "nx_result_invalid",
+                    "NX scalar field cells reference missing samples.",
+                )
 
     @staticmethod
     def _emit(

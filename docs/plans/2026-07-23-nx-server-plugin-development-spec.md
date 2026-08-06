@@ -26,7 +26,7 @@ Hermes -> NX HTTP Server -> Input Store / Job Queue / License Scheduler
 
 ## 3. 唯一请求模型
 
-Server 只接受 `schema_version=1` 和正式 Operation 字段：`operation_id`、`calculator_id`、`depends_on`、`metric_ids`、`required_quantities`、`arguments`、`algorithm_options`。
+Server 只接受 `schema_version=1` 和正式 Operation 字段：`operation_id`、`calculator_id`、`depends_on`、`metric_ids`、`required_quantities`、`required_artifacts`、`arguments`、`algorithm_options`。
 
 统一使用 `geometry.load` / `load_geometry`。不接受 `operation`、`metric_refs`、`fact_ref`、`region_ref`、`check_id` 或 `operation_ref`。Rule 阈值不得进入插件输入。
 
@@ -34,15 +34,15 @@ Job 请求还包含 `run_id`、process/scope 身份和 `input_id + sha256 + form
 
 ## 4. Capability
 
-每个 Calculator 必须返回结构化 Definition：认证状态、契约版本、实现版本、必需/可选参数、输出 Quantities、支持格式、Region modes、NX versions 和认证报告哈希。字符串 `"certified"` 不是合法 capability。
+每个 Calculator 必须返回结构化 Definition：认证状态、契约版本、实现版本、必需/可选参数、输出 Quantities、输出 Artifact kinds、支持格式、Region modes、NX versions 和认证报告哈希。字符串 `"certified"` 不是合法 capability。
 
 Server 在排队前完成全部能力校验。C++ Registry 也需校验 allowlist，形成纵深防御。
 
 ## 5. Measurement
 
-每条 Measurement 必须包含 `measurement_id`、`operation_id`、`calculator_id`、`metric_id`、`quantity_id`、值/单位、几何/区域引用、方法、算法版本和输入哈希。
+每条 Measurement 必须包含 `measurement_id`、`operation_id`、`calculator_id`、`metric_id`、`quantity_id`、值/单位、几何/区域引用、场引用、方法、算法版本和输入哈希。
 
-NX 只返回客观结果。`pass/fail`、severity、rule、recommendation 属于 Hermes，不得由插件生成。完整结构见 `measurement.schema.json`。
+需要局部证据的 Calculator 额外返回 ScalarField、RenderScene 和 TopologyMap。NX 只返回客观值和中性几何，不得使用 `violating`/`failed` 命名。`pass/fail`、失败 Patch、截图、severity、rule、recommendation 属于 Hermes，不得由插件生成。完整结构见 `measurement.schema.json`、`scalar_field.schema.json`、`render_scene.schema.json` 和 `topology_map.schema.json`。
 
 ## 6. 安全与运行
 
@@ -58,10 +58,10 @@ NX 只返回客观结果。`pass/fail`、severity、rule、recommendation 属于
 
 1. 使用 Hermes 共用 fixtures 做双向解析测试；
 2. 对缺字段、未知字段、错误 Schema、字符串 capability 做负例；
-3. 对缺参数、额外参数、缺 Quantity、错误 Region mode/格式做能力负例；
+3. 对缺参数、额外参数、缺 Quantity/Artifact、错误 Region mode/格式做能力负例；
 4. 对上传中断、哈希错误、重复提交、许可证耗尽、取消和 NX crash 做集成测试；
 5. 用真实 NX 打开 golden part，执行 topology 和 P0 Calculator；
-6. 验证结果可被 Hermes 完整回链并生成 Evaluation/Finding；
+6. 验证结果可被 Hermes 完整回链并生成 Evaluation/失败 Patch/截图/Finding；
 7. 固化 NX、插件、Calculator 和认证报告版本。
 
 ## 8. 交付门槛

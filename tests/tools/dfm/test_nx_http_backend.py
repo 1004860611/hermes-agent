@@ -13,7 +13,13 @@ from tools.dfm.backends.nx.contracts import (
     NXCapability,
     NXJobStatus,
 )
-from tools.dfm.contracts import InputRecord, PlanOperation, PlanRecord, ResolvedArgument
+from tools.dfm.contracts import (
+    InputRecord,
+    PlanOperation,
+    PlanRecord,
+    ResolvedArgument,
+    RuleBinding,
+)
 from tools.dfm.errors import DFMError
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "fixtures" / "dfm" / "nx"
@@ -26,7 +32,10 @@ class FakeNXClient:
         self.submitted = []
         self.payload = json.dumps({
             "schema_version": 1,
+            "run_id": "run_1",
+            "input_sha256": "a" * 64,
             "process": "die_casting",
+            "scope_id": "die_casting.topology-baseline",
             "measurements": [],
             "producer_contract": "measurement_only",
         }).encode()
@@ -74,14 +83,50 @@ class FakeNXClient:
 class TaskContractNXClient(FakeNXClient):
     def __init__(self):
         super().__init__()
-        self.payload = (
-            FIXTURE_ROOT / "task_contract_measurements.json"
-        ).read_bytes()
+        measurements = json.loads(
+            (FIXTURE_ROOT / "task_contract_measurements.json").read_text()
+        )
+        measurements["scope_id"] = "die_casting.topology-baseline"
+        self.payloads = {
+            "measurements": json.dumps(measurements).encode(),
+            "field_draft_fixed_half": (
+                FIXTURE_ROOT / "task_contract_scalar_field.json"
+            ).read_bytes(),
+            "scene_golden_part": (
+                FIXTURE_ROOT / "task_contract_render_scene.json"
+            ).read_bytes(),
+            "topology_golden_part": (
+                FIXTURE_ROOT / "task_contract_topology_map.json"
+            ).read_bytes(),
+        }
+        self.payload = self.payloads["measurements"]
 
     def capability(self):
         return NXCapability.from_dict(
             json.loads((FIXTURE_ROOT / "task_contract_capability.json").read_text())
         )
+
+    def artifacts(self, job_id):
+        definitions = (
+            ("measurements", "measurements", "measurements.json"),
+            ("field_draft_fixed_half", "scalar_field", "draft_field.json"),
+            ("scene_golden_part", "render_scene", "render_scene.json"),
+            ("topology_golden_part", "topology_map", "topology_map.json"),
+        )
+        return [
+            NXArtifact(
+                artifact_id,
+                kind,
+                filename,
+                "application/json",
+                hashlib.sha256(self.payloads[artifact_id]).hexdigest(),
+                len(self.payloads[artifact_id]),
+            )
+            for artifact_id, kind, filename in definitions
+        ]
+
+    def download(self, job_id, artifact, target):
+        target.write(self.payloads[artifact.artifact_id])
 
 
 def _context(tmp_path: Path):
@@ -146,6 +191,18 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
         (request, "nx_request.schema.json"),
         (capability, "nx_capability.schema.json"),
         (measurements, "measurement.schema.json"),
+        (
+            json.loads((FIXTURE_ROOT / "task_contract_scalar_field.json").read_text()),
+            "scalar_field.schema.json",
+        ),
+        (
+            json.loads((FIXTURE_ROOT / "task_contract_render_scene.json").read_text()),
+            "render_scene.schema.json",
+        ),
+        (
+            json.loads((FIXTURE_ROOT / "task_contract_topology_map.json").read_text()),
+            "topology_map.schema.json",
+        ),
     ):
         schema = json.loads((SCHEMA_ROOT / schema_name).read_text())
         jsonschema.Draft202012Validator(schema).validate(payload)
@@ -153,6 +210,19 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
     region_schema = json.loads((SCHEMA_ROOT / "region.schema.json").read_text())
     region = operation["arguments"]["region"]["value"]
     jsonschema.Draft202012Validator(region_schema).validate(region)
+    binding_schema = json.loads(
+        (SCHEMA_ROOT / "rule_binding.schema.json").read_text()
+    )
+    binding = RuleBinding(
+        "binding.draft.fixed_half",
+        "draft.fixed_half",
+        "dc.geometry.draft.fixed_half",
+        "draft_angle_deg",
+        "die_casting.min_draft.fixed_half",
+        ">=",
+        "minimum",
+    )
+    jsonschema.Draft202012Validator(binding_schema).validate(binding.to_dict())
 
 
 def test_parasolid_analyzer_uses_http_client_contract_and_downloads_measurements(
@@ -190,6 +260,7 @@ def test_parasolid_analyzer_uses_production_contract_for_metric_scoped_operation
             depends_on=["geometry.topology"],
             metric_ids=["dc.geometry.draft.fixed_half"],
             required_quantities=["draft_angle_deg"],
+            required_artifacts=_task_artifacts(),
             arguments=_task_arguments(),
         )
     )
@@ -202,7 +273,12 @@ def test_parasolid_analyzer_uses_production_contract_for_metric_scoped_operation
     assert request["operations"][-1] == json.loads(
         (FIXTURE_ROOT / "task_contract_request.json").read_text()
     )
-    assert artifacts[0].kind == "measurements"
+    assert {item.kind for item in artifacts} == {
+        "measurements",
+        "scalar_field",
+        "render_scene",
+        "topology_map",
+    }
 
 
 def test_parasolid_capability_rejects_arguments_outside_certification_scope(
@@ -217,6 +293,7 @@ def test_parasolid_capability_rejects_arguments_outside_certification_scope(
             depends_on=["geometry.topology"],
             metric_ids=["dc.geometry.draft.fixed_half"],
             required_quantities=["draft_angle_deg"],
+            required_artifacts=_task_artifacts(),
             arguments={"pull_direction": _task_arguments()["pull_direction"]},
         )
     )
@@ -234,6 +311,7 @@ def test_parasolid_analyzer_rejects_measurement_linked_to_wrong_metric(tmp_path)
     payload = json.loads(client.payload)
     payload["measurements"][0]["metric_id"] = "dc.geometry.draft.moving_half"
     client.payload = json.dumps(payload).encode()
+    client.payloads["measurements"] = client.payload
     context = _context(tmp_path)
     context.plan.operations.append(
         PlanOperation(
@@ -242,6 +320,7 @@ def test_parasolid_analyzer_rejects_measurement_linked_to_wrong_metric(tmp_path)
             depends_on=["geometry.topology"],
             metric_ids=["dc.geometry.draft.fixed_half"],
             required_quantities=["draft_angle_deg"],
+            required_artifacts=_task_artifacts(),
             arguments=_task_arguments(),
         )
     )
@@ -260,3 +339,8 @@ def _task_arguments():
         key: ResolvedArgument.from_dict(value)
         for key, value in operation["arguments"].items()
     }
+
+
+def _task_artifacts():
+    operation = json.loads((FIXTURE_ROOT / "task_contract_request.json").read_text())
+    return operation["required_artifacts"]

@@ -6,19 +6,22 @@
 
 ## 1. 边界与数据流
 
-Hermes 负责编译计划、解析事实、冻结规则、执行规则判定和生成 Finding。NX 只负责可重复的几何计算并返回 Measurement：
+Hermes 负责编译计划、解析事实、冻结规则、执行规则判定、定位失败 Patch、生成截图和 Finding。NX 只负责可重复的几何计算并返回客观 Measurement 与中性几何 Artifact：
 
 ```text
 Project Facts + Scope
         |
         v
-Hermes Plan compiler --> Plan Operation --> NX Calculator
-        |                                     |
-        | rules                               v
-        +---------------------------- Measurement
-                                              |
-                                              v
-                                  Hermes Evaluation --> Finding
+Hermes Plan compiler --> Plan Operation ----------> NX Calculator
+        |                  |                             |
+        | RuleBinding      | required_artifacts          v
+        |                  |                 Measurement + ScalarField
+        | rules            |                 + RenderScene + TopologyMap
+        v                  |                             |
+Hermes Evaluation <--------+-----------------------------+
+        |
+        v
+failed patches --> Hermes Evidence Renderer --> EvidenceRecord --> Finding
 ```
 
 规则阈值不会发送给 NX。NX 不返回 pass/fail、severity 或 recommendation。
@@ -28,6 +31,7 @@ Hermes Plan compiler --> Plan Operation --> NX Calculator
 Plan 持久化以下互不混用的数据：
 
 - `rules`：Hermes Evaluation 使用的有效规则快照；
+- `rule_bindings`：Operation/Metric/Quantity 与 Rule 的显式确定性绑定；
 - `operations`：几何计算任务；
 - Project Manifest 中的 `facts` 和 `regions`：事实与区域的正式记录。
 
@@ -40,6 +44,7 @@ Operation 的唯一结构：
   "depends_on": ["geometry.topology"],
   "metric_ids": ["dc.geometry.draft.fixed_half"],
   "required_quantities": ["draft_angle_deg"],
+  "required_artifacts": ["scalar_field", "render_scene", "topology_map"],
   "arguments": {
     "pull_direction": {
       "value": [0, 0, 1],
@@ -51,7 +56,23 @@ Operation 的唯一结构：
 }
 ```
 
-`operation_id` 标识本次计划任务，`calculator_id` 标识通用计算器，`metric_ids` 标识业务指标，`required_quantities` 是任务必须返回的客观量。`arguments` 与 `algorithm_options` 都必须包含已解析的 `value`、`unit` 和 `source_ref`，禁止发送只有 Hermes 才能解析的 `fact_ref` 或 `region_ref`。
+`operation_id` 标识本次计划任务，`calculator_id` 标识通用计算器，`metric_ids` 标识业务指标，`required_quantities` 是任务必须返回的客观量，`required_artifacts` 是完成局部证据所需的中性几何输出。`arguments` 与 `algorithm_options` 都必须包含已解析的 `value`、`unit` 和 `source_ref`，禁止发送只有 Hermes 才能解析的 `fact_ref` 或 `region_ref`。
+
+RuleBinding 示例：
+
+```json
+{
+  "binding_id": "binding.draft.fixed_half",
+  "operation_id": "draft.fixed_half",
+  "metric_id": "dc.geometry.draft.fixed_half",
+  "quantity_id": "draft_angle_deg",
+  "rule_id": "die_casting.min_draft.fixed_half",
+  "operator": ">=",
+  "aggregation": "minimum"
+}
+```
+
+RuleBinding 只保存在 Hermes Plan，不发送给 NX。存在生产绑定时，Evaluation 不读取 Measurement `diagnostics` 中的判定提示。
 
 加载任务统一使用 `geometry.load` / `load_geometry`；Operation ID 不使用输入格式名称。
 
@@ -73,7 +94,7 @@ Region 是输入版本绑定的正式记录，至少包含：
 
 - `status` 与 `contract_version=1`；
 - `implementation_version`；
-- `required_arguments`、`optional_arguments`、`supported_algorithm_options`、`output_quantities`；
+- `required_arguments`、`optional_arguments`、`supported_algorithm_options`、`output_quantities`、`output_artifact_kinds`；
 - `supported_formats`、`supported_region_modes`、`supported_nx_versions`；
 - `certification_report_sha256`。
 
@@ -95,6 +116,7 @@ Measurement 只表达客观几何结果：
   "status": "measured",
   "geometry_refs": [],
   "region_refs": ["region.fixed_half"],
+  "field_refs": ["field_draft_fixed_half"],
   "method": "nx_open_draft_analysis",
   "algorithm_version": "nx-draft-1",
   "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -103,18 +125,37 @@ Measurement 只表达客观几何结果：
 }
 ```
 
-Hermes 必须验证 Measurement 的 Operation、Calculator、Metric 和 Quantity 都属于提交任务，并验证每个 required Quantity 均已返回。
+Hermes 必须验证 Measurement 的 Operation、Calculator、Metric 和 Quantity 都属于提交任务，并验证每个 required Quantity 均已返回。`field_refs` 引用 Artifact ID，不引用文件名；要求 `scalar_field` 的 Operation 必须至少返回一个有效 field 引用。
 
-## 6. Evaluation 与 Finding
+## 6. 中性几何 Artifact
+
+NX 不知道规则阈值，因此 NX 输出中禁止出现 `violating_samples`、`failed_patch` 或 pass/fail。三类 Artifact 的职责是：
+
+- `scalar_field`：每个采样点的三维坐标、UV、法向、客观值，以及采样点到网格顶点、Cell 到网格三角形的引用；
+- `render_scene`：Hermes 可直接渲染的中性三角网格；
+- `topology_map`：输入 B-Rep `geometry_ref` 到场景三角形的稳定映射。
+
+三者必须带相同 `run_id` 和 `input_sha256`。ScalarField 还必须回链 Operation、Metric、Quantity、RenderScene 和 TopologyMap。正式结构分别见 `scalar_field.schema.json`、`render_scene.schema.json` 和 `topology_map.schema.json`。
+
+## 7. Evaluation、Evidence 与 Finding
 
 Evaluation 显式保存：`operation_id`、`metric_id`、`measurement_ids`、`rule_id`、`rule_version`、`rule_hash`、operator、expected、actual 和 outcome。
 
-Finding 显式保存：`evaluation_ids`、`measurement_ids`、`metric_ids`、`region_refs`、`evidence_refs` 和 `rule_refs`。Finding 只从独立的 Evaluation artifact 生成，不从 Measurement 推断或读取历史内嵌判定。
+Evaluation 失败后，Hermes 对 ScalarField 应用同一 operator/expected，连接相邻失败 Cell，生成 `evidence_geometry.json` 中的 `failed_patches`。随后 Hermes Evidence Renderer 在 RenderScene 上仅高亮这些三角形，并生成 `evidence_records.json`。EvidenceRecord 必须绑定 Run、输入哈希、Operation、Metric、Measurement、Evaluation、Geometry、Region 和图片 Artifact。
 
-## 7. 联合验收
+Finding 显式保存：`evaluation_ids`、`measurement_ids`、`metric_ids`、`region_refs`、`evidence_refs` 和 `rule_refs`。生产 Finding 只从独立 Evaluation 与 EvidenceRecord 生成；`evidence_refs` 保存 Evidence ID，不把一次 Run 的全部图片分配给每个 Finding。
+
+代码保留两条明确链路，但不是两个 Schema 版本：
+
+- STEP 历史链路：STEP Worker 自行渲染，`materialize_legacy_step_findings()` 适配旧报告；
+- NX 生产链路：`EvaluationEngine` → `FieldEvidenceEngine` → `materialize_evaluated_findings()`。
+
+## 8. 联合验收
 
 1. Hermes 与 NX 使用 `tests/fixtures/dfm/nx/task_contract_*.json` 作为共用样例；
-2. 请求、Capability、Measurement 分别通过正式 JSON Schema；
-3. 错误 Calculator、参数、格式、Region mode、Metric 或 Quantity 必须被拒绝；
-4. 同一 Measurement 经相同 Rule 快照生成相同 Evaluation 和 Finding 引用；
-5. Schema 冻结只能发生在 Hermes/NX 联合评审和真实 golden part E2E 通过之后。
+2. 请求、Capability、Measurement、RuleBinding、ScalarField、RenderScene、TopologyMap、EvidenceGeometry 和 EvidenceRecord 分别通过正式 JSON Schema；
+3. 错误 Calculator、参数、格式、Region mode、Metric、Quantity、Artifact kind 或跨 Run/输入引用必须被拒绝；
+4. 曲面局部失败能由 Hermes 生成只覆盖失败三角形的截图；通过结果不生成问题截图；
+5. 同一 Measurement 经相同 Rule 快照生成相同 Evaluation、Patch 和 Finding 引用；
+6. 并发项目/Run 的 Artifact 不得交叉引用；
+7. Schema 冻结只能发生在 Hermes/NX 联合评审和真实 golden part E2E 通过之后。

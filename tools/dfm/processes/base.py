@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from ..analyzers.base import AnalyzerContext
-from ..contracts import Capability, EffectiveRule, PlanOperation
+from ..contracts import Capability, EffectiveRule, PlanOperation, RuleBinding
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class ProcessPlan:
     rules: dict[str, EffectiveRule]
     operations: list[PlanOperation]
     accepted_inputs: set[str]
+    rule_bindings: list[RuleBinding] = field(default_factory=list)
 
 
 @runtime_checkable

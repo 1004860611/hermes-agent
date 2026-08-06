@@ -4,6 +4,7 @@
   "depends_on": ["geometry.topology"],
   "metric_ids": ["dc.geometry.draft.fixed_half"],
   "required_quantities": ["draft_angle_deg"],
+  "required_artifacts": ["scalar_field", "render_scene", "topology_map"],
   "arguments": {
     "pull_direction": {
       "value": [0, 0, 1],

@@ -1,7 +1,7 @@
 import json
 
 from tools.dfm.contracts import ArtifactRecord
-from tools.dfm.findings import materialize_findings
+from tools.dfm.findings import materialize_legacy_step_findings
 
 
 def test_measurements_evaluations_and_report_normalize_to_stable_finding(tmp_path):
@@ -56,8 +56,8 @@ def test_measurements_evaluations_and_report_normalize_to_stable_finding(tmp_pat
         ArtifactRecord("report", "report_json", "dfm_report.json", "application/json", "now"),
     ]
 
-    first = materialize_findings(tmp_path, artifacts)
-    second = materialize_findings(tmp_path, artifacts)
+    first = materialize_legacy_step_findings(tmp_path, artifacts)
+    second = materialize_legacy_step_findings(tmp_path, artifacts)
 
     assert [item.to_dict() for item in first] == [item.to_dict() for item in second]
     assert first[0].title == "Insufficient draft"
@@ -113,6 +113,6 @@ def test_die_casting_finding_never_uses_injection_rule_reference(tmp_path):
         ),
     ]
 
-    finding = materialize_findings(tmp_path, artifacts)[0]
+    finding = materialize_legacy_step_findings(tmp_path, artifacts)[0]
 
     assert finding.rule_refs[0] == "die_casting.baseline-issues@1.0.0:valid_brep_required"

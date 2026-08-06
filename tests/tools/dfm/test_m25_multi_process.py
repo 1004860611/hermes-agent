@@ -2,7 +2,7 @@ import json
 
 from tools.dfm.contracts import ArtifactRecord, PlanRecord
 from tools.dfm.evaluation import EvaluationEngine
-from tools.dfm.findings import materialize_findings
+from tools.dfm.findings import materialize_legacy_step_findings
 from tools.dfm.geometry.brep.checks import resolve_brep_check
 from tools.dfm.geometry.step.measurements import normalize_legacy_measurements
 
@@ -63,7 +63,7 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
         ),
         encoding="utf-8",
     )
-    findings = materialize_findings(
+    findings = materialize_legacy_step_findings(
         tmp_path,
         [
             ArtifactRecord(
