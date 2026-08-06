@@ -16,6 +16,7 @@ from tools.dfm.contracts import (
 from tools.dfm.errors import DFMError
 from tools.dfm.evaluation import EvaluationEngine
 from tools.dfm.evidence import FieldEvidenceEngine
+from tools.dfm.evidence.field_engine import _adaptive_views
 from tools.dfm.findings import materialize_evaluated_findings
 
 
@@ -89,14 +90,16 @@ def test_failed_scalar_field_renders_precise_evidence_and_finding(tmp_path):
     )
     all_artifacts = [*artifacts, *generated]
 
-    image_artifact = next(item for item in generated if item.kind == "evidence_image")
+    image_artifacts = [item for item in generated if item.kind == "evidence_image"]
+    assert len(image_artifacts) == 3
+    image_artifact = image_artifacts[0]
     with Image.open(tmp_path / image_artifact.relative_path) as image:
         red_pixels = sum(
             1
             for red, green, blue in image.convert("RGB").get_flattened_data()
             if red > 180 and green < 100 and blue < 100
         )
-    assert red_pixels > 0
+    assert red_pixels > 500
 
     geometry_artifact = next(
         item for item in generated if item.kind == "evidence_geometry"
@@ -112,6 +115,9 @@ def test_failed_scalar_field_renders_precise_evidence_and_finding(tmp_path):
     assert patch["geometry_refs"] == [
         {"kind": "face", "index": 17, "input_sha256": "a" * 64}
     ]
+    assert patch["surface_normal"] == pytest.approx(
+        [0.9998871487923587, 0, 0.015022971739553945]
+    )
 
     records_artifact = next(
         item for item in generated if item.kind == "evidence_records"
@@ -123,6 +129,18 @@ def test_failed_scalar_field_renders_precise_evidence_and_finding(tmp_path):
         "evaluation-measurement_draft_fixed_half_min"
     ]
     assert records["records"][0]["artifact_ref"] == image_artifact.artifact_id
+    assert [item["render"]["view_id"] for item in records["records"]] == [
+        "pull",
+        "surface",
+        "side",
+    ]
+    directions = [item["render"]["camera_direction"] for item in records["records"]]
+    assert abs(directions[0][2]) == pytest.approx(1)
+    assert all(
+        abs(sum(left[i] * right[i] for i in range(3))) < 0.999
+        for index, left in enumerate(directions)
+        for right in directions[index + 1 :]
+    )
 
     jsonschema = pytest.importorskip("jsonschema")
     schema_root = Path(__file__).resolve().parents[3] / "tools" / "dfm" / "schemas"
@@ -134,7 +152,9 @@ def test_failed_scalar_field_renders_precise_evidence_and_finding(tmp_path):
         jsonschema.Draft202012Validator(schema).validate(payload)
 
     finding = materialize_evaluated_findings(tmp_path, all_artifacts)[0]
-    assert finding.evidence_refs == [records["records"][0]["evidence_id"]]
+    assert finding.evidence_refs == [
+        item["evidence_id"] for item in records["records"]
+    ]
     assert finding.measurement_ids == ["measurement_draft_fixed_half_min"]
 
 
@@ -150,6 +170,42 @@ def test_field_evidence_rejects_cross_run_scene(tmp_path):
         FieldEvidenceEngine().materialize(tmp_path, "run_1", artifacts)
 
     assert exc_info.value.code == "evidence_field_invalid"
+
+
+@pytest.mark.parametrize(
+    ("pull_direction", "surface_normal"),
+    [
+        ([1, 2, 3], [-2, 1, 0.5]),
+        ([0, 0, 1], [0, 0, 1]),
+    ],
+)
+def test_adaptive_views_stay_distinct_for_rotated_and_parallel_geometry(
+    pull_direction, surface_normal
+):
+    scene = {
+        "primitives": [{
+            "vertices": [[-4, -2, -1], [4, -2, -1], [4, 2, 1], [-4, 2, 1]],
+            "triangles": [[0, 1, 2], [0, 2, 3]],
+        }]
+    }
+    patch = {
+        "focus_point": [3, 1, 0.5],
+        "surface_normal": surface_normal,
+    }
+
+    views = _adaptive_views(scene, patch, pull_direction)
+
+    assert [item["id"] for item in views] == ["pull", "surface", "side"]
+    directions = [item["basis_d"] for item in views]
+    assert all(
+        abs(sum(left[i] * right[i] for i in range(3))) < 0.999
+        for index, left in enumerate(directions)
+        for right in directions[index + 1 :]
+    )
+    for view in views:
+        assert sum(item * item for item in view["basis_u"]) == pytest.approx(1)
+        assert sum(item * item for item in view["basis_v"]) == pytest.approx(1)
+        assert sum(item * item for item in view["basis_d"]) == pytest.approx(1)
 
 
 def _write_pipeline_inputs(tmp_path: Path) -> list[ArtifactRecord]:

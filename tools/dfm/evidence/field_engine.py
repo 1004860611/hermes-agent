@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import operator
 from pathlib import Path
 from typing import Any, Callable
@@ -14,6 +15,7 @@ from ..errors import DFMError
 
 
 EVIDENCE_SCHEMA_VERSION = 1
+_VIEWS_PER_PATCH = 3
 _OPERATORS: dict[str, Callable[[Any, Any], bool]] = {
     ">=": operator.ge,
     "<=": operator.le,
@@ -31,7 +33,7 @@ def _utc_now() -> str:
 class FieldEvidenceEngine:
     """Render precise evidence from any backend's objective scalar fields."""
 
-    version = "hermes-field-evidence-v1"
+    version = "hermes-field-evidence-v3"
 
     def materialize(
         self,
@@ -61,6 +63,7 @@ class FieldEvidenceEngine:
             if isinstance(item, dict) and item.get("measurement_id")
         }
         artifact_by_id = {item.artifact_id: item for item in artifacts}
+        pull_direction = _field_pull_direction(project_dir, artifacts)
         patches: list[dict[str, Any]] = []
         for evaluation in evaluations_payload.get("evaluations", []):
             if not isinstance(evaluation, dict) or evaluation.get("outcome") != "fail":
@@ -142,45 +145,59 @@ class FieldEvidenceEngine:
             for item in evaluations_payload.get("evaluations", [])
             if isinstance(item, dict)
         }
-        for index, patch in enumerate(patches[: max(0, max_images)], start=1):
+        image_index = 0
+        image_limit = max(0, max_images)
+        patch_limit = math.ceil(image_limit / _VIEWS_PER_PATCH)
+        selected_patches = _select_representative_patches(patches, patch_limit)
+        for patch in selected_patches:
             scene_artifact = artifact_by_id[patch["scene_ref"]]
             scene = _read_json(project_dir, scene_artifact)
-            image_id = f"artifact_{run_id}_evidence_{index}"
-            image_path = output_dir / f"evidence_{index:03d}.png"
-            self._render(scene, patch, image_path)
-            image_artifact = ArtifactRecord(
-                image_id,
-                "evidence_image",
-                image_path.relative_to(project_dir).as_posix(),
-                "image/png",
-                _utc_now(),
-            )
-            generated.append(image_artifact)
             evaluation = evaluation_by_id[patch["evaluation_id"]]
-            records.append(
-                EvidenceRecord(
-                    evidence_id=f"evidence_{run_id}_{index}",
-                    run_id=run_id,
-                    input_sha256=input_sha256,
-                    operation_id=str(evaluation.get("operation_id") or ""),
-                    metric_id=str(evaluation.get("metric_id") or ""),
-                    measurement_ids=[str(item) for item in patch["measurement_ids"]],
-                    evaluation_ids=[patch["evaluation_id"]],
-                    geometry_refs=[
-                        GeometryRef.from_dict(item) for item in patch["geometry_refs"]
-                    ],
-                    region_refs=[str(item) for item in patch["region_refs"]],
-                    artifact_ref=image_id,
-                    render={
-                        "mode": "local_patch",
-                        "producer": "hermes-evidence-renderer",
-                        "version": self.version,
-                        "viewport": [1280, 720],
-                        "patch_id": patch["patch_id"],
-                        "scene_ref": patch["scene_ref"],
-                    },
+            for view in _adaptive_views(scene, patch, pull_direction):
+                if image_index >= image_limit:
+                    break
+                image_index += 1
+                image_id = f"artifact_{run_id}_evidence_{image_index}"
+                image_path = output_dir / f"evidence_{image_index:03d}.png"
+                self._render(scene, patch, image_path, view)
+                image_artifact = ArtifactRecord(
+                    image_id,
+                    "evidence_image",
+                    image_path.relative_to(project_dir).as_posix(),
+                    "image/png",
+                    _utc_now(),
                 )
-            )
+                generated.append(image_artifact)
+                records.append(
+                    EvidenceRecord(
+                        evidence_id=f"evidence_{run_id}_{image_index}",
+                        run_id=run_id,
+                        input_sha256=input_sha256,
+                        operation_id=str(evaluation.get("operation_id") or ""),
+                        metric_id=str(evaluation.get("metric_id") or ""),
+                        measurement_ids=[str(item) for item in patch["measurement_ids"]],
+                        evaluation_ids=[patch["evaluation_id"]],
+                        geometry_refs=[
+                            GeometryRef.from_dict(item)
+                            for item in patch["geometry_refs"]
+                        ],
+                        region_refs=[str(item) for item in patch["region_refs"]],
+                        artifact_ref=image_id,
+                        render={
+                            "mode": "local_patch",
+                            "producer": "hermes-evidence-renderer",
+                            "version": self.version,
+                            "viewport": [1280, 720],
+                            "patch_id": patch["patch_id"],
+                            "scene_ref": patch["scene_ref"],
+                            "view_id": view["id"],
+                            "view_label": view["label"],
+                            "camera_direction": list(view["basis_d"]),
+                            "camera_up": list(view["basis_v"]),
+                            "camera_source": view["source"],
+                        },
+                    )
+                )
 
         records_path = output_dir / "evidence_records.json"
         records_path.write_text(
@@ -335,6 +352,9 @@ class FieldEvidenceEngine:
             if not sample_ids:
                 sample_ids = sorted(failed_samples)
             points = [samples[item]["point"] for item in sample_ids]
+            surface_normal = _average_direction(
+                [samples[item].get("surface_normal") for item in sample_ids]
+            )
             geometry_values = [
                 samples[item]["geometry_ref"] for item in sample_ids
             ] + [cell["geometry_ref"] for cell in cells]
@@ -365,6 +385,7 @@ class FieldEvidenceEngine:
                 "cell_ids": sorted(str(item.get("cell_id")) for item in cells),
                 "triangle_refs": triangles,
                 "focus_point": focus,
+                "surface_normal": surface_normal,
                 "bounds": {
                     "minimum": [min(point[axis] for point in points) for axis in range(3)],
                     "maximum": [max(point[axis] for point in points) for axis in range(3)],
@@ -373,7 +394,12 @@ class FieldEvidenceEngine:
         return results
 
     @staticmethod
-    def _render(scene: dict[str, Any], patch: dict[str, Any], target: Path) -> None:
+    def _render(
+        scene: dict[str, Any],
+        patch: dict[str, Any],
+        target: Path,
+        view: dict[str, Any],
+    ) -> None:
         try:
             from PIL import Image, ImageDraw
         except ImportError as exc:
@@ -389,9 +415,9 @@ class FieldEvidenceEngine:
             (str(item["primitive_id"]), int(item["triangle_id"]))
             for item in patch["triangle_refs"]
         }
-        basis_u = (0.70710678, -0.70710678, 0.0)
-        basis_v = (0.40824829, 0.40824829, -0.81649658)
-        basis_d = (0.57735027, 0.57735027, 0.57735027)
+        basis_u = view["basis_u"]
+        basis_v = view["basis_v"]
+        basis_d = view["basis_d"]
 
         projected: list[tuple[float, str, int, list[tuple[float, float]]]] = []
         all_xy: list[tuple[float, float]] = []
@@ -415,7 +441,7 @@ class FieldEvidenceEngine:
 
         focus = patch["focus_point"]
         focus_xy = (_dot(focus, basis_u), _dot(focus, basis_v))
-        patch_points = [patch["bounds"][key] for key in ("minimum", "maximum")]
+        patch_points = _bounds_corners(patch["bounds"])
         patch_xy = [(_dot(point, basis_u), _dot(point, basis_v)) for point in patch_points]
         scene_span = max(
             max(value[0] for value in all_xy) - min(value[0] for value in all_xy),
@@ -425,7 +451,7 @@ class FieldEvidenceEngine:
         patch_span = max(
             max(value[0] for value in patch_xy) - min(value[0] for value in patch_xy),
             max(value[1] for value in patch_xy) - min(value[1] for value in patch_xy),
-            scene_span * 0.08,
+            scene_span * 0.06,
         )
         scale = min(width, height) * 0.62 / (patch_span * 2.5)
 
@@ -435,6 +461,7 @@ class FieldEvidenceEngine:
                 round(height / 2 - (point[1] - focus_xy[1]) * scale),
             )
 
+        visible_highlights: list[list[tuple[int, int]]] = []
         for _depth, primitive_id, triangle_id, xy in sorted(projected, reverse=True):
             polygon = [screen(point) for point in xy]
             if not _visible(polygon, width, height):
@@ -442,18 +469,292 @@ class FieldEvidenceEngine:
             is_failed = (primitive_id, triangle_id) in highlighted
             draw.polygon(
                 polygon,
-                fill=(220, 57, 57) if is_failed else (196, 202, 209),
-                outline=(125, 27, 27) if is_failed else (154, 161, 169),
+                fill=(210, 214, 220),
+                outline=(151, 158, 168),
             )
+            if is_failed:
+                visible_highlights.append(polygon)
+
+        # Draw the evaluated patch last so an internal or rear-facing problem is
+        # still locatable. This is an evidence overlay, not a hidden-line claim.
+        for polygon in visible_highlights:
+            draw.polygon(polygon, fill=(225, 48, 48), outline=(125, 12, 12))
+            draw.line([*polygon, polygon[0]], fill=(125, 12, 12), width=4)
+
         marker = screen(focus_xy)
-        radius = 8
+        halo_radius = 24
+        radius = 17
         draw.ellipse(
-            (marker[0] - radius, marker[1] - radius, marker[0] + radius, marker[1] + radius),
+            (
+                marker[0] - halo_radius,
+                marker[1] - halo_radius,
+                marker[0] + halo_radius,
+                marker[1] + halo_radius,
+            ),
             fill=(255, 255, 255),
-            outline=(150, 15, 15),
+            outline=(255, 255, 255),
+            width=4,
+        )
+        draw.ellipse(
+            (
+                marker[0] - radius,
+                marker[1] - radius,
+                marker[0] + radius,
+                marker[1] + radius,
+            ),
+            fill=(220, 25, 25),
+            outline=(120, 8, 8),
+            width=4,
+        )
+        draw.line(
+            (marker[0] - 30, marker[1], marker[0] + 30, marker[1]),
+            fill=(120, 8, 8),
             width=3,
         )
+        draw.line(
+            (marker[0], marker[1] - 30, marker[0], marker[1] + 30),
+            fill=(120, 8, 8),
+            width=3,
+        )
+        label = str(view["label"])
+        draw.rounded_rectangle((24, 22, 154, 62), radius=8, fill=(31, 41, 55))
+        draw.text((42, 34), label, fill=(255, 255, 255))
         image.save(target, format="PNG")
+
+
+def _select_representative_patches(
+    patches: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    """Select large patches fairly so one failed metric cannot starve another."""
+    if limit <= 0:
+        return []
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for patch in patches:
+        grouped.setdefault(str(patch.get("evaluation_id") or ""), []).append(patch)
+    for candidates in grouped.values():
+        candidates.sort(
+            key=lambda item: (
+                len(item.get("cell_ids", [])),
+                len(item.get("sample_ids", [])),
+                _bounds_volume(item.get("bounds", {})),
+                str(item.get("patch_id") or ""),
+            ),
+            reverse=True,
+        )
+    selected: list[dict[str, Any]] = []
+    while len(selected) < limit:
+        added = False
+        for candidates in grouped.values():
+            if candidates and len(selected) < limit:
+                selected.append(candidates.pop(0))
+                added = True
+        if not added:
+            break
+    return selected
+
+
+def _field_pull_direction(
+    project_dir: Path, artifacts: list[ArtifactRecord]
+) -> list[float] | None:
+    for artifact in artifacts:
+        if artifact.kind != "scalar_field":
+            continue
+        field = _read_json(project_dir, artifact)
+        context = field.get("calculation_context")
+        if not isinstance(context, dict):
+            continue
+        direction = _unit_or_none(context.get("pull_direction"))
+        if direction is not None:
+            return direction
+    return None
+
+
+def _adaptive_views(
+    scene: dict[str, Any],
+    patch: dict[str, Any],
+    pull_direction: list[float] | None,
+) -> list[dict[str, Any]]:
+    """Build three stable camera frames from process and local geometry data."""
+    center = _scene_center(scene)
+    focus = [float(value) for value in patch["focus_point"]]
+    outward = _unit_or_none([focus[i] - center[i] for i in range(3)])
+    if outward is None:
+        outward = [0.57735027, 0.57735027, 0.57735027]
+
+    surface = _unit_or_none(patch.get("surface_normal")) or outward
+    surface = _toward_patch(surface, outward)
+    process = _unit_or_none(pull_direction) or _overview_direction(scene, outward)
+    process = _toward_patch(process, outward)
+
+    side = _unit_or_none(_cross(process, surface))
+    if side is None:
+        side = _stable_perpendicular(process)
+        surface_view = _unit_or_none(
+            [surface[i] + 0.65 * side[i] for i in range(3)]
+        ) or surface
+    else:
+        surface_view = surface
+    side = _stable_sign(side)
+
+    return [
+        _camera_frame(
+            "pull" if pull_direction is not None else "overview",
+            "Pull" if pull_direction is not None else "Overview",
+            process,
+            surface_view,
+            "calculation_context.pull_direction"
+            if pull_direction is not None
+            else "scene_geometry",
+        ),
+        _camera_frame(
+            "surface",
+            "Surface",
+            surface_view,
+            process,
+            "failed_patch.surface_normal",
+        ),
+        _camera_frame("side", "Side", side, process, "derived_orthogonal"),
+    ]
+
+
+def _camera_frame(
+    view_id: str,
+    label: str,
+    direction: list[float],
+    up_hint: list[float],
+    source: str,
+) -> dict[str, Any]:
+    basis_d = _unit_or_none(direction)
+    assert basis_d is not None
+    basis_u = _unit_or_none(_cross(up_hint, basis_d))
+    if basis_u is None:
+        basis_u = _stable_perpendicular(basis_d)
+    basis_v = _unit_or_none(_cross(basis_d, basis_u))
+    assert basis_v is not None
+    return {
+        "id": view_id,
+        "label": label,
+        "basis_u": tuple(basis_u),
+        "basis_v": tuple(basis_v),
+        "basis_d": tuple(basis_d),
+        "source": source,
+    }
+
+
+def _scene_center(scene: dict[str, Any]) -> list[float]:
+    vertices = [
+        vertex
+        for primitive in scene.get("primitives", [])
+        for vertex in primitive.get("vertices", [])
+        if isinstance(vertex, list) and len(vertex) == 3
+    ]
+    if not vertices:
+        raise DFMError("render_scene_invalid", "The render scene is empty.")
+    return [
+        (min(float(item[axis]) for item in vertices) + max(float(item[axis]) for item in vertices))
+        / 2.0
+        for axis in range(3)
+    ]
+
+
+def _overview_direction(
+    scene: dict[str, Any], outward: list[float]
+) -> list[float]:
+    vertices = [
+        vertex
+        for primitive in scene.get("primitives", [])
+        for vertex in primitive.get("vertices", [])
+        if isinstance(vertex, list) and len(vertex) == 3
+    ]
+    spans = [
+        max(float(item[axis]) for item in vertices)
+        - min(float(item[axis]) for item in vertices)
+        for axis in range(3)
+    ]
+    smallest_axis = min(range(3), key=lambda axis: spans[axis])
+    thin_axis = [0.0, 0.0, 0.0]
+    thin_axis[smallest_axis] = 1.0
+    direction = _unit_or_none(
+        [outward[i] + 0.75 * thin_axis[i] for i in range(3)]
+    )
+    return direction or outward
+
+
+def _average_direction(values: list[Any]) -> list[float] | None:
+    directions = [item for value in values if (item := _unit_or_none(value))]
+    if not directions:
+        return None
+    reference = directions[0]
+    aligned = [
+        direction if _dot(direction, reference) >= 0 else [-item for item in direction]
+        for direction in directions
+    ]
+    return _unit_or_none(
+        [sum(direction[axis] for direction in aligned) for axis in range(3)]
+    )
+
+
+def _unit_or_none(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    try:
+        vector = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(item) for item in vector):
+        return None
+    length = math.sqrt(sum(item * item for item in vector))
+    if length <= 1e-12:
+        return None
+    return [item / length for item in vector]
+
+
+def _cross(left: Any, right: Any) -> list[float]:
+    return [
+        float(left[1]) * float(right[2]) - float(left[2]) * float(right[1]),
+        float(left[2]) * float(right[0]) - float(left[0]) * float(right[2]),
+        float(left[0]) * float(right[1]) - float(left[1]) * float(right[0]),
+    ]
+
+
+def _stable_perpendicular(direction: list[float]) -> list[float]:
+    axis = min(range(3), key=lambda index: abs(direction[index]))
+    helper = [0.0, 0.0, 0.0]
+    helper[axis] = 1.0
+    perpendicular = _unit_or_none(_cross(direction, helper))
+    assert perpendicular is not None
+    return _stable_sign(perpendicular)
+
+
+def _toward_patch(direction: list[float], outward: list[float]) -> list[float]:
+    return direction if _dot(direction, outward) >= 0 else [-item for item in direction]
+
+
+def _stable_sign(direction: list[float]) -> list[float]:
+    for item in direction:
+        if abs(item) > 1e-12:
+            return direction if item > 0 else [-value for value in direction]
+    return direction
+
+
+def _bounds_corners(bounds: dict[str, Any]) -> list[list[float]]:
+    minimum = bounds["minimum"]
+    maximum = bounds["maximum"]
+    return [
+        [x, y, z]
+        for x in (minimum[0], maximum[0])
+        for y in (minimum[1], maximum[1])
+        for z in (minimum[2], maximum[2])
+    ]
+
+
+def _bounds_volume(bounds: dict[str, Any]) -> float:
+    try:
+        minimum = bounds["minimum"]
+        maximum = bounds["maximum"]
+        return math.prod(max(0.0, float(maximum[i]) - float(minimum[i])) for i in range(3))
+    except (KeyError, TypeError, ValueError):
+        return 0.0
 
 
 def _read_json(project_dir: Path, artifact: ArtifactRecord) -> dict[str, Any]:

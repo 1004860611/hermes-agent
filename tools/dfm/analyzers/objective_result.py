@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from ..contracts import ArtifactRecord, PlanOperation
@@ -128,6 +129,20 @@ def validate_objective_result(
             or field.get("quantity_id") not in operation.required_quantities
         ):
             raise DFMError(error_code, "Scalar field does not link to its operation.")
+        calculation_context = field.get("calculation_context")
+        if not isinstance(calculation_context, dict) or set(calculation_context) - {
+            "pull_direction"
+        }:
+            raise DFMError(error_code, "Scalar field calculation context is invalid.")
+        pull_direction = calculation_context.get("pull_direction")
+        if field.get("quantity_id") == "draft_angle_deg":
+            if not _is_unit_vector(pull_direction):
+                raise DFMError(
+                    error_code,
+                    "Draft scalar field must include a normalized pull direction.",
+                )
+        elif pull_direction is not None and not _is_unit_vector(pull_direction):
+            raise DFMError(error_code, "Scalar field pull direction is invalid.")
         scene_ref = str(field.get("scene_ref") or "")
         topology_ref = str(field.get("topology_map_ref") or "")
         if (
@@ -165,3 +180,15 @@ def _read(
     if not isinstance(payload, dict):
         raise DFMError(error_code, f"The {artifact.kind} artifact must be an object.")
     return payload
+
+
+def _is_unit_vector(value: object) -> bool:
+    if not isinstance(value, list) or len(value) != 3:
+        return False
+    try:
+        components = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return False
+    if not all(math.isfinite(item) for item in components):
+        return False
+    return abs(math.sqrt(sum(item * item for item in components)) - 1.0) <= 1e-6

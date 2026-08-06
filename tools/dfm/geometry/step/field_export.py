@@ -238,6 +238,7 @@ def _draft_field(
             "mesh_normal_fallback_count": fallback_count,
             "pull_direction": pull,
         },
+        {"pull_direction": pull},
     )
 
 
@@ -322,6 +323,7 @@ def _thickness_field(
         cells,
         values,
         {"ray_mode": "bidirectional_first_hit", "sample_stride": stride},
+        {},
     )
 
 
@@ -337,6 +339,7 @@ def _field_and_measurement(
     cells: list[dict[str, Any]],
     values: list[float],
     diagnostics: dict[str, Any],
+    calculation_context: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], MeasurementRecord]:
     if not values or not operation.metric_ids:
         raise DFMError("calculation_failed", "Objective scalar field has no samples.")
@@ -360,6 +363,7 @@ def _field_and_measurement(
         "scene_ref": SCENE_ARTIFACT_ID,
         "topology_map_ref": TOPOLOGY_ARTIFACT_ID,
         "interpolation": interpolation,
+        "calculation_context": calculation_context or {},
         "samples": samples,
         "cells": cells,
         "quality": quality,

@@ -55,6 +55,7 @@ def test_curved_draft_field_uses_each_uv_sample_local_normal(monkeypatch):
     assert measurement.field_refs == ["field_draft"]
     assert measurement.quality["backend"] == "pythonocc_demo"
     assert measurement.quality["certified"] is False
+    assert field["calculation_context"] == {"pull_direction": [0.0, 0.0, 1.0]}
     assert "evaluation_hint" not in measurement.diagnostics
 
 
@@ -96,6 +97,7 @@ def test_thickness_contract_allows_cell_center_without_mesh_vertex():
 
     assert field["samples"][0]["mesh_vertex_ref"] is None
     assert field["interpolation"] == "constant_per_triangle"
+    assert field["calculation_context"] == {}
     assert measurement.value == 0.8
 
 

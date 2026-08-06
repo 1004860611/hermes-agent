@@ -10,6 +10,7 @@
   "scene_ref": "scene_golden_part",
   "topology_map_ref": "topology_golden_part",
   "interpolation": "linear_on_triangle",
+  "calculation_context": {"pull_direction": [0, 0, 1]},
   "samples": [
     {
       "sample_id": "sample-1",

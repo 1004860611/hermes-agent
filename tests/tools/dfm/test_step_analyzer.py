@@ -79,6 +79,7 @@ class SuccessfulRunner:
             "scene_ref": "scene_geometry",
             "topology_map_ref": "topology_geometry",
             "interpolation": "linear_on_triangle",
+            "calculation_context": {"pull_direction": [0, 0, 1]},
             "samples": [],
             "cells": [],
             "quality": {"backend": "pythonocc_demo", "certified": False},

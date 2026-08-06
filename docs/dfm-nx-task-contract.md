@@ -131,7 +131,7 @@ Hermes 必须验证 Measurement 的 Operation、Calculator、Metric 和 Quantity
 
 NX 不知道规则阈值，因此 NX 输出中禁止出现 `violating_samples`、`failed_patch` 或 pass/fail。三类 Artifact 的职责是：
 
-- `scalar_field`：每个采样点的三维坐标、可选 UV、法向、客观值，以及 Cell 到网格三角形的引用；顶点采样必须提供 `mesh_vertex_ref`，三角形中心采样使用 `null`；
+- `scalar_field`：每个采样点的三维坐标、可选 UV、法向、客观值，以及 Cell 到网格三角形的引用；顶点采样必须提供 `mesh_vertex_ref`，三角形中心采样使用 `null`。`calculation_context` 显式保存解释该场所需的计算上下文，拔模角场必须提供归一化的 `pull_direction`，壁厚场使用空对象；Hermes 使用同一字段生成开模方向、局部曲面法向和正交侧向三个自适应证据视角；
 - `render_scene`：Hermes 可直接渲染的中性三角网格；
 - `topology_map`：输入 B-Rep `geometry_ref` 到场景三角形的稳定映射。
 

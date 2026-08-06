@@ -4,7 +4,7 @@
   "title": "Hermes DFM Objective Scalar Field",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "field_id", "run_id", "input_sha256", "operation_id", "metric_id", "quantity_id", "unit", "scene_ref", "topology_map_ref", "interpolation", "samples", "cells", "quality"],
+  "required": ["schema_version", "field_id", "run_id", "input_sha256", "operation_id", "metric_id", "quantity_id", "unit", "scene_ref", "topology_map_ref", "interpolation", "calculation_context", "samples", "cells", "quality"],
   "properties": {
     "schema_version": {"const": 1},
     "field_id": {"type": "string", "minLength": 1},
@@ -17,6 +17,13 @@
     "scene_ref": {"type": "string", "minLength": 1},
     "topology_map_ref": {"type": "string", "minLength": 1},
     "interpolation": {"enum": ["linear_on_triangle", "constant_per_triangle"]},
+    "calculation_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pull_direction": {"$ref": "#/$defs/vector3"}
+      }
+    },
     "samples": {
       "type": "array",
       "items": {

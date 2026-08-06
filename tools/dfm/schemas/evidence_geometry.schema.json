@@ -15,7 +15,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["patch_id", "evaluation_id", "measurement_ids", "field_ref", "scene_ref", "topology_map_ref", "geometry_refs", "region_refs", "sample_ids", "cell_ids", "triangle_refs", "focus_point", "bounds"],
+        "required": ["patch_id", "evaluation_id", "measurement_ids", "field_ref", "scene_ref", "topology_map_ref", "geometry_refs", "region_refs", "sample_ids", "cell_ids", "triangle_refs", "focus_point", "surface_normal", "bounds"],
         "properties": {
           "patch_id": {"type": "string", "minLength": 1},
           "evaluation_id": {"type": "string", "minLength": 1},
@@ -29,6 +29,12 @@
           "cell_ids": {"type": "array", "items": {"type": "string"}},
           "triangle_refs": {"type": "array", "items": {"$ref": "#/$defs/triangleRef"}},
           "focus_point": {"$ref": "#/$defs/vector3"},
+          "surface_normal": {
+            "oneOf": [
+              {"$ref": "#/$defs/vector3"},
+              {"type": "null"}
+            ]
+          },
           "bounds": {
             "type": "object",
             "additionalProperties": false,
