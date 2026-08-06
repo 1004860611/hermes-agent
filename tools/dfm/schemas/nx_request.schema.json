@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes.local/dfm/nx-request.schema.json",
+  "title": "Hermes DFM NX Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "process", "scope_id", "scope_version", "input", "operations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "process": {"type": "string", "minLength": 1},
+    "scope_id": {"type": "string", "minLength": 1},
+    "scope_version": {"type": "string", "minLength": 1},
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_id", "sha256", "format_id"],
+      "properties": {
+        "input_id": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "format_id": {"const": "parasolid_xt"}
+      }
+    },
+    "operations": {"type": "array", "items": {"$ref": "#/$defs/operation"}}
+  },
+  "$defs": {
+    "resolvedArgument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source_ref", "unit"],
+      "properties": {
+        "value": {},
+        "source_ref": {"type": "string", "minLength": 1},
+        "unit": {"type": ["string", "null"]}
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "calculator_id", "depends_on", "metric_ids", "required_quantities", "arguments", "algorithm_options"],
+      "properties": {
+        "operation_id": {"type": "string", "minLength": 1},
+        "calculator_id": {"type": "string", "minLength": 1},
+        "depends_on": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "metric_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "required_quantities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "arguments": {"type": "object", "additionalProperties": {"$ref": "#/$defs/resolvedArgument"}},
+        "algorithm_options": {"type": "object", "additionalProperties": {"$ref": "#/$defs/resolvedArgument"}}
+      }
+    }
+  }
+}

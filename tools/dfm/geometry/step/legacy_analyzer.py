@@ -3815,7 +3815,7 @@ def main(argv: list[str] | None = None) -> int:
         emit_analysis_intro()
         emit_dfm_event("progress", stage="load_dependencies", percent=5)
         occ = import_occ()
-        emit_dfm_event("progress", stage="load_step", percent=10)
+        emit_dfm_event("progress", stage="load_geometry", percent=10)
         shape = read_step(input_path, occ)
         emit_dfm_event("progress", stage="inspect_geometry", percent=15)
         issues, stats = analyze_shape(shape, occ, args, out_dir)

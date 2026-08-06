@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from ..analyzers.base import AnalyzerContext
-from ..contracts import Capability, EffectiveParameter, PlanOperation
+from ..contracts import Capability, EffectiveRule, PlanOperation
 
 
 @dataclass(frozen=True)
@@ -15,8 +15,9 @@ class ProcessPlan:
     adapter_version: str
     scope_id: str
     scope_version: str
-    parameters: dict[str, EffectiveParameter]
+    rules: dict[str, EffectiveRule]
     operations: list[PlanOperation]
+    accepted_inputs: set[str]
 
 
 @runtime_checkable

@@ -1,7 +1,7 @@
 import pytest
 
 from tools.dfm.contracts import (
-    EffectiveParameter,
+    EffectiveRule,
     PlanOperation,
     PlanRecord,
     RunRecord,
@@ -26,14 +26,14 @@ def test_m1_plan_and_run_round_trip_preserves_execution_snapshot():
         scope_version="1.0.0",
         input_ids=["input_1"],
         input_hashes={"input_1": "a" * 64},
-        parameters={
-            "min_wall_mm": EffectiveParameter(
+        rules={
+            "min_wall_mm": EffectiveRule(
                 value=1.2,
                 unit="mm",
                 source="injection_legacy_default",
             )
         },
-        operations=[PlanOperation("step.load", "load_step", [])],
+        operations=[PlanOperation("geometry.load", "load_geometry", [])],
     )
     run = RunRecord(
         "run_1",
@@ -68,7 +68,7 @@ def test_worker_event_rejects_invalid_payload(payload):
 
 
 def test_worker_request_and_result_round_trip():
-    parameter = EffectiveParameter(1.0, "degree", "project_fact")
+    rule = EffectiveRule(1.0, "degree", "project_fact")
     request = WorkerRequest(
         schema_version=1,
         run_id="run_1",
@@ -77,7 +77,7 @@ def test_worker_request_and_result_round_trip():
         process="injection",
         scope_id="injection.legacy-baseline",
         analyzer_version="worker-v1",
-        parameters={"min_draft_deg": parameter},
+        rules={"min_draft_deg": rule},
     )
     result = WorkerResult(
         schema_version=1,
@@ -85,7 +85,7 @@ def test_worker_request_and_result_round_trip():
         input_sha256="b" * 64,
         process="injection",
         scope_id="injection.legacy-baseline",
-        parameters={"min_draft_deg": parameter},
+        rules={"min_draft_deg": rule},
         result_path="runs/run_1/artifacts/worker_result.json",
         artifacts=[{"kind": "report_json", "path": "runs/run_1/artifacts/dfm_report.json"}],
     )

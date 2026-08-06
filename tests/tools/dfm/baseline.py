@@ -12,13 +12,15 @@ import subprocess
 import sys
 from typing import Any
 
+from tools.dfm.analyzers.base import AnalyzerContext
 from tools.dfm.contracts import (
-    EffectiveParameter,
+    EffectiveRule,
     PlanOperation,
     WorkerRequest,
     WorkerResult,
 )
 from tools.dfm.runtime.events import parse_worker_event
+from tools.dfm.processes.injection import InjectionProcessAdapter
 from tools.dfm.workers.step_worker import WORKER_VERSION
 
 
@@ -104,20 +106,21 @@ def _run(
 
 def _profile(
     profile_path: Path,
-) -> tuple[dict[str, Any], dict[str, EffectiveParameter]]:
+) -> tuple[dict[str, Any], dict[str, EffectiveRule]]:
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
     scope = json.loads(SCOPE_PATH.read_text(encoding="utf-8"))
     expected = {key: item["value"] for key, item in scope["parameters"].items()}
     assert profile["process"] == scope["process"] == "injection"
     assert profile["version"] == scope["version"] == "1.1.0"
     assert profile["thresholds"] == expected
-    parameters = {
-        key: EffectiveParameter(
+    rules = {
+        key: EffectiveRule(
             value, scope["parameters"][key].get("unit"), "injection_legacy_default"
         )
         for key, value in expected.items()
+        if scope["parameters"][key].get("kind") == "rule"
     }
-    return profile, parameters
+    return profile, rules
 
 
 def run_legacy(
@@ -153,12 +156,10 @@ def run_hermes_worker(
     profile_path: Path,
     output_dir: Path,
 ) -> dict[str, Any]:
-    profile, parameters = _profile(profile_path)
+    profile, rules = _profile(profile_path)
     output_dir.mkdir(parents=True, exist_ok=True)
-    scope = json.loads(
-        (
-            ROOT / "tools" / "dfm" / "scopes" / "injection" / "legacy_baseline_v1.json"
-        ).read_text(encoding="utf-8")
+    process_plan = InjectionProcessAdapter().compile(
+        AnalyzerContext("baseline", output_dir.parent, "step", []), {}
     )
     request = WorkerRequest(
         schema_version=1,
@@ -168,8 +169,8 @@ def run_hermes_worker(
         process=profile["process"],
         scope_id="injection.legacy-baseline",
         analyzer_version=WORKER_VERSION,
-        parameters=parameters,
-        operations=[PlanOperation.from_dict(item) for item in scope["operations"]],
+        rules=rules,
+        operations=process_plan.operations,
     )
     request_path = output_dir.parent / "worker_request.json"
     request_path.write_text(json.dumps(request.to_dict(), indent=2), encoding="utf-8")

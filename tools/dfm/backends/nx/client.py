@@ -38,7 +38,13 @@ class HttpNXBackendClient:
         self.token = token if token is not None else os.environ.get("NX_BACKEND_TOKEN", "")
 
     def capability(self) -> NXCapability:
-        return NXCapability.from_dict(self._json("GET", "/v1/capabilities"))
+        try:
+            return NXCapability.from_dict(self._json("GET", "/v1/capabilities"))
+        except (TypeError, ValueError) as exc:
+            raise DFMError(
+                "nx_protocol_invalid",
+                "NX service returned an invalid capability contract.",
+            ) from exc
 
     def submit(self, request: dict[str, Any], input_path: Path) -> NXJobStatus:
         digest = self._sha256(input_path)

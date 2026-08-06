@@ -6,7 +6,7 @@ from ...errors import DFMError
 
 
 BREP_CHECK_FAMILIES = {
-    "load_step": "load",
+    "load_geometry": "load",
     "inspect_topology": "topology",
     "inspect_small_features": "small_features",
     "measure_planar_spacing": "planar_spacing",
@@ -20,12 +20,12 @@ BREP_CHECK_FAMILIES = {
 }
 
 
-def resolve_brep_check(operation: str) -> str:
+def resolve_brep_check(calculator_id: str) -> str:
     try:
-        return BREP_CHECK_FAMILIES[operation]
+        return BREP_CHECK_FAMILIES[calculator_id]
     except KeyError as exc:
         raise DFMError(
             "unsupported_capability",
             "The DFM plan contains an unsupported STEP operation.",
-            {"operation": operation, "representation": "brep"},
+            {"calculator_id": calculator_id, "representation": "brep"},
         ) from exc

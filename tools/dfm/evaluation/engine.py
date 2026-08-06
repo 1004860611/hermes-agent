@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import hashlib
 import operator
 from pathlib import Path
 from typing import Any, Callable
@@ -102,36 +103,41 @@ class EvaluationEngine:
             spec = self._spec(measurement, plan)
             if spec is None:
                 continue
-            parameter_ref = str(spec["parameter_ref"])
+            rule_id = str(spec["rule_id"])
             operation_name = str(spec["operator"])
             comparison = _OPERATORS.get(operation_name)
             if comparison is None:
                 raise DFMError(
                     "evaluation_rule_invalid",
                     "Evaluation operator is not supported.",
-                    {"operator": operation_name, "check_id": measurement.check_id},
+                    {
+                        "operator": operation_name,
+                        "measurement_id": measurement.measurement_id,
+                    },
                 )
-            parameter = plan.parameters.get(parameter_ref)
+            parameter = plan.rules.get(rule_id)
             if parameter is not None:
                 expected = parameter.value
                 source = {
-                    "type": "plan_parameter",
+                    "type": "effective_rule",
                     "source": parameter.source,
-                    "kind": parameter.kind,
+                    "version": parameter.version,
                     "unit": parameter.unit,
                 }
             else:
                 expected = spec.get("fallback_expected")
                 source = {
-                    "type": "legacy_compatibility_hint",
-                    "source": "legacy_worker_reported",
-                    "migration_required": True,
+                    "type": "measurement_rule_snapshot",
+                    "source": "step_adapter",
                 }
             if expected is None:
                 raise DFMError(
                     "evaluation_rule_missing",
                     "No effective parameter exists for a measured check.",
-                    {"parameter_ref": parameter_ref, "check_id": measurement.check_id},
+                    {
+                        "rule_id": rule_id,
+                        "measurement_id": measurement.measurement_id,
+                    },
                 )
             try:
                 passed = bool(comparison(measurement.value, expected))
@@ -145,15 +151,32 @@ class EvaluationEngine:
                 measurement.diagnostics.get("legacy_issue_id")
                 or measurement.measurement_id
             )
+            rule_version = plan.scope_version or "1"
+            rule_hash = hashlib.sha256(
+                json.dumps(
+                    {
+                        "rule_id": rule_id,
+                        "rule_version": rule_version,
+                        "operator": operation_name,
+                        "expected": expected,
+                        "unit": measurement.unit,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
             evaluation = EvaluationRecord(
-                f"evaluation-{legacy_id.lower()}",
-                str(spec.get("check_id") or measurement.check_id),
-                [measurement.measurement_id],
-                parameter_ref,
-                operation_name,
-                expected,
-                measurement.value,
-                "pass" if passed else "fail",
+                evaluation_id=f"evaluation-{legacy_id.lower()}",
+                operation_id=measurement.operation_id,
+                metric_id=measurement.metric_id,
+                measurement_ids=[measurement.measurement_id],
+                rule_id=rule_id,
+                rule_version=rule_version,
+                rule_hash=rule_hash,
+                operator=operation_name,
+                expected=expected,
+                actual=measurement.value,
+                outcome="pass" if passed else "fail",
             )
             results.append(evaluation)
             provenance[evaluation.evaluation_id] = source
@@ -165,12 +188,11 @@ class EvaluationEngine:
     ) -> dict[str, Any] | None:
         if (
             plan.process == "die_casting"
-            and measurement.check_id == "model_geometry"
-            and measurement.metric == "valid_brep"
+            and measurement.operation_id == "geometry.topology"
+            and measurement.quantity_id == "valid_brep"
         ):
             return {
-                "check_id": "invalid_brep",
-                "parameter_ref": "valid_brep_required",
+                "rule_id": "valid_brep_required",
                 "operator": "==",
                 "fallback_expected": True,
             }

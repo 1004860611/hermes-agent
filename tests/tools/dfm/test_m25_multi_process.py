@@ -34,13 +34,12 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
     )
     evaluations, _ = EvaluationEngine().evaluate(measurements, plan)
 
-    assert any(item.metric == "valid_brep" for item in measurements)
+    assert any(item.quantity_id == "valid_brep" for item in measurements)
     assert len(evaluations) == 1
-    assert evaluations[0].check_id == "invalid_brep"
-    assert evaluations[0].measurement_refs == [
-        next(item.measurement_id for item in measurements if item.metric == "valid_brep")
+    assert evaluations[0].rule_id == "valid_brep_required"
+    assert evaluations[0].measurement_ids == [
+        next(item.measurement_id for item in measurements if item.quantity_id == "valid_brep")
     ]
-    assert evaluations[0].parameter_ref == "valid_brep_required"
     assert evaluations[0].outcome == "fail"
 
     measurement_path = tmp_path / "measurements.json"
@@ -76,4 +75,4 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
         ],
     )
 
-    assert findings[0].rule_ref == "die_casting.baseline-issues@1.0.0:invalid_brep"
+    assert findings[0].rule_refs[0] == "die_casting.baseline-issues@1.0.0:valid_brep_required"

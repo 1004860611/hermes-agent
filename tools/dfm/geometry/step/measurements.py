@@ -13,6 +13,46 @@ from ...contracts import GeometryRef, MeasurementRecord
 
 MEASUREMENT_SCHEMA_VERSION = 1
 
+_FAMILY_CONTRACTS: dict[str, tuple[str, str, str]] = {
+    "topology": ("geometry.topology", "inspect_topology", "geometry.model"),
+    "small_features": (
+        "geometry.small_features",
+        "inspect_small_features",
+        "injection.geometry.small_features",
+    ),
+    "planar_spacing": (
+        "geometry.planar_spacing",
+        "measure_planar_spacing",
+        "injection.geometry.planar_spacing",
+    ),
+    "face_quality": (
+        "geometry.face_quality",
+        "inspect_face_quality",
+        "injection.geometry.face_quality",
+    ),
+    "cylindrical": (
+        "geometry.cylindrical",
+        "inspect_cylindrical_features",
+        "injection.geometry.cylindrical",
+    ),
+    "thickness": (
+        "geometry.thickness",
+        "measure_wall_thickness",
+        "injection.geometry.wall_thickness",
+    ),
+    "draft": ("geometry.draft", "measure_draft", "injection.geometry.draft"),
+    "continuity": (
+        "geometry.continuity",
+        "inspect_surface_continuity",
+        "injection.geometry.surface_continuity",
+    ),
+    "undercut": (
+        "geometry.undercut",
+        "inspect_undercut",
+        "injection.geometry.undercut",
+    ),
+}
+
 
 @dataclass(frozen=True)
 class MetricSpec:
@@ -148,6 +188,11 @@ def normalize_legacy_measurements(
             continue
         issue_id = str(issue.get("id") or f"issue-{issue_index}")
         measurement_id = f"measurement-{issue_id.lower()}"
+        family = str(catalog_entry.get("family") or "unmapped")
+        contract = _FAMILY_CONTRACTS.get(family)
+        if contract is None:
+            continue
+        operation_id, calculator_id, metric_id = contract
         refs: list[GeometryRef] = []
         for ref in issue.get("refs") or []:
             if isinstance(ref, dict) and ref.get("kind") in {
@@ -167,21 +212,24 @@ def normalize_legacy_measurements(
             expected = (thresholds or {}).get(spec.parameter_key)
         measurements.append(
             MeasurementRecord(
-                measurement_id,
-                code,
-                spec.value_key,
-                value,
-                spec.unit,
-                "measured",
-                refs,
-                "legacy_step_issue_adapter",
-                algorithm_version,
-                input_sha256,
+                measurement_id=measurement_id,
+                operation_id=operation_id,
+                calculator_id=calculator_id,
+                metric_id=metric_id,
+                quantity_id=spec.value_key,
+                value=value,
+                unit=spec.unit,
+                status="measured",
+                geometry_refs=refs,
+                method="legacy_step_issue_adapter",
+                algorithm_version=algorithm_version,
+                input_sha256=input_sha256,
                 diagnostics={
                     "legacy_issue_id": issue_id,
-                    "check_family": catalog_entry.get("family", "unmapped"),
+                    "issue_code": code,
+                    "check_family": family,
                     "evaluation_hint": {
-                        "parameter_ref": spec.parameter_key,
+                        "rule_id": spec.parameter_key,
                         "operator": spec.operator,
                         "fallback_expected": expected,
                     },
@@ -209,16 +257,18 @@ def _model_measurements(
             values.append((f"topology_{key}", topology[key], "count"))
     return [
         MeasurementRecord(
-            f"measurement-model-{index:03d}",
-            "model_geometry",
-            metric,
-            value,
-            unit,
-            "measured",
-            [],
-            "opencascade_model_index",
-            algorithm_version,
-            input_sha256,
+            measurement_id=f"measurement-model-{index:03d}",
+            operation_id="geometry.topology",
+            calculator_id="inspect_topology",
+            metric_id="geometry.model",
+            quantity_id=metric,
+            value=value,
+            unit=unit,
+            status="measured",
+            geometry_refs=[],
+            method="opencascade_model_index",
+            algorithm_version=algorithm_version,
+            input_sha256=input_sha256,
         )
         for index, (metric, value, unit) in enumerate(values, start=1)
     ]

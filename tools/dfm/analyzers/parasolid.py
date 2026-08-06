@@ -8,10 +8,7 @@ import time
 from pathlib import Path
 
 from ..backends.nx.client import NXBackendClient
-from ..backends.nx.contracts import (
-    NX_REQUEST_SCHEMA_VERSION,
-    NX_TASK_REQUEST_SCHEMA_VERSION,
-)
+from ..backends.nx.contracts import NX_REQUEST_SCHEMA_VERSION
 from ..contracts import (
     ArtifactRecord,
     Capability,
@@ -79,12 +76,12 @@ class ParasolidAnalyzer:
             required = [
                 item
                 for item in context.plan.operations
-                if item.operation not in {"load_step", "render_evidence"}
+                if item.calculator_id not in {"load_geometry", "render_evidence"}
             ]
             uncertified = sorted({
-                operation.operation
+                operation.calculator_id
                 for operation in required
-                if remote.calculator(operation.operation).status != "certified"
+                if remote.calculator(operation.calculator_id).status != "certified"
             })
             if uncertified:
                 return Capability(
@@ -94,27 +91,51 @@ class ParasolidAnalyzer:
                     "unsupported_capability",
                     {
                         "uncertified_operations": uncertified,
-                        "calculator_statuses": remote.calculators,
+                        "calculator_statuses": {
+                            key: value.to_dict()
+                            for key, value in remote.calculators.items()
+                        },
                     },
                 )
             incompatible = []
             for operation in required:
-                if not operation.uses_task_contract_v2:
-                    continue
-                calculator_id = operation.operation
+                calculator_id = operation.calculator_id
                 definition = remote.calculator(calculator_id)
                 supplied = set(operation.arguments)
+                supplied_algorithm_options = set(operation.algorithm_options)
                 required_arguments = set(definition.required_arguments)
                 supported_arguments = required_arguments | set(
                     definition.optional_arguments
                 )
                 reasons = []
-                if definition.contract_version < NX_TASK_REQUEST_SCHEMA_VERSION:
+                if definition.contract_version != NX_REQUEST_SCHEMA_VERSION:
                     reasons.append("contract_version")
                 if not required_arguments.issubset(supplied):
                     reasons.append("required_arguments")
                 if supplied - supported_arguments:
                     reasons.append("unsupported_arguments")
+                if supplied_algorithm_options - set(
+                    definition.supported_algorithm_options
+                ):
+                    reasons.append("unsupported_algorithm_options")
+                if set(operation.required_quantities) - set(
+                    definition.output_quantities
+                ):
+                    reasons.append("output_quantities")
+                if definition.supported_formats and "parasolid_xt" not in set(
+                    definition.supported_formats
+                ):
+                    reasons.append("format")
+                region = operation.arguments.get("region")
+                if region is not None and definition.supported_region_modes:
+                    region_value = region.value
+                    region_mode = (
+                        str(region_value.get("mode") or "")
+                        if isinstance(region_value, dict)
+                        else ""
+                    )
+                    if region_mode not in definition.supported_region_modes:
+                        reasons.append("region_mode")
                 if reasons:
                     incompatible.append({
                         "operation_id": operation.operation_id,
@@ -137,7 +158,9 @@ class ParasolidAnalyzer:
                 "transport": "http",
                 "backend_version": remote.backend_version,
                 "plugin_version": remote.plugin_version,
-                "calculators": remote.calculators,
+                "calculators": {
+                    key: value.to_dict() for key, value in remote.calculators.items()
+                },
                 "format_id": "parasolid_xt",
                 "representation": "brep",
             },
@@ -174,24 +197,13 @@ class ParasolidAnalyzer:
                 "The DFM plan does not reference a Parasolid x_t input.",
             )
         input_path = (context.project_dir / input_record.relative_path).resolve()
-        request_schema_version = (
-            NX_TASK_REQUEST_SCHEMA_VERSION
-            if any(item.uses_task_contract_v2 for item in context.plan.operations)
-            else NX_REQUEST_SCHEMA_VERSION
-        )
         request = {
-            "schema_version": request_schema_version,
+            "schema_version": NX_REQUEST_SCHEMA_VERSION,
             "run_id": context.run_id,
             "process": context.plan.process,
             "scope_id": context.plan.scope_id,
             "scope_version": context.plan.scope_version,
-            "operations": [
-                item.to_nx_dict(request_schema_version)
-                for item in context.plan.operations
-            ],
-            "parameters": {
-                key: value.to_dict() for key, value in context.plan.parameters.items()
-            },
+            "operations": [item.to_dict() for item in context.plan.operations],
         }
         job = self.client.submit(request, input_path)
         if not job.job_id:
@@ -246,19 +258,16 @@ class ParasolidAnalyzer:
                 "nx_result_invalid",
                 "NX backend result must include a measurements artifact.",
             )
-        if request_schema_version >= NX_TASK_REQUEST_SCHEMA_VERSION:
-            measurements = next(
-                item for item in artifacts if item.kind == "measurements"
-            )
-            self._validate_task_measurements(
-                context.plan.operations,
-                context.project_dir / measurements.relative_path,
-            )
+        measurements = next(item for item in artifacts if item.kind == "measurements")
+        self._validate_measurements(
+            context.plan.operations,
+            context.project_dir / measurements.relative_path,
+        )
         self._emit(context, "complete", 100, job.job_id)
         return artifacts
 
     @staticmethod
-    def _validate_task_measurements(
+    def _validate_measurements(
         operations: list[PlanOperation],
         path: Path,
     ) -> None:
@@ -271,24 +280,21 @@ class ParasolidAnalyzer:
             ) from exc
         if (
             not isinstance(payload, dict)
-            or payload.get("schema_version") != NX_TASK_REQUEST_SCHEMA_VERSION
+            or payload.get("schema_version") != NX_REQUEST_SCHEMA_VERSION
             or payload.get("producer_contract") != "measurement_only"
             or not isinstance(payload.get("measurements"), list)
         ):
             raise DFMError(
                 "nx_result_invalid",
-                "NX task measurements artifact does not implement Measurement contract v2.",
+                "NX measurements artifact does not implement the production contract.",
             )
 
-        task_operations = {
-            operation.operation_id: operation
-            for operation in operations
-            if operation.uses_task_contract_v2
-        }
+        task_operations = {operation.operation_id: operation for operation in operations}
         expected = {
-            (operation.operation_id, metric_id)
+            (operation.operation_id, metric_id, quantity_id)
             for operation in task_operations.values()
-            for metric_id in operation.metric_refs
+            for metric_id in operation.metric_ids
+            for quantity_id in operation.required_quantities
         }
         received = set()
         for measurement in payload["measurements"]:
@@ -297,23 +303,22 @@ class ParasolidAnalyzer:
                     "nx_result_invalid",
                     "NX task measurements must contain JSON objects.",
                 )
-            operation_ref = str(measurement.get("operation_ref") or "")
-            if not operation_ref:
-                continue  # v1/topology records may coexist in a v2 artifact.
-            operation = task_operations.get(operation_ref)
+            operation_id = str(measurement.get("operation_id") or "")
+            operation = task_operations.get(operation_id)
             metric_id = str(measurement.get("metric_id") or "")
+            quantity_id = str(measurement.get("quantity_id") or "")
             if (
                 operation is None
-                or measurement.get("check_id") != operation_ref
-                or measurement.get("calculator_id") != operation.operation
-                or metric_id not in operation.metric_refs
+                or measurement.get("calculator_id") != operation.calculator_id
+                or metric_id not in operation.metric_ids
+                or quantity_id not in operation.required_quantities
             ):
                 raise DFMError(
                     "nx_result_invalid",
                     "NX Measurement does not link to the submitted task contract.",
                     {"measurement_id": measurement.get("measurement_id")},
                 )
-            received.add((operation_ref, metric_id))
+            received.add((operation_id, metric_id, quantity_id))
         missing = sorted(expected - received)
         if missing:
             raise DFMError(

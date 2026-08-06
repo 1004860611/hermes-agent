@@ -114,10 +114,8 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         )
         assert measurement_payload["schema_version"] == 1
         assert measurement_payload["input_sha256"] == added["input"]["sha256"]
-        assert measurement_payload["operations"] == [
-            operation["operation"] for operation in plan["plan"]["operations"]
-        ]
-        assert measurement_payload["parameters"] == plan["plan"]["parameters"]
+        assert "operations" not in measurement_payload
+        assert "rules" not in measurement_payload
         assert measurement_payload["measurements"]
         assert all(
             item["method"] != "llm" for item in measurement_payload["measurements"]
@@ -134,7 +132,7 @@ def test_m1_real_tool_vertical_slice(tmp_path):
             Path(evaluation_artifact["path"]).read_text(encoding="utf-8")
         )
         assert all(
-            set(item["measurement_refs"]) <= measurement_ids
+            set(item["measurement_ids"]) <= measurement_ids
             and item["outcome"] in {"pass", "fail", "indeterminate"}
             for item in evaluation_payload["evaluations"]
         )
@@ -147,7 +145,7 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         ]
         assert len(findings) == len(failed_evaluations)
         assert all(
-            item["rule_ref"].startswith("injection.legacy-issues@1.0.0:")
+            item["rule_refs"][0].startswith("injection.legacy-issues@1.0.0:")
             and measurement_artifact["relative_path"] in item["evidence_refs"]
             for item in findings
         )

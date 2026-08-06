@@ -329,7 +329,7 @@ class DFMService:
                             status="invalidated",
                             invalidated_by=f"fact:{name}",
                             affected_operation_ids=(
-                                ["step.draft", "step.undercut"]
+                                ["geometry.draft", "geometry.undercut"]
                                 if name == "pull_dir"
                                 else [item.operation_id for item in plan.operations]
                             ),
@@ -390,9 +390,14 @@ class DFMService:
                 adapter = self.process_registry.get(process)
                 defaults = adapter.compile(context, {})
                 raw_parameters = {
-                    fact.name: {"value": fact.value, "source": "project_fact"}
+                    fact.name: {
+                        "value": fact.value,
+                        "source": "project_fact",
+                        "source_ref": f"fact:{fact.fact_id}",
+                    }
                     for fact in manifest.facts
-                    if fact.status == "confirmed" and fact.name in defaults.parameters
+                    if fact.status == "confirmed"
+                    and fact.name in defaults.accepted_inputs
                 }
                 process_plan = adapter.compile(context, raw_parameters)
             parent_plan_id = str(params.get("base_plan_id") or "") or None
@@ -421,7 +426,7 @@ class DFMService:
                 scope_version=process_plan.scope_version if process_plan else "",
                 input_ids=[item.input_id for item in active_inputs],
                 input_hashes={item.input_id: item.sha256 for item in active_inputs},
-                parameters=process_plan.parameters if process_plan else {},
+                rules=process_plan.rules if process_plan else {},
                 operations=operations,
                 parent_plan_id=parent_plan_id,
             )

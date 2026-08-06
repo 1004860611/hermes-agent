@@ -18,16 +18,16 @@
     "max_hole_depth_ratio": {"value": 6.0, "unit": "ratio", "kind": "rule"}
   },
   "operations": [
-    {"operation_id": "step.load", "operation": "load_step", "depends_on": []},
-    {"operation_id": "step.topology", "operation": "inspect_topology", "depends_on": ["step.load"]},
-    {"operation_id": "step.features", "operation": "inspect_small_features", "depends_on": ["step.topology"]},
-    {"operation_id": "step.planar_spacing", "operation": "measure_planar_spacing", "depends_on": ["step.topology"]},
-    {"operation_id": "step.face_quality", "operation": "inspect_face_quality", "depends_on": ["step.topology"]},
-    {"operation_id": "step.cylindrical", "operation": "inspect_cylindrical_features", "depends_on": ["step.topology"]},
-    {"operation_id": "step.thickness", "operation": "measure_wall_thickness", "depends_on": ["step.topology"]},
-    {"operation_id": "step.draft", "operation": "measure_draft", "depends_on": ["step.topology"]},
-    {"operation_id": "step.continuity", "operation": "inspect_surface_continuity", "depends_on": ["step.topology"]},
-    {"operation_id": "step.undercut", "operation": "inspect_undercut", "depends_on": ["step.topology"]},
-    {"operation_id": "step.render", "operation": "render_evidence", "depends_on": ["step.features", "step.planar_spacing", "step.face_quality", "step.cylindrical", "step.thickness", "step.draft", "step.continuity", "step.undercut"]}
+    {"operation_id": "geometry.load", "calculator_id": "load_geometry", "depends_on": [], "metric_ids": [], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.topology", "calculator_id": "inspect_topology", "depends_on": ["geometry.load"], "metric_ids": ["geometry.model"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.small_features", "calculator_id": "inspect_small_features", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.small_features"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.planar_spacing", "calculator_id": "measure_planar_spacing", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.planar_spacing"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.face_quality", "calculator_id": "inspect_face_quality", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.face_quality"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.cylindrical", "calculator_id": "inspect_cylindrical_features", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.cylindrical"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.thickness", "calculator_id": "measure_wall_thickness", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.wall_thickness"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.draft", "calculator_id": "measure_draft", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.draft"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.continuity", "calculator_id": "inspect_surface_continuity", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.surface_continuity"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.undercut", "calculator_id": "inspect_undercut", "depends_on": ["geometry.topology"], "metric_ids": ["injection.geometry.undercut"], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.render", "calculator_id": "render_evidence", "depends_on": ["geometry.small_features", "geometry.planar_spacing", "geometry.face_quality", "geometry.cylindrical", "geometry.thickness", "geometry.draft", "geometry.continuity", "geometry.undercut"], "metric_ids": [], "required_quantities": [], "arguments": {}, "algorithm_options": {}}
   ]
 }

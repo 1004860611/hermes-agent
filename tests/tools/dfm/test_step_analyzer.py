@@ -5,7 +5,7 @@ from tools.dfm.analyzers.base import AnalyzerContext, CancellationToken
 from tools.dfm.analyzers.step import StepAnalyzer
 from tools.dfm.contracts import (
     CapabilityStatus,
-    EffectiveParameter,
+    EffectiveRule,
     InputRecord,
     PlanRecord,
     WorkerEvent,
@@ -52,7 +52,7 @@ class SuccessfulRunner:
             "a" * 64,
             "injection",
             "injection.legacy-baseline",
-            self.request.parameters,
+            self.request.rules,
             "worker_result.json",
             [
                 {
@@ -105,8 +105,8 @@ def test_step_analyzer_runs_persisted_plan_and_returns_contained_artifacts(tmp_p
         scope_version="1.0.0",
         input_ids=["input_1"],
         input_hashes={"input_1": "a" * 64},
-        parameters={
-            "min_wall_mm": EffectiveParameter(1.2, "mm", "injection_legacy_default")
+        rules={
+            "min_wall_mm": EffectiveRule(1.2, "mm", "injection_legacy_default")
         },
     )
     runner = SuccessfulRunner()

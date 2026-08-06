@@ -272,9 +272,9 @@ B-Rep 闭环；它们登记为后续 Simulation Result Backend 候选。
    规则、容差和工程师基线；解决锁模力公式等不一致。
 2. **完成追溯矩阵**：逐项建立 Engineer Issue → Rule → Metric → Calculator → Measurement
    → Evaluation → Finding → Evidence 的对应关系。
-3. **冻结 Task Contract v2**：统一稳定 Calculator ID，以任务级 `metric_refs` 和 `arguments`
-   表达六方向/区域调用；冻结结构化 capability、Measurement 回链和 v1/v2 兼容策略，并通过
-   Hermes/NX 双向契约测试。
+3. **联合评审生产 Task Contract**：统一 Calculator ID，以任务级 `metric_ids`、
+   `required_quantities` 和已解析 `arguments` 表达六方向/区域调用；评审结构化 capability、
+   Region、Measurement 回链和唯一 Schema 1，并通过 Hermes/NX 双向契约测试。
 4. **交付 NX 运行链**：NX Server 完成上传、Job、许可证、Worker、取消、结果和 Artifact；
    C++ 插件实现黄金产品所需全部 P0 Calculator 并声明认证范围。
 5. **交付 Hermes 领域链**：建立最小压铸 Rule Set 和 Product Plan；EvaluationEngine、
@@ -290,7 +290,7 @@ B-Rep 闭环；它们登记为后续 Simulation Result Backend 候选。
 
 - 黄金产品 P0 指标和 Calculator 覆盖率 100%；
 - Metric、Calculator、Plan Operation、Capability 和 Measurement 的稳定 ID、任务参数及
-  关联契约已冻结，Hermes/NX 双向契约测试通过且 v1 兼容；
+  关联契约通过联合评审，Hermes/NX 双向契约测试通过；
 - NX Server 和 C++ 插件真实运行，不使用 Fake Client 作为业务验收；
 - 关键 Measurement 在工程师批准误差内；
 - 工程师标注问题无未解释漏报，区域、规则、severity 和证据符合批准标准；
@@ -397,8 +397,8 @@ Desktop 增强不能重写主聊天或形成第二个会话状态源。
 2. 确认壁厚、拔模、倒扣 P0 指标的定义、容差和例外；
 3. 解决锁模力公式、投影面积来源及设备吨位的单位问题；
 4. 完成黄金产品追溯矩阵并据此拆分 NX Server、插件、Rule/Plan 和 E2E 任务；
-5. 冻结 [DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md)，统一 Calculator ID、
-   六方向任务参数、结构化 capability、Measurement 回链和 v1/v2 兼容；
+5. 联合评审 [DFM/NX Production Task Contract](../dfm-nx-task-contract.md)，统一 Calculator ID、
+   六方向任务参数、结构化 capability、Region 和 Measurement 回链；
 6. NX 团队先交付真实文件打开、拓扑和 P0 Calculator，再逐项认证；
 7. Hermes 团队同步完成压铸 Rule Set、Product Plan、NX Measurement 接入和报告；
 8. 跑通完整链路后由工程师人工核对、修正差异并签字；
@@ -421,7 +421,7 @@ OCR 负责人可并行盘点 PDF 页面渲染、原生文本、OCR Provider、�
 | [NX HTTP Backend 契约](2026-07-23-dfm-nx-http-backend-contract.md) | Hermes 与 NX Server 的紧凑接口 |
 | [NX Server/C++ 插件开发规格](2026-07-23-nx-server-plugin-development-spec.md) | NX 团队的模块、接口、契约和验收内容 |
 | [团队架构与分工](2026-07-23-dfm-team-architecture-and-ownership.md) | 角色边界、模块 Owner 和协作节奏 |
-| [DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md) | M2.6 稳定 ID、任务参数、Capability、Measurement 和兼容约定 |
+| [DFM/NX Production Task Contract](../dfm-nx-task-contract.md) | M2.6 稳定 ID、任务参数、Capability、Region 和 Measurement 约定 |
 
 ## 10. 文档维护规则
 

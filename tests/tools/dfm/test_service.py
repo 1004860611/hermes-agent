@@ -158,11 +158,11 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
     assert plan["plan"]["scope_version"] == "1.1.0"
     assert plan["plan"]["input_ids"] == [plan["plan"]["input_ids"][0]]
     assert set(plan["plan"]["input_hashes"].values()) == {added["input"]["sha256"]}
-    assert plan["plan"]["parameters"]["min_draft_deg"] == {
+    assert plan["plan"]["rules"]["min_draft_deg"] == {
         "value": 1.0,
         "unit": "degree",
-        "source": "injection_legacy_default",
-        "kind": "rule",
+        "source": "scope:injection.legacy-baseline@1.1.0/parameters/min_draft_deg",
+        "version": "1.1.0",
     }
     assert plan["capability"]["status"] == "dependency_missing"
     with pytest.raises(DFMError) as exc_info:
@@ -230,10 +230,10 @@ def test_pull_direction_rebuild_only_includes_affected_operation_closure(service
     )["plan"]
 
     assert [item["operation_id"] for item in rebuilt["operations"]] == [
-        "step.load",
-        "step.topology",
-        "step.draft",
-        "step.undercut",
+        "geometry.load",
+        "geometry.topology",
+        "geometry.draft",
+        "geometry.undercut",
     ]
 
 
@@ -271,8 +271,8 @@ def test_die_casting_plan_uses_its_own_facts_scope_and_operations(service):
 
     assert result["plan"]["process"] == "die_casting"
     assert result["plan"]["scope_id"] == "die_casting.topology-baseline"
-    assert [item["operation"] for item in result["plan"]["operations"]] == [
-        "load_step",
+    assert [item["calculator_id"] for item in result["plan"]["operations"]] == [
+        "load_geometry",
         "inspect_topology",
     ]
     assert status["project"]["process"] == "die_casting"

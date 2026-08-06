@@ -162,7 +162,7 @@ class StepAnalyzer:
             process=context.plan.process,
             scope_id=context.plan.scope_id,
             analyzer_version=self.version,
-            parameters=context.plan.parameters,
+            rules=context.plan.rules,
             operations=context.plan.operations,
             max_evidence_findings=self.max_evidence_findings,
         )

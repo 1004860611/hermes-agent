@@ -4,7 +4,7 @@
   "process": "die_casting",
   "parameters": {},
   "operations": [
-    {"operation_id": "step.load", "operation": "load_step", "depends_on": []},
-    {"operation_id": "step.topology", "operation": "inspect_topology", "depends_on": ["step.load"]}
+    {"operation_id": "geometry.load", "calculator_id": "load_geometry", "depends_on": [], "metric_ids": [], "required_quantities": [], "arguments": {}, "algorithm_options": {}},
+    {"operation_id": "geometry.topology", "calculator_id": "inspect_topology", "depends_on": ["geometry.load"], "metric_ids": ["geometry.model"], "required_quantities": ["valid_brep"], "arguments": {}, "algorithm_options": {}}
   ]
 }

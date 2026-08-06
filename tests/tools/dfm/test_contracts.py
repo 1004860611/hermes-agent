@@ -16,6 +16,7 @@ from tools.dfm.contracts import (
     PlanOperation,
     PlanRecord,
     ProjectManifest,
+    ResolvedArgument,
     RunRecord,
     RunStatus,
     ensure_run_transition,
@@ -154,13 +155,17 @@ def test_manifest_carries_m0_workflow_records():
         plans=[PlanRecord("plan_1", "step", ["step"], "ready", "2026-07-13T10:00:30Z")],
         findings=[
             FindingRecord(
-                "finding_1",
-                "Thin wall",
-                "high",
-                "open",
-                ["artifact_1"],
-                "rule:wall-thickness:v1",
-                "Increase local thickness.",
+                finding_id="finding_1",
+                title="Thin wall",
+                severity="high",
+                status="open",
+                evaluation_ids=["evaluation_1"],
+                measurement_ids=["measurement_1"],
+                metric_ids=["injection.geometry.wall_thickness"],
+                region_refs=[],
+                evidence_refs=["artifact_1"],
+                rule_refs=["rule:wall-thickness:1"],
+                recommendation="Increase local thickness.",
             )
         ],
     )
@@ -172,45 +177,44 @@ def test_manifest_carries_m0_workflow_records():
     assert restored.facts[0].status == "confirmed"
 
 
-def test_plan_operation_v2_round_trips_and_keeps_v1_shape_stable():
-    legacy = PlanOperation("geometry.topology", "inspect_topology", ["geometry.load"])
+def test_plan_operation_round_trips_as_the_only_production_shape():
     operation = PlanOperation(
-        "draft.fixed_half",
-        "measure_draft",
-        ["geometry.topology"],
-        ["dc.geometry.draft.fixed_half"],
-        {
-            "pull_direction": {"fact_ref": "pull_direction.fixed_half"},
-            "region": {"region_ref": "region.fixed_half"},
+        operation_id="draft.fixed_half",
+        calculator_id="measure_draft",
+        depends_on=["geometry.topology"],
+        metric_ids=["dc.geometry.draft.fixed_half"],
+        required_quantities=["draft_angle_deg"],
+        arguments={
+            "pull_direction": ResolvedArgument(
+                [0, 0, 1], "fact:pull_direction.fixed_half"
+            ),
+            "region": ResolvedArgument(
+                {"region_id": "region.fixed_half", "mode": "bbox"},
+                "region:region.fixed_half@1",
+            ),
         },
     )
 
-    assert legacy.to_dict() == {
-        "operation_id": "geometry.topology",
-        "operation": "inspect_topology",
-        "depends_on": ["geometry.load"],
-    }
-    payload = operation.to_nx_dict(2)
+    payload = operation.to_dict()
     assert payload["calculator_id"] == "measure_draft"
     assert "operation" not in payload
     assert PlanOperation.from_dict(payload) == operation
 
 
-def test_measurement_v2_references_plan_operation_metric_and_calculator():
+def test_measurement_references_plan_operation_metric_and_calculator():
     measurement = MeasurementRecord(
-        "measurement_draft_fixed_half_min",
-        "draft.fixed_half",
-        "draft_angle_deg",
-        1.2,
-        "degree",
-        "measured",
-        [],
-        "nx_open_draft_analysis",
-        "nx-draft-v1",
-        "a" * 64,
-        operation_ref="draft.fixed_half",
+        measurement_id="measurement_draft_fixed_half_min",
+        operation_id="draft.fixed_half",
         calculator_id="measure_draft",
         metric_id="dc.geometry.draft.fixed_half",
+        quantity_id="draft_angle_deg",
+        value=1.2,
+        unit="degree",
+        status="measured",
+        geometry_refs=[],
+        method="nx_open_draft_analysis",
+        algorithm_version="nx-draft-1",
+        input_sha256="a" * 64,
     )
 
     assert MeasurementRecord.from_dict(measurement.to_dict()) == measurement

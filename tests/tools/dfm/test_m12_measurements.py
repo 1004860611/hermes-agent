@@ -8,7 +8,7 @@ from tools.dfm.contracts import (
     EvaluationRecord,
     GeometryRef,
     MeasurementRecord,
-    EffectiveParameter,
+    EffectiveRule,
     PlanRecord,
     PlanOperation,
 )
@@ -26,26 +26,16 @@ from tests.tools.dfm.baseline import occ_available
 
 def test_measurement_and_evaluation_contracts_round_trip():
     measurement = MeasurementRecord(
-        "measurement-dfm-001",
-        "thin_wall",
-        "distance_mm",
-        0.8,
-        "mm",
-        "measured",
-        [GeometryRef("face", 3, "a" * 64)],
-        "legacy_step_issue_adapter",
-        "legacy-step-v1",
-        "a" * 64,
+        "measurement-dfm-001", "geometry.planar_spacing",
+        "measure_planar_spacing", "injection.geometry.planar_spacing",
+        "distance_mm", 0.8, "mm", "measured",
+        [GeometryRef("face", 3, "a" * 64)], "legacy_step_issue_adapter",
+        "legacy-step-v1", "a" * 64,
     )
     evaluation = EvaluationRecord(
-        "evaluation-dfm-001",
-        "thin_wall",
-        [measurement.measurement_id],
-        "min_wall_mm",
-        ">=",
-        1.2,
-        0.8,
-        "fail",
+        "evaluation-dfm-001", measurement.operation_id, measurement.metric_id,
+        [measurement.measurement_id], "min_wall_mm", "1", "a" * 64,
+        ">=", 1.2, 0.8, "fail",
     )
 
     assert MeasurementRecord.from_dict(measurement.to_dict()) == measurement
@@ -69,9 +59,10 @@ def test_legacy_issue_normalization_separates_measurement_and_threshold():
     assert measurements[0].value == 0.8
     assert measurements[0].diagnostics == {
         "legacy_issue_id": "DFM-001",
+        "issue_code": "thin_wall",
         "check_family": "planar_spacing",
         "evaluation_hint": {
-            "parameter_ref": "min_wall_mm",
+            "rule_id": "min_wall_mm",
             "operator": ">=",
             "fallback_expected": 1.2,
         },
@@ -84,45 +75,43 @@ def test_legacy_issue_normalization_separates_measurement_and_threshold():
         "ready",
         "now",
         process="injection",
-        parameters={
-            "min_wall_mm": EffectiveParameter(
-                1.2, "mm", "injection_legacy_default"
-            )
+        rules={
+            "min_wall_mm": EffectiveRule(1.2, "mm", "injection_legacy_default")
         },
     )
     evaluations, provenance = EvaluationEngine().evaluate(measurements, plan)
     assert evaluations[0].expected == 1.2
-    assert evaluations[0].parameter_ref == "min_wall_mm"
-    assert evaluations[0].measurement_refs == [measurements[0].measurement_id]
-    assert provenance[evaluations[0].evaluation_id]["type"] == "plan_parameter"
+    assert evaluations[0].rule_id == "min_wall_mm"
+    assert evaluations[0].measurement_ids == [measurements[0].measurement_id]
+    assert provenance[evaluations[0].evaluation_id]["type"] == "effective_rule"
 
 
 def test_plan_operations_are_whitelisted_and_dependency_ordered():
     operations = [
-        PlanOperation("step.load", "load_step"),
-        PlanOperation("step.topology", "inspect_topology", ["step.load"]),
-        PlanOperation("step.draft", "measure_draft", ["step.topology"]),
+        PlanOperation("geometry.load", "load_geometry"),
+        PlanOperation("geometry.topology", "inspect_topology", ["geometry.load"]),
+        PlanOperation("geometry.draft", "measure_draft", ["geometry.topology"]),
     ]
     assert validate_operations(operations) == [
-        "load_step",
+        "load_geometry",
         "inspect_topology",
         "measure_draft",
     ]
 
     with pytest.raises(DFMError, match="unsupported STEP operation"):
         validate_operations([
-            PlanOperation("step.load", "load_step"),
-            PlanOperation("step.topology", "inspect_topology", ["step.load"]),
-            PlanOperation("step.exec", "run_arbitrary_python", ["step.topology"]),
+            PlanOperation("geometry.load", "load_geometry"),
+            PlanOperation("geometry.topology", "inspect_topology", ["geometry.load"]),
+            PlanOperation("geometry.exec", "run_arbitrary_python", ["geometry.topology"]),
         ])
 
 
 def test_plan_operations_reject_forward_dependencies():
     with pytest.raises(DFMError, match="dependency ordered"):
         validate_operations([
-            PlanOperation("step.load", "load_step"),
-            PlanOperation("step.draft", "measure_draft", ["step.topology"]),
-            PlanOperation("step.topology", "inspect_topology", ["step.load"]),
+            PlanOperation("geometry.load", "load_geometry"),
+            PlanOperation("geometry.draft", "measure_draft", ["geometry.topology"]),
+            PlanOperation("geometry.topology", "inspect_topology", ["geometry.load"]),
         ])
 
 
@@ -224,7 +213,7 @@ def test_persisted_operations_can_run_topology_without_other_checks_or_evidence(
             "--out",
             str(output),
             "--operation",
-            "load_step",
+            "load_geometry",
             "--operation",
             "inspect_topology",
         ])
@@ -272,7 +261,7 @@ def test_each_persisted_operation_isolated_to_its_check_family(
             "--out",
             str(output),
             "--operation",
-            "load_step",
+            "load_geometry",
             "--operation",
             "inspect_topology",
             "--operation",

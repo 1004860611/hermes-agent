@@ -8,7 +8,7 @@ from tools.dfm.runtime.events import EVENT_PREFIX, encode_worker_event, parse_wo
 
 
 def test_worker_event_round_trip_uses_versioned_prefix():
-    event = WorkerEvent(1, "progress", stage="load_step", percent=10)
+    event = WorkerEvent(1, "progress", stage="load_geometry", percent=10)
 
     line = encode_worker_event(event)
 

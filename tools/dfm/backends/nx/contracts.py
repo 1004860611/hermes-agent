@@ -8,7 +8,6 @@ from typing import Any
 
 NX_API_VERSION = "v1"
 NX_REQUEST_SCHEMA_VERSION = 1
-NX_TASK_REQUEST_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -18,17 +17,49 @@ class NXCalculatorCapability:
     implementation_version: str = ""
     required_arguments: tuple[str, ...] = ()
     optional_arguments: tuple[str, ...] = ()
+    supported_algorithm_options: tuple[str, ...] = ()
     output_quantities: tuple[str, ...] = ()
-    certification_scope: dict[str, Any] = field(default_factory=dict)
+    supported_formats: tuple[str, ...] = ()
+    supported_region_modes: tuple[str, ...] = ()
+    supported_nx_versions: tuple[str, ...] = ()
+    certification_report_sha256: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "contract_version": self.contract_version,
+            "implementation_version": self.implementation_version,
+            "required_arguments": list(self.required_arguments),
+            "optional_arguments": list(self.optional_arguments),
+            "supported_algorithm_options": list(self.supported_algorithm_options),
+            "output_quantities": list(self.output_quantities),
+            "supported_formats": list(self.supported_formats),
+            "supported_region_modes": list(self.supported_region_modes),
+            "supported_nx_versions": list(self.supported_nx_versions),
+            "certification_report_sha256": self.certification_report_sha256,
+        }
 
     @classmethod
-    def from_value(cls, value: Any) -> "NXCalculatorCapability":
+    def from_dict(cls, value: dict[str, Any]) -> "NXCalculatorCapability":
         if isinstance(value, cls):
             return value
-        if isinstance(value, str):
-            return cls(status=value)
         if not isinstance(value, dict):
-            return cls(status="not_implemented")
+            raise ValueError("Calculator capability must be a JSON object.")
+        required = {
+            "status",
+            "contract_version",
+            "implementation_version",
+            "required_arguments",
+            "optional_arguments",
+            "supported_algorithm_options",
+            "output_quantities",
+            "supported_formats",
+            "supported_region_modes",
+            "supported_nx_versions",
+            "certification_report_sha256",
+        }
+        if set(value) != required:
+            raise ValueError("Calculator capability fields do not match Schema 1.")
         try:
             contract_version = int(value.get("contract_version") or 1)
         except (TypeError, ValueError):
@@ -37,18 +68,23 @@ class NXCalculatorCapability:
         def _strings(key: str) -> tuple[str, ...]:
             items = value.get(key)
             if not isinstance(items, list):
-                return ()
+                raise ValueError(f"Calculator capability {key} must be an array.")
             return tuple(str(item) for item in items)
 
-        scope = value.get("certification_scope")
         return cls(
             status=str(value.get("status") or "not_implemented"),
             contract_version=contract_version,
             implementation_version=str(value.get("implementation_version") or ""),
             required_arguments=_strings("required_arguments"),
             optional_arguments=_strings("optional_arguments"),
+            supported_algorithm_options=_strings("supported_algorithm_options"),
             output_quantities=_strings("output_quantities"),
-            certification_scope=dict(scope) if isinstance(scope, dict) else {},
+            supported_formats=_strings("supported_formats"),
+            supported_region_modes=_strings("supported_region_modes"),
+            supported_nx_versions=_strings("supported_nx_versions"),
+            certification_report_sha256=str(
+                value.get("certification_report_sha256") or ""
+            ),
         )
 
 
@@ -58,8 +94,20 @@ class NXCapability:
     backend_version: str = ""
     plugin_version: str = ""
     formats: dict[str, str] = field(default_factory=dict)
-    calculators: dict[str, str | dict[str, Any]] = field(default_factory=dict)
+    calculators: dict[str, NXCalculatorCapability] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "backend_version": self.backend_version,
+            "plugin_version": self.plugin_version,
+            "formats": dict(self.formats),
+            "calculators": {
+                key: value.to_dict() for key, value in self.calculators.items()
+            },
+            "details": dict(self.details),
+        }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "NXCapability":
@@ -68,12 +116,17 @@ class NXCapability:
             backend_version=str(payload.get("backend_version") or ""),
             plugin_version=str(payload.get("plugin_version") or ""),
             formats=dict(payload.get("formats") or {}),
-            calculators=dict(payload.get("calculators") or {}),
+            calculators={
+                str(key): NXCalculatorCapability.from_dict(value)
+                for key, value in dict(payload.get("calculators") or {}).items()
+            },
             details=dict(payload.get("details") or {}),
         )
 
     def calculator(self, calculator_id: str) -> NXCalculatorCapability:
-        return NXCalculatorCapability.from_value(self.calculators.get(calculator_id))
+        return self.calculators.get(
+            calculator_id, NXCalculatorCapability(status="not_implemented")
+        )
 
 
 @dataclass(frozen=True)

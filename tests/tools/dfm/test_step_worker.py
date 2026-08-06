@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from tools.dfm.contracts import EffectiveParameter, WorkerRequest
+from tools.dfm.contracts import EffectiveRule, PlanOperation, ResolvedArgument, WorkerRequest
 from tools.dfm.runtime.events import parse_worker_event
 
 
@@ -23,14 +23,22 @@ def _request(
         process=process,
         scope_id="injection.legacy-baseline",
         analyzer_version="legacy-step-v1",
-        parameters={
-            "min_wall_mm": EffectiveParameter(
+        rules={
+            "min_wall_mm": EffectiveRule(
                 1.2, "mm", "injection_legacy_default"
             ),
-            "pull_dir": EffectiveParameter(
-                [0.0, 0.0, 1.0], None, "injection_legacy_default"
-            ),
         },
+        operations=[
+            PlanOperation(
+                "geometry.draft",
+                "measure_draft",
+                arguments={
+                    "pull_direction": ResolvedArgument(
+                        [0.0, 0.0, 1.0], "fact:pull_dir:injection_legacy_default"
+                    )
+                },
+            )
+        ],
         max_evidence_findings=max_evidence_findings,
     )
     request_path = tmp_path / "request.json"
@@ -72,7 +80,7 @@ def test_worker_reports_dependency_missing_without_result(tmp_path, monkeypatch,
     assert not (tmp_path / "artifacts" / "worker_result.json").exists()
 
 
-def test_worker_builds_legacy_config_from_effective_parameters(tmp_path):
+def test_worker_builds_legacy_config_from_rules_and_resolved_arguments(tmp_path):
     from tools.dfm.workers.step_worker import _legacy_config
 
     request_path = _request(tmp_path)

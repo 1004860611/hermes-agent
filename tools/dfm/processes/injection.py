@@ -11,8 +11,9 @@ from ..analyzers.base import AnalyzerContext
 from ..contracts import (
     Capability,
     CapabilityStatus,
-    EffectiveParameter,
+    EffectiveRule,
     PlanOperation,
+    ResolvedArgument,
 )
 from ..errors import DFMError
 from .base import ProcessPlan
@@ -59,13 +60,16 @@ class InjectionProcessAdapter:
         if unknown:
             self._invalid("Unknown injection parameter.", {"parameters": unknown})
 
-        parameters = {
-            key: EffectiveParameter(
-                self._normalize_value(key, definition["value"]),
-                definition.get("unit"),
-                "injection_legacy_default",
-                str(definition.get("kind") or "rule"),
-            )
+        resolved = {
+            key: {
+                "value": self._normalize_value(key, definition["value"]),
+                "unit": definition.get("unit"),
+                "source": "injection_legacy_default",
+                "source_ref": (
+                    f"scope:{scope['scope_id']}@{scope['version']}/parameters/{key}"
+                ),
+                "kind": str(definition.get("kind") or "rule"),
+            }
             for key, definition in defaults.items()
         }
         for key, raw in raw_parameters.items():
@@ -79,11 +83,53 @@ class InjectionProcessAdapter:
                     "Injection parameter source is not trusted.",
                     {"parameter": key, "source": source},
                 )
-            parameters[key] = EffectiveParameter(
-                self._normalize_value(key, value),
-                defaults[key].get("unit"),
-                source,
-                str(defaults[key].get("kind") or "rule"),
+            resolved[key] = {
+                "value": self._normalize_value(key, value),
+                "unit": defaults[key].get("unit"),
+                "source": source,
+                "source_ref": str(raw.get("source_ref") or f"fact:{key}")
+                if isinstance(raw, Mapping)
+                else f"fact:{key}",
+                "kind": str(defaults[key].get("kind") or "rule"),
+            }
+
+        rules = {
+            key: EffectiveRule(
+                value=item["value"],
+                unit=item["unit"],
+                source=item["source_ref"],
+                version=str(scope["version"]),
+            )
+            for key, item in resolved.items()
+            if item["kind"] == "rule"
+        }
+        operations = [PlanOperation.from_dict(item) for item in scope["operations"]]
+        enriched_operations = []
+        for operation in operations:
+            arguments = dict(operation.arguments)
+            algorithm_options = dict(operation.algorithm_options)
+            if operation.calculator_id in {"measure_draft", "inspect_undercut"}:
+                pull = resolved["pull_dir"]
+                arguments["pull_direction"] = ResolvedArgument(
+                    pull["value"], pull["source_ref"], pull["unit"]
+                )
+            if operation.calculator_id == "measure_planar_spacing":
+                option = resolved["max_local_boss_span_mm"]
+                algorithm_options["max_local_boss_span_mm"] = ResolvedArgument(
+                    option["value"],
+                    f"scope:{scope['scope_id']}@{scope['version']}",
+                    option["unit"],
+                )
+            enriched_operations.append(
+                PlanOperation(
+                    operation.operation_id,
+                    operation.calculator_id,
+                    operation.depends_on,
+                    operation.metric_ids,
+                    operation.required_quantities,
+                    arguments,
+                    algorithm_options,
+                )
             )
 
         return ProcessPlan(
@@ -91,8 +137,9 @@ class InjectionProcessAdapter:
             adapter_version=self.version,
             scope_id=scope["scope_id"],
             scope_version=scope["version"],
-            parameters=parameters,
-            operations=[PlanOperation.from_dict(item) for item in scope["operations"]],
+            rules=rules,
+            operations=enriched_operations,
+            accepted_inputs=set(defaults),
         )
 
     def _load_scope(self) -> dict[str, Any]:

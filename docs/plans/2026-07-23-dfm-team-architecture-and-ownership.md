@@ -435,9 +435,9 @@ tests/fixtures/dfm/drawings/
 | E    | 盘点现有 C++ 插件、NX API、许可证和可抽取 calculator |
 | F    | 盘点图纸样本、字段字典、OCR 基线和标注需求           |
 
-Sprint 0 必须以 [DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md) 为单一事实源，
+Sprint 0 必须以 [DFM/NX Production Task Contract](../dfm-nx-task-contract.md) 为单一事实源，
 完成 Rule/Metric/Calculator/Operation/Measurement/Region ID 词典、任务级参数、结构化
-capability、Measurement 回链、v1/v2 兼容矩阵和 Hermes/NX 共用 JSON fixtures。仅开会确认
+capability、Region、Measurement 回链、唯一 Schema 1 和 Hermes/NX 共用 JSON fixtures。仅开会确认
 概念或分别维护 Python/C++ 示例不视为完成。
 
 ### Sprint 1：黄金产品冻结与两条最小链路

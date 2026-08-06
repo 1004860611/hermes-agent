@@ -51,7 +51,7 @@
 其中六个出模方向和分型区域不能由 Agent 猜测，应作为工程师确认事实或受控模具方案输入。
 六个业务 Metric 分别生成 Plan Operation，但复用稳定 Calculator ID `measure_draft`；方向和
 区域通过任务级 `arguments` 引用，不编码到 Calculator ID。正式契约见
-[DFM/NX Task Contract v2](../dfm-nx-task-contract-v2.md)。
+[DFM/NX Production Task Contract](../dfm-nx-task-contract.md)。
 
 ## 3. NX 测量与领域公式组合项
 

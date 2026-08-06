@@ -51,14 +51,20 @@ def _pptx_available() -> bool:
 
 
 def _legacy_config(request: WorkerRequest) -> dict[str, Any]:
+    thresholds = {key: rule.value for key, rule in request.rules.items()}
+    for operation in request.operations:
+        for name, argument in {
+            **operation.arguments,
+            **operation.algorithm_options,
+        }.items():
+            legacy_name = "pull_dir" if name == "pull_direction" else name
+            thresholds[legacy_name] = argument.value
     config = {
         # The migrated analyzer knows only its historical generic/injection/
         # machining labels. The persisted Run keeps the real process; generic
         # is only the geometry-execution compatibility mode for die casting.
         "process": "injection" if request.process == "injection" else "generic",
-        "thresholds": {
-            key: parameter.value for key, parameter in request.parameters.items()
-        },
+        "thresholds": thresholds,
     }
     if request.max_evidence_findings is not None:
         config["max_evidence_issues"] = request.max_evidence_findings
@@ -232,13 +238,8 @@ def _execute(request: WorkerRequest) -> WorkerResult:
                 "schema_version": MEASUREMENT_SCHEMA_VERSION,
                 "run_id": request.run_id,
                 "input_sha256": input_sha256,
-                "algorithm_version": WORKER_VERSION,
                 "process": request.process,
                 "scope_id": request.scope_id,
-                "operations": operations,
-                "parameters": {
-                    key: value.to_dict() for key, value in request.parameters.items()
-                },
                 "measurements": [item.to_dict() for item in measurements],
                 "producer_contract": "measurement_only",
             },
@@ -275,7 +276,7 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         input_sha256=input_sha256,
         process=request.process,
         scope_id=request.scope_id,
-        parameters=request.parameters,
+        rules=request.rules,
         result_path="worker_result.json",
         measurement_path=measurement_path.name,
         artifacts=artifacts,

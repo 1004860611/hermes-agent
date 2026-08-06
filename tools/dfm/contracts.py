@@ -82,6 +82,9 @@ class FactRecord:
     value: Any
     source: str
     status: str
+    unit: str | None = None
+    evidence_refs: list[str] = field(default_factory=list)
+    version: str = "1"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -134,7 +137,7 @@ class PlanRecord:
     scope_version: str = ""
     input_ids: list[str] = field(default_factory=list)
     input_hashes: dict[str, str] = field(default_factory=dict)
-    parameters: dict[str, "EffectiveParameter"] = field(default_factory=dict)
+    rules: dict[str, "EffectiveRule"] = field(default_factory=dict)
     operations: list["PlanOperation"] = field(default_factory=list)
     parent_plan_id: str | None = None
     invalidated_by: str | None = None
@@ -153,8 +156,8 @@ class PlanRecord:
             "scope_version": self.scope_version,
             "input_ids": list(self.input_ids),
             "input_hashes": dict(self.input_hashes),
-            "parameters": {
-                key: value.to_dict() for key, value in self.parameters.items()
+            "rules": {
+                key: value.to_dict() for key, value in self.rules.items()
             },
             "operations": [operation.to_dict() for operation in self.operations],
             "parent_plan_id": self.parent_plan_id,
@@ -165,9 +168,9 @@ class PlanRecord:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PlanRecord":
         values = dict(payload)
-        values["parameters"] = {
-            key: EffectiveParameter.from_dict(value)
-            for key, value in values.get("parameters", {}).items()
+        values["rules"] = {
+            key: EffectiveRule.from_dict(value)
+            for key, value in values.get("rules", {}).items()
         }
         values["operations"] = [
             PlanOperation.from_dict(value) for value in values.get("operations", [])
@@ -176,89 +179,155 @@ class PlanRecord:
 
 
 @dataclass(frozen=True)
-class EffectiveParameter:
+class EffectiveRule:
     value: Any
     unit: str | None
     source: str
-    kind: str = "rule"
+    version: str = "1"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "EffectiveParameter":
+    def from_dict(cls, payload: dict[str, Any]) -> "EffectiveRule":
         return cls(**payload)
 
 
 @dataclass(frozen=True)
 class PlanOperation:
     operation_id: str
-    operation: str
+    calculator_id: str
     depends_on: list[str] = field(default_factory=list)
-    metric_refs: list[str] = field(default_factory=list)
-    arguments: dict[str, Any] = field(default_factory=dict)
+    metric_ids: list[str] = field(default_factory=list)
+    required_quantities: list[str] = field(default_factory=list)
+    arguments: dict[str, "ResolvedArgument"] = field(default_factory=dict)
+    algorithm_options: dict[str, "ResolvedArgument"] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
+        self.validate()
+        return {
             "operation_id": self.operation_id,
-            "operation": self.operation,
+            "calculator_id": self.calculator_id,
             "depends_on": list(self.depends_on),
+            "metric_ids": list(self.metric_ids),
+            "required_quantities": list(self.required_quantities),
+            "arguments": {
+                key: value.to_dict() for key, value in self.arguments.items()
+            },
+            "algorithm_options": {
+                key: value.to_dict() for key, value in self.algorithm_options.items()
+            },
         }
-        # Keep persisted v1 plans byte-compatible unless they use the v2 task contract.
-        if self.metric_refs:
-            payload["metric_refs"] = list(self.metric_refs)
-        if self.arguments:
-            payload["arguments"] = dict(self.arguments)
-        return payload
 
-    def to_nx_dict(self, schema_version: int) -> dict[str, Any]:
-        if schema_version >= 2 and self.uses_task_contract_v2:
-            self._validate_task_contract()
-        payload = self.to_dict()
-        if schema_version >= 2:
-            payload["calculator_id"] = payload.pop("operation")
-            payload.setdefault("metric_refs", [])
-            payload.setdefault("arguments", {})
-        return payload
-
-    @property
-    def uses_task_contract_v2(self) -> bool:
-        return bool(self.metric_refs or self.arguments)
-
-    def _validate_task_contract(self) -> None:
-        if not self.metric_refs:
+    def validate(self) -> None:
+        if not self.operation_id or not self.calculator_id:
             raise DFMError(
                 "plan_operation_invalid",
-                "Plan task contract v2 requires at least one metric_ref.",
+                "Plan operations require operation_id and calculator_id.",
+            )
+        if len(self.metric_ids) != len(set(self.metric_ids)):
+            raise DFMError(
+                "plan_operation_invalid",
+                "Plan operation metric_ids must be unique.",
                 {"operation_id": self.operation_id},
             )
-        for name, argument in self.arguments.items():
-            if not isinstance(name, str) or not name or not isinstance(argument, dict):
-                raise DFMError(
-                    "plan_operation_invalid",
-                    "Plan task arguments must be named JSON objects.",
-                    {"operation_id": self.operation_id},
-                )
-            selectors = {"fact_ref", "region_ref", "value"}.intersection(argument)
-            if len(selectors) != 1:
-                raise DFMError(
-                    "plan_operation_invalid",
-                    "Each Plan task argument must contain exactly one value or reference selector.",
-                    {"operation_id": self.operation_id, "argument": name},
-                )
+        if len(self.required_quantities) != len(set(self.required_quantities)):
+            raise DFMError(
+                "plan_operation_invalid",
+                "Plan operation required_quantities must be unique.",
+                {"operation_id": self.operation_id},
+            )
+        for values in (self.arguments, self.algorithm_options):
+            for name, argument in values.items():
+                if not isinstance(name, str) or not name or not isinstance(
+                    argument, ResolvedArgument
+                ):
+                    raise DFMError(
+                        "plan_operation_invalid",
+                        "Plan operation inputs must be named resolved arguments.",
+                        {"operation_id": self.operation_id},
+                    )
+                argument.validate(name, self.operation_id)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PlanOperation":
         values = dict(payload)
-        calculator_id = values.pop("calculator_id", None)
-        if calculator_id is not None:
-            if values.get("operation") not in {None, calculator_id}:
-                raise DFMError(
-                    "plan_operation_invalid",
-                    "Plan operation and calculator_id must identify the same calculator.",
-                    {"operation_id": values.get("operation_id")},
-                )
-            values["operation"] = calculator_id
+        values["arguments"] = {
+            key: ResolvedArgument.from_dict(value)
+            for key, value in values.get("arguments", {}).items()
+        }
+        values["algorithm_options"] = {
+            key: ResolvedArgument.from_dict(value)
+            for key, value in values.get("algorithm_options", {}).items()
+        }
+        operation = cls(**values)
+        operation.validate()
+        return operation
+
+
+@dataclass(frozen=True)
+class ResolvedArgument:
+    value: Any
+    source_ref: str
+    unit: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ResolvedArgument":
+        return cls(**payload)
+
+    def validate(self, name: str, operation_id: str) -> None:
+        if not self.source_ref:
+            raise DFMError(
+                "plan_operation_invalid",
+                "Resolved operation arguments require source_ref provenance.",
+                {"operation_id": operation_id, "argument": name},
+            )
+
+
+@dataclass(frozen=True)
+class BoundingBox:
+    minimum: list[float]
+    maximum: list[float]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "BoundingBox":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class RegionRecord:
+    region_id: str
+    input_sha256: str
+    coordinate_system: str
+    mode: str
+    semantic_label: str
+    source_refs: list[str]
+    version: str
+    content_sha256: str
+    bbox: BoundingBox | None = None
+    geometry_refs: list["GeometryRef"] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "bbox": self.bbox.to_dict() if self.bbox else None,
+            "geometry_refs": [item.to_dict() for item in self.geometry_refs],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RegionRecord":
+        values = dict(payload)
+        if isinstance(values.get("bbox"), dict):
+            values["bbox"] = BoundingBox.from_dict(values["bbox"])
+        values["geometry_refs"] = [
+            GeometryRef.from_dict(item) for item in values.get("geometry_refs", [])
+        ]
         return cls(**values)
 
 
@@ -283,8 +352,10 @@ class MeasurementRecord:
     """Deterministic geometry output, intentionally independent of a rule verdict."""
 
     measurement_id: str
-    check_id: str
-    metric: str
+    operation_id: str
+    calculator_id: str
+    metric_id: str
+    quantity_id: str
     value: Any
     unit: str | None
     status: str
@@ -294,19 +365,13 @@ class MeasurementRecord:
     input_sha256: str
     quality: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
-    operation_ref: str = ""
-    calculator_id: str = ""
-    metric_id: str = ""
+    region_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
+        return {
             **asdict(self),
             "geometry_refs": [item.to_dict() for item in self.geometry_refs],
         }
-        for key in ("operation_ref", "calculator_id", "metric_id"):
-            if not payload[key]:
-                payload.pop(key)
-        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "MeasurementRecord":
@@ -322,9 +387,12 @@ class EvaluationRecord:
     """A versioned comparison between measurements and an effective parameter."""
 
     evaluation_id: str
-    check_id: str
-    measurement_refs: list[str]
-    parameter_ref: str
+    operation_id: str
+    metric_id: str
+    measurement_ids: list[str]
+    rule_id: str
+    rule_version: str
+    rule_hash: str
     operator: str
     expected: Any
     actual: Any
@@ -347,15 +415,15 @@ class WorkerRequest:
     process: str
     scope_id: str
     analyzer_version: str
-    parameters: dict[str, EffectiveParameter] = field(default_factory=dict)
+    rules: dict[str, EffectiveRule] = field(default_factory=dict)
     operations: list[PlanOperation] = field(default_factory=list)
     max_evidence_findings: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
-            "parameters": {
-                key: value.to_dict() for key, value in self.parameters.items()
+            "rules": {
+                key: value.to_dict() for key, value in self.rules.items()
             },
             "operations": [operation.to_dict() for operation in self.operations],
         }
@@ -363,9 +431,9 @@ class WorkerRequest:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "WorkerRequest":
         values = dict(payload)
-        values["parameters"] = {
-            key: EffectiveParameter.from_dict(value)
-            for key, value in values.get("parameters", {}).items()
+        values["rules"] = {
+            key: EffectiveRule.from_dict(value)
+            for key, value in values.get("rules", {}).items()
         }
         values["operations"] = [
             PlanOperation.from_dict(value) for value in values.get("operations", [])
@@ -425,7 +493,7 @@ class WorkerResult:
     input_sha256: str
     process: str
     scope_id: str
-    parameters: dict[str, EffectiveParameter]
+    rules: dict[str, EffectiveRule]
     result_path: str
     artifacts: list[dict[str, str]] = field(default_factory=list)
     measurement_path: str | None = None
@@ -433,17 +501,17 @@ class WorkerResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
-            "parameters": {
-                key: value.to_dict() for key, value in self.parameters.items()
+            "rules": {
+                key: value.to_dict() for key, value in self.rules.items()
             },
         }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "WorkerResult":
         values = dict(payload)
-        values["parameters"] = {
-            key: EffectiveParameter.from_dict(value)
-            for key, value in values.get("parameters", {}).items()
+        values["rules"] = {
+            key: EffectiveRule.from_dict(value)
+            for key, value in values.get("rules", {}).items()
         }
         return cls(**values)
 
@@ -454,8 +522,12 @@ class FindingRecord:
     title: str
     severity: str
     status: str
+    evaluation_ids: list[str]
+    measurement_ids: list[str]
+    metric_ids: list[str]
+    region_refs: list[str]
     evidence_refs: list[str]
-    rule_ref: str
+    rule_refs: list[str]
     recommendation: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -591,6 +663,7 @@ class ProjectManifest:
     input_mode: str | None = None
     inputs: list[InputRecord] = field(default_factory=list)
     facts: list[FactRecord] = field(default_factory=list)
+    regions: list[RegionRecord] = field(default_factory=list)
     clarifications: list[ClarificationRecord] = field(default_factory=list)
     features: list[FeatureRecord] = field(default_factory=list)
     plans: list[PlanRecord] = field(default_factory=list)
@@ -617,6 +690,7 @@ class ProjectManifest:
             "idempotency_key": self.idempotency_key,
             "inputs": [item.to_dict() for item in self.inputs],
             "facts": [item.to_dict() for item in self.facts],
+            "regions": [item.to_dict() for item in self.regions],
             "clarifications": [item.to_dict() for item in self.clarifications],
             "features": [item.to_dict() for item in self.features],
             "plans": [item.to_dict() for item in self.plans],
@@ -634,6 +708,9 @@ class ProjectManifest:
         ]
         values["facts"] = [
             FactRecord.from_dict(item) for item in values.get("facts", [])
+        ]
+        values["regions"] = [
+            RegionRecord.from_dict(item) for item in values.get("regions", [])
         ]
         values["clarifications"] = [
             ClarificationRecord.from_dict(item)

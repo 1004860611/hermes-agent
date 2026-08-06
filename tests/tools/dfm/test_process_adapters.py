@@ -36,8 +36,8 @@ def test_die_casting_scope_is_independent_and_topology_only(context):
     assert plan.process == "die_casting"
     assert plan.scope_id == "die_casting.topology-baseline"
     assert plan.scope_version == "1.0.0"
-    assert [item.operation for item in plan.operations] == [
-        "load_step",
+    assert [item.calculator_id for item in plan.operations] == [
+        "load_geometry",
         "inspect_topology",
     ]
     assert tuple(adapter.required_facts()) == ("model_units",)
@@ -51,10 +51,12 @@ def test_injection_default_scope_has_versioned_parameter_provenance(context):
     assert plan.process == "injection"
     assert plan.scope_id == "injection.legacy-baseline"
     assert plan.scope_version == "1.1.0"
-    assert plan.parameters["min_draft_deg"].value == 1.0
-    assert plan.parameters["min_draft_deg"].source == "injection_legacy_default"
-    assert plan.parameters["min_draft_deg"].unit == "degree"
-    assert plan.operations[0].operation == "load_step"
+    assert plan.rules["min_draft_deg"].value == 1.0
+    assert plan.rules["min_draft_deg"].source == (
+        "scope:injection.legacy-baseline@1.1.0/parameters/min_draft_deg"
+    )
+    assert plan.rules["min_draft_deg"].unit == "degree"
+    assert plan.operations[0].calculator_id == "load_geometry"
 
 
 def test_confirmed_parameter_override_is_normalized_and_traced(context):
@@ -64,14 +66,19 @@ def test_confirmed_parameter_override_is_normalized_and_traced(context):
         context,
         {
             "min_wall_mm": {"value": "1.6", "source": "project_fact"},
-            "pull_dir": {"value": [0, 1, 0], "source": "user_confirmed"},
+            "pull_dir": {
+                "value": [0, 1, 0],
+                "source": "user_confirmed",
+                "source_ref": "fact:fact_pull_direction",
+            },
         },
     )
 
-    assert plan.parameters["min_wall_mm"].value == 1.6
-    assert plan.parameters["min_wall_mm"].source == "project_fact"
-    assert plan.parameters["pull_dir"].value == [0.0, 1.0, 0.0]
-    assert plan.parameters["pull_dir"].source == "user_confirmed"
+    assert plan.rules["min_wall_mm"].value == 1.6
+    assert plan.rules["min_wall_mm"].source == "fact:min_wall_mm"
+    draft = next(item for item in plan.operations if item.calculator_id == "measure_draft")
+    assert draft.arguments["pull_direction"].value == [0.0, 1.0, 0.0]
+    assert draft.arguments["pull_direction"].source_ref == "fact:fact_pull_direction"
 
 
 @pytest.mark.parametrize(

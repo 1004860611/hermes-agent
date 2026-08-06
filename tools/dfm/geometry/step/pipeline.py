@@ -25,7 +25,7 @@ def validate_operations(operations: list[PlanOperation]) -> list[str]:
                 "DFM plan operation ids must be unique.",
                 {"operation_id": item.operation_id},
             )
-        resolve_brep_check(item.operation)
+        resolve_brep_check(item.calculator_id)
         missing = [
             dependency for dependency in item.depends_on if dependency not in ids
         ]
@@ -36,8 +36,8 @@ def validate_operations(operations: list[PlanOperation]) -> list[str]:
                 {"operation_id": item.operation_id, "missing_dependencies": missing},
             )
         ids.add(item.operation_id)
-        ordered.append(item.operation)
-    if ordered[0] != "load_step" or "inspect_topology" not in ordered:
+        ordered.append(item.calculator_id)
+    if ordered[0] != "load_geometry" or "inspect_topology" not in ordered:
         raise DFMError(
             "worker_request_invalid",
             "STEP plans must load the model and inspect topology first.",

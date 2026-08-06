@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..analyzers.base import AnalyzerContext
-from ..contracts import Capability, CapabilityStatus, EffectiveParameter, PlanOperation
+from ..contracts import Capability, CapabilityStatus, PlanOperation
 from ..errors import DFMError
 from .base import ProcessPlan
 
@@ -31,7 +31,7 @@ class DieCastingProcessAdapter:
             "The die-casting process adapter is available for the approved topology gate.",
             details={
                 "adapter_version": self.version,
-                "available_operations": ["load_step", "inspect_topology"],
+                "available_calculators": ["load_geometry", "inspect_topology"],
                 "pending_rule_approval": [
                     "measure_wall_thickness",
                     "measure_draft",
@@ -62,16 +62,9 @@ class DieCastingProcessAdapter:
             adapter_version=self.version,
             scope_id=str(scope["scope_id"]),
             scope_version=str(scope["version"]),
-            parameters={
-                key: EffectiveParameter(
-                    definition["value"],
-                    definition.get("unit"),
-                    "die_casting_baseline_default",
-                    str(definition.get("kind") or "engineering_context"),
-                )
-                for key, definition in scope["parameters"].items()
-            },
+            rules={},
             operations=[PlanOperation.from_dict(item) for item in scope["operations"]],
+            accepted_inputs=set(scope["parameters"]),
         )
 
     def _load_scope(self) -> dict[str, Any]:
