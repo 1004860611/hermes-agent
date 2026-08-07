@@ -2,20 +2,32 @@
 
 ## 1. 目标
 
-选取一个模具工程师已经完成 DFM 分析的真实或脱敏产品 `.x_t` 文件，将其确认事实、
-所需指标、规则阈值、问题区域和工程结论转换为可执行、可追溯的验收基线。完成 NX
-Server、NX C++ 插件、初始压铸规则、Hermes 规划、Measurement、Evaluation、Finding、
-Evidence 和报告的第一条真实产品闭环，并由工程师复核结果。
+选取模具工程师已经完成 DFM 分析的真实或脱敏黄金产品，并准备同一 CAD 源导出的 STEP
+和 Parasolid `.x_t`。先使用当前冻结的正式 Scope 打通 NX Server、NX C++ 插件、Hermes
+规划、Measurement、Evaluation、Finding、Evidence 和报告，再按追溯矩阵逐项增加指标，
+最终完成黄金产品全部批准范围并由工程师复核结果。
 
 M2.6 验证的是“第一条业务纵向闭环”，不是仅验证 NX 能打开文件，也不宣称一个产品
 可以覆盖所有压铸产品。
+
+### 1.1 三阶段交付策略
+
+| 阶段 | 范围 | 完成后能声明什么 | 当前状态 |
+| --- | --- | --- | --- |
+| M2.6-A 当前 Scope 最小闭环 | `injection.wall-draft@2.0.0`；ABS、mm、一个开模方向、壁厚和拔模角；NX 同时支持 STEP/Parasolid | NX 与 Hermes 的生产形态模块已经真实端到端打通 | Hermes 基线完成；NX Server/插件待实现 |
+| M2.6-B 指标逐项扩展 | 建立独立压铸 Scope/RuleBinding，按追溯矩阵逐项增加方向、区域和 Calculator | 已加入的每一项指标各自形成完整、可回归闭环 | 待 M2.6-A 通过后推进 |
+| M2.6-C 黄金产品全范围 | 全部批准指标、真实生产 Run Bundle、工程师人工核对与签字 | M2.6 黄金产品第一条真实 DFM 纵向闭环完成 | 未开始 |
+
+M2.6-A 使用注塑正式 Scope 是为了冻结数据流和模块职责，不把注塑阈值当成压铸工程
+规则。进入 M2.6-B 前必须建立独立压铸 Scope，未经工程审批不得复制 ABS 壁厚阈值或
+注塑拔模角阈值。
 
 ## 2. 生产链路与人工验收边界
 
 ### 2.1 生产 DFM 链路
 
 ```text
-用户上传 x_t
+用户上传 STEP 或 Parasolid x_t
 → Hermes 项目和确认事实
 → Rule Set / Plan
 → HttpNXBackendClient
@@ -67,13 +79,14 @@ hermes-agent/                  # 生产代码，只生成可追溯 Run/Run Bundl
 
 ## 3. 黄金产品包
 
-黄金产品不是单个 `.x_t`，而是一组受控验收资产：
+黄金产品不是单个 `.x_t`，而是一组受控验收资产。STEP/Parasolid 配对输入在 M2.6-A
+用于验证 NX 多格式入口；M2.6-C 的工程结论绑定工程师批准的主输入版本：
 
 ```text
 golden-product-01/
 ├── input/
-│   ├── product.x_t
-│   ├── product.step                 # 可选，同源对照
+│   ├── product.x_t                  # 同源 Parasolid 输入
+│   ├── product.step                 # 同源 STEP 输入，M2.6-A 必需
 │   └── drawing.pdf                  # 可选，若工程结论依赖图纸
 ├── facts/
 │   └── confirmed_facts.json
@@ -102,7 +115,18 @@ Ground Truth 由模具工程师、架构负责人和模块负责人共同整理�
 
 ### 4.1 确认事实
 
-至少包括：
+M2.6-A 直接使用当前正式 Scope 的确认事实：
+
+```json
+{
+  "process": "injection",
+  "material": "ABS",
+  "model_units": "mm",
+  "pull_dir": [0.0, 0.0, 1.0]
+}
+```
+
+这些事实只服务第一阶段技术闭环。M2.6-B/C 的压铸黄金产品至少包括：
 
 ```json
 {
@@ -167,17 +191,18 @@ M2.6 业务 Calculator 开发开始前必须完成黄金产品追溯矩阵和
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 示例：局部薄壁 | `die_casting.min_wall` | `thickness_mm` | `measure_wall_thickness` | NX | `measurement_*` | `evaluation_*` | `finding_*` | region/image |
 
-该矩阵决定插件和规则开发范围。第一阶段只实现黄金产品真实需要的 calculator，不以
-“尽可能多做功能”代替闭环验收。
+该矩阵决定 M2.6-B/C 的插件和规则开发范围。M2.6-A 固定只实现当前正式 Scope 所需的
+`load_geometry`、`inspect_topology`、`measure_wall_thickness` 和 `measure_draft`；M2.6-B
+以后每次只选已完成追溯定义的一项或一组紧密关联指标，不以“尽可能多做功能”代替闭环验收。
 
 ## 6. 生产模块工作包
 
 ### WP0：M2.6 数据契约联合评审
 
 - 冻结 Rule/Metric/Calculator/Operation/Measurement/Region ID 词典；
-- 正式 Calculator ID 使用 `inspect_topology`、`measure_draft`、
-  `measure_wall_thickness` 和 `inspect_undercut`；
-- 评审唯一 Schema 1 的 `calculator_id`、`metric_ids`、`required_quantities`、`required_artifacts` 和已解析 `arguments`；
+- M2.6-A 固定使用 `load_geometry`、`inspect_topology`、`measure_draft` 和
+  `measure_wall_thickness`；`inspect_undercut` 等 ID 在对应 M2.6-B 增量评审后加入；
+- 评审唯一 Objective Task/Result Schema 2 的 `calculator_id`、`metric_ids`、`required_quantities`、`required_artifacts` 和已解析 `arguments`；
 - 评审 RuleBinding、结构化 Calculator capability、Region、Measurement、ScalarField、RenderScene、TopologyMap 和 EvidenceRecord 回链字段；
 - Hermes 与 NX Server/C++ 使用同一组 JSON fixture 做双向契约测试；
 - NX Server 和 Hermes 只实现同一份生产数据契约，不维护 demo 双轨。
@@ -187,17 +212,21 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 
 ### WP1：产品事实和初始 Rule Set
 
-- 将工程师确认事实写入现有 Fact/Clarification 契约；
-- 建立独立压铸 Rule Set，不复制注塑阈值；
+- M2.6-A 复用 `injection.wall-draft@2.0.0` 及其 ABS/mm/单开模方向事实，不增加第二份
+  Demo Rule Set；
+- M2.6-B 开始前建立独立压铸 Rule Set，不复制注塑阈值；
+- 将工程师确认的黄金产品事实写入现有 Fact/Clarification 契约；
 - 保存规则 ID、version、source、operator、unit、priority 和 hash；
 - 对黄金产品形成 Effective Rule Set 快照；
 - 缺失规则返回 `rule_not_found`，不由 LLM 补值。
 
 ### WP2：产品 Plan
 
-- required metrics 与 calculator 一一映射；
+- M2.6-A 使用当前正式 Scope 的壁厚和单方向拔模 Plan，STEP/Parasolid 只改变输入格式和
+  Backend loader，不改变 Calculator/Metric ID；
+- M2.6-B 的 required metrics 与 calculator 一一映射；
 - 生成依赖有序 calculator DAG；
-- 六方向任务分别使用唯一 Operation ID，并通过 `arguments` 引用方向和区域；
+- 六方向任务在对应增量中分别使用唯一 Operation ID，并通过 `arguments` 引用方向和区域；
 - 所需 calculator 必须在 NX capability 中为 `certified`；
 - 每个任务必须通过 Calculator 参数、输出 Quantity/Artifact 和认证范围校验；
 - Plan 使用 RuleBinding 显式连接 Operation/Metric/Quantity 与 Rule，不依赖 NX diagnostics；
@@ -208,14 +237,19 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 
 - 实现 HTTP v1 输入上传、Job、状态、取消、结果和 Artifact；
 - 管理许可证、NX Worker、超时、崩溃和清理；
-- 支持黄金产品目标 Parasolid 版本；
+- M2.6-A 同时支持 STEP/STP 与目标 Parasolid 版本，上传登记使用 `format_id=step` 或
+  `format_id=parasolid_xt`，两者进入同一 Objective Task/Result 流程；
+- capability 必须分别声明两种格式的 loader 和 Calculator 认证范围；生产配置选择 NX
+  时，STEP 失败不得自动降级到 PythonOCC；
 - capability 逐 calculator 声明认证范围；
 - 完成真实 Server/Worker 部署和 Hermes 联调。
 
 ### WP4：NX C++ calculator
 
+- `load_geometry` 对 STEP/Parasolid 建立统一的规范化 B-Rep 输入语义，保留原始输入 SHA256
+  和 mm 单位约束；
 - `inspect_topology` 作为基础门；
-- 实现追溯矩阵要求的所有 calculator；
+- M2.6-A 先实现并认证壁厚和拔模角；M2.6-B 再按追溯矩阵逐项实现后续 calculator；
 - 只输出 Measurement、几何引用、quality、diagnostics，以及中性的 ScalarField、RenderScene 和 TopologyMap；
 - 不输出失败区域、pass/fail 或截图；
 - 支持取消安全点和进度；
@@ -228,7 +262,9 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 - EvaluationEngine 使用 RuleBinding 和 Effective Rule Set 生成 `evaluations.json`；
 - FieldEvidenceEngine 只对失败 Evaluation 筛选场数据、连接失败 Cell、生成局部 Patch 和截图；
 - `materialize_evaluated_findings()` 使用 Evaluation 与 EvidenceRecord 生成精确引用；
-- STEP 历史链路继续使用 Worker 证据与 `materialize_legacy_step_findings()`，不与 NX 生产链混用；
+- PythonOCC demo 与 NX production 共用 Hermes 的 Evaluation、Evidence、Finding 和报告链；Backend 只提供客观 Measurement 与中性几何 Artifact；
+- 规则变化只重跑 Evaluation/Evidence/Finding/Report；输入、Backend 版本、Operation 参数和
+  依赖指纹一致时允许复用客观 Operation Artifact；
 - 报告展示事实、规则、实际值、期望值、结果、区域和未解决项；
 - 生产链不读取 Ground Truth。
 
@@ -332,7 +368,8 @@ approved Ground Truth version
 
 ### 10.1 生产链
 
-- `.x_t` 上传、哈希和 NX capability；
+- STEP/`.x_t` 上传、哈希、格式身份和 NX capability；
+- 同源 STEP/Parasolid 在 NX 内分别加载，并实现相同 Objective Task/Result 契约；
 - 确认事实、Rule Set 和 Plan；
 - 所有所需 calculator 的真实 NX 执行；
 - Measurement-only 契约；
@@ -340,7 +377,7 @@ approved Ground Truth version
 - 平面失败、曲面局部失败、通过不截图、错误拓扑/输入哈希和并发 Run 不串证据；
 - 取消、超时、崩溃、幂等和许可证回收；
 - 相同版本重复运行工程等价；
-- 注塑 STEP 全量回归。
+- PythonOCC demo STEP 回归，以及 production NX 的 STEP/Parasolid 回归。
 
 ### 10.2 人工验收
 
@@ -351,24 +388,41 @@ approved Ground Truth version
 - 差异原因、处理结论、复核人和签字完整；
 - 确认没有为了验收而把 Ground Truth 注入生产运行。
 
-## 11. 第一阶段完成定义
+## 11. 分阶段完成定义
 
-同时满足以下条件才完成 M2.6：
+### 11.1 M2.6-A 完成定义
 
-1. 黄金产品事实、指标、规则、问题、区域和误差已冻结；
-2. Production Task Contract 通过联合评审，Hermes/NX 双向契约测试通过；
-3. 追溯矩阵完整，指标覆盖率 100%；
-4. NX Server/C++ 插件完成所需真实 calculator；
-5. 生产链输出完整 Run Bundle，不读取 Ground Truth；
-6. 关键 Measurement 在批准误差内；
-7. 工程师问题无未解释漏报，规则、区域、severity 和证据符合批准标准；
-8. 同一版本重复运行工程等价；
-9. 模具工程师完成逐项人工核对，所有差异都有结论；
-10. 模具工程师和架构负责人签字；
-11. 注塑 STEP 回归通过。
+1. Production Task Contract Schema 2 通过 Hermes/NX 联合评审；
+2. NX Server/Worker 真实支持 STEP 和 Parasolid，并按格式声明 capability；
+3. 当前正式 `injection.wall-draft@2.0.0` 不复制、不分叉地生成公共 ObjectiveTask；
+4. NX 真实完成 topology、壁厚和拔模角 Calculator，返回完整 ObjectiveResultManifest、
+   Measurement、ScalarField、RenderScene 和 TopologyMap；
+5. Hermes 使用现有统一链生成 Evaluation、三视角 Evidence、Finding 和报告；
+6. 同源 STEP/Parasolid 配对样件均完成端到端，错误输入、跨 Run Artifact、取消和哈希负例通过；
+7. production NX 不自动降级到 PythonOCC，demo PythonOCC 回归通过；
+8. 形成可复核 Run Bundle。此时只能声明“当前 Scope 的 NX 最小生产闭环完成”。
 
-完成后可以声明“NX 黄金产品第一条真实 DFM 纵向闭环通过”，不能据此声明所有压铸
-产品或所有 calculator 已具备普适生产能力。后续使用更多代表性产品扩展认证语料。
+### 11.2 M2.6-B 单项增量完成定义
+
+每个新增指标都必须拥有批准的 Fact/Rule/Metric/Calculator/Operation/Measurement/
+Evaluation/Finding/Evidence 追溯关系、独立压铸规则来源、真实 NX Calculator 认证、局部
+证据和回归样件。未满足这些条件的候选指标不得进入黄金产品生产 Plan。
+
+### 11.3 M2.6-C 最终完成定义
+
+1. 黄金产品事实、全部批准指标、规则、问题、区域和误差已冻结；
+2. 追溯矩阵中承诺的指标和 Calculator 覆盖率达到 100%；
+3. NX Server/C++ 插件完成所有范围内真实 Calculator；
+4. 生产链输出完整 Run Bundle，不读取 Ground Truth；
+5. 关键 Measurement 在批准误差内，工程师问题无未解释漏报；
+6. 同一输入、规则、NX 和插件版本重复运行工程等价；
+7. 模具工程师完成逐项人工核对，所有差异都有结论；
+8. 模具工程师和架构负责人签字；
+9. M2.6-A/B 和 PythonOCC demo/NX production 全部回归通过。
+
+只有完成 M2.6-C 后才可以声明“NX 黄金产品第一条真实 DFM 纵向闭环通过”，不能据此
+声明所有压铸产品或所有 Calculator 已具备普适生产能力。后续仍需用更多代表性产品扩展
+认证语料。
 
 ## 12. 团队分工
 

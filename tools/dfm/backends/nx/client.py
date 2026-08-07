@@ -12,7 +12,8 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from ...errors import DFMError
-from .contracts import NXArtifact, NXCapability, NXJobStatus
+from ...contracts import ObjectiveArtifactManifest, ObjectiveResultManifest
+from .contracts import NXCapability, NXJobStatus
 
 
 @runtime_checkable
@@ -21,8 +22,10 @@ class NXBackendClient(Protocol):
     def submit(self, request: dict[str, Any], input_path: Path) -> NXJobStatus: ...
     def status(self, job_id: str) -> NXJobStatus: ...
     def cancel(self, job_id: str) -> NXJobStatus: ...
-    def artifacts(self, job_id: str) -> list[NXArtifact]: ...
-    def download(self, job_id: str, artifact: NXArtifact, target: BinaryIO) -> None: ...
+    def result(self, job_id: str) -> ObjectiveResultManifest: ...
+    def download(
+        self, job_id: str, artifact: ObjectiveArtifactManifest, target: BinaryIO
+    ) -> None: ...
 
 
 class HttpNXBackendClient:
@@ -48,14 +51,29 @@ class HttpNXBackendClient:
 
     def submit(self, request: dict[str, Any], input_path: Path) -> NXJobStatus:
         digest = self._sha256(input_path)
+        if (
+            request.get("input_sha256") != digest
+            or request.get("input_format") != "parasolid_xt"
+        ):
+            raise DFMError(
+                "objective_input_invalid",
+                "NX objective task identity does not match the uploaded input.",
+            )
         upload = self._json("POST", "/v1/inputs", {"sha256": digest, "size_bytes": input_path.stat().st_size, "filename": input_path.name})
         input_id = str(upload.get("input_id") or "")
         if not input_id:
             raise DFMError("nx_protocol_invalid", "NX service did not return input_id.")
         if bool(upload.get("upload_required", True)):
             self._upload(input_id, input_path)
-        payload = dict(request)
-        payload["input"] = {"input_id": input_id, "sha256": digest, "format_id": "parasolid_xt"}
+        payload = {
+            "schema_version": request.get("schema_version"),
+            "input": {
+                "input_id": input_id,
+                "sha256": digest,
+                "format_id": "parasolid_xt",
+            },
+            "task": dict(request),
+        }
         return NXJobStatus.from_dict(self._json("POST", "/v1/jobs", payload))
 
     def status(self, job_id: str) -> NXJobStatus:
@@ -64,11 +82,19 @@ class HttpNXBackendClient:
     def cancel(self, job_id: str) -> NXJobStatus:
         return NXJobStatus.from_dict(self._json("POST", f"/v1/jobs/{quote(job_id)}/cancel", {}))
 
-    def artifacts(self, job_id: str) -> list[NXArtifact]:
+    def result(self, job_id: str) -> ObjectiveResultManifest:
         payload = self._json("GET", f"/v1/jobs/{quote(job_id)}/result")
-        return [NXArtifact.from_dict(item) for item in payload.get("artifacts", [])]
+        try:
+            return ObjectiveResultManifest.from_dict(payload)
+        except (TypeError, ValueError) as exc:
+            raise DFMError(
+                "objective_protocol_invalid",
+                "NX backend returned an invalid objective result manifest.",
+            ) from exc
 
-    def download(self, job_id: str, artifact: NXArtifact, target: BinaryIO) -> None:
+    def download(
+        self, job_id: str, artifact: ObjectiveArtifactManifest, target: BinaryIO
+    ) -> None:
         request = Request(self.endpoint + f"/v1/jobs/{quote(job_id)}/artifacts/{quote(artifact.artifact_id)}", headers=self._headers())
         digest = hashlib.sha256()
         size = 0
@@ -79,9 +105,14 @@ class HttpNXBackendClient:
                     digest.update(chunk)
                     target.write(chunk)
         except OSError as exc:
-            raise DFMError("nx_backend_unavailable", "NX artifact download failed.") from exc
+            raise DFMError(
+                "objective_backend_unavailable", "NX artifact download failed."
+            ) from exc
         if size != artifact.size_bytes or digest.hexdigest() != artifact.sha256:
-            raise DFMError("nx_artifact_invalid", "NX artifact size or hash does not match its manifest.")
+            raise DFMError(
+                "objective_artifact_invalid",
+                "NX artifact size or hash does not match its manifest.",
+            )
 
     def _json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -90,7 +121,11 @@ class HttpNXBackendClient:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 value = json.loads(response.read().decode("utf-8"))
         except (OSError, ValueError) as exc:
-            raise DFMError("nx_backend_unavailable", "NX backend request failed.", {"path": path}) from exc
+            raise DFMError(
+                "objective_backend_unavailable",
+                "NX backend request failed.",
+                {"path": path},
+            ) from exc
         if not isinstance(value, dict):
             raise DFMError("nx_protocol_invalid", "NX backend returned a non-object JSON response.")
         return value
@@ -113,9 +148,15 @@ class HttpNXBackendClient:
             response = connection.getresponse()
             response.read()
             if not 200 <= response.status < 300:
-                raise DFMError("nx_backend_unavailable", "NX input upload was rejected.", {"status": response.status})
+                raise DFMError(
+                    "objective_backend_unavailable",
+                    "NX input upload was rejected.",
+                    {"status": response.status},
+                )
         except OSError as exc:
-            raise DFMError("nx_backend_unavailable", "NX input upload failed.") from exc
+            raise DFMError(
+                "objective_backend_unavailable", "NX input upload failed."
+            ) from exc
         finally:
             connection.close()
 

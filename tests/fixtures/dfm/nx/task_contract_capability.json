@@ -6,7 +6,7 @@
   "calculators": {
     "inspect_topology": {
       "status": "certified",
-      "contract_version": 1,
+      "contract_version": 2,
       "implementation_version": "nx-topology-1",
       "required_arguments": [],
       "optional_arguments": [],
@@ -20,7 +20,7 @@
     },
     "measure_draft": {
       "status": "certified",
-      "contract_version": 1,
+      "contract_version": 2,
       "implementation_version": "nx-draft-1",
       "required_arguments": ["pull_direction", "region"],
       "optional_arguments": [],

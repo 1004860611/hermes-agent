@@ -5,15 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ...contracts import OBJECTIVE_SCHEMA_VERSION
+
 
 NX_API_VERSION = "v1"
-NX_REQUEST_SCHEMA_VERSION = 1
+NX_REQUEST_SCHEMA_VERSION = OBJECTIVE_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
 class NXCalculatorCapability:
     status: str
-    contract_version: int = 1
+    contract_version: int = OBJECTIVE_SCHEMA_VERSION
     implementation_version: str = ""
     required_arguments: tuple[str, ...] = ()
     optional_arguments: tuple[str, ...] = ()
@@ -62,13 +64,17 @@ class NXCalculatorCapability:
             "certification_report_sha256",
         }
         if set(value) != required:
-            raise ValueError("Calculator capability fields do not match Schema 1.")
+            raise ValueError(
+                "Calculator capability fields do not match the objective schema."
+            )
         try:
-            contract_version = int(value.get("contract_version") or 1)
+            contract_version = int(
+                value.get("contract_version") or OBJECTIVE_SCHEMA_VERSION
+            )
         except (TypeError, ValueError):
             contract_version = 0
 
-        def _strings(key: str) -> tuple[str, ...]:
+        def strings(key: str) -> tuple[str, ...]:
             items = value.get(key)
             if not isinstance(items, list):
                 raise ValueError(f"Calculator capability {key} must be an array.")
@@ -78,14 +84,14 @@ class NXCalculatorCapability:
             status=str(value.get("status") or "not_implemented"),
             contract_version=contract_version,
             implementation_version=str(value.get("implementation_version") or ""),
-            required_arguments=_strings("required_arguments"),
-            optional_arguments=_strings("optional_arguments"),
-            supported_algorithm_options=_strings("supported_algorithm_options"),
-            output_quantities=_strings("output_quantities"),
-            output_artifact_kinds=_strings("output_artifact_kinds"),
-            supported_formats=_strings("supported_formats"),
-            supported_region_modes=_strings("supported_region_modes"),
-            supported_nx_versions=_strings("supported_nx_versions"),
+            required_arguments=strings("required_arguments"),
+            optional_arguments=strings("optional_arguments"),
+            supported_algorithm_options=strings("supported_algorithm_options"),
+            output_quantities=strings("output_quantities"),
+            output_artifact_kinds=strings("output_artifact_kinds"),
+            supported_formats=strings("supported_formats"),
+            supported_region_modes=strings("supported_region_modes"),
+            supported_nx_versions=strings("supported_nx_versions"),
             certification_report_sha256=str(
                 value.get("certification_report_sha256") or ""
             ),
@@ -151,25 +157,4 @@ class NXJobStatus:
             error=dict(payload["error"])
             if isinstance(payload.get("error"), dict)
             else None,
-        )
-
-
-@dataclass(frozen=True)
-class NXArtifact:
-    artifact_id: str
-    kind: str
-    filename: str
-    media_type: str
-    sha256: str
-    size_bytes: int
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "NXArtifact":
-        return cls(
-            artifact_id=str(payload.get("artifact_id") or ""),
-            kind=str(payload.get("kind") or "artifact"),
-            filename=str(payload.get("filename") or ""),
-            media_type=str(payload.get("media_type") or "application/octet-stream"),
-            sha256=str(payload.get("sha256") or ""),
-            size_bytes=int(payload.get("size_bytes") or 0),
         )

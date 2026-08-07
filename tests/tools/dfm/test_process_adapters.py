@@ -50,13 +50,18 @@ def test_injection_default_scope_has_versioned_parameter_provenance(context):
 
     assert plan.process == "injection"
     assert plan.scope_id == "injection.wall-draft"
-    assert plan.scope_version == "1.0.0"
+    assert plan.scope_version == "2.0.0"
+    assert plan.adapter_version == "injection-wall-draft-v2"
+    assert plan.rules["min_wall_mm"].source == (
+        "scope:injection.wall-draft@2.0.0/materials/ABS/min_wall_mm"
+    )
     assert plan.rules["min_draft_deg"].value == 1.0
     assert plan.rules["min_draft_deg"].source == (
-        "scope:injection.wall-draft@1.0.0/parameters/min_draft_deg"
+        "scope:injection.wall-draft@2.0.0/parameters/min_draft_deg"
     )
     assert plan.rules["min_draft_deg"].unit == "degree"
     assert plan.operations[0].calculator_id == "load_geometry"
+    assert plan.operations[0].arguments["model_unit"].value == "mm"
     assert [item.calculator_id for item in plan.operations] == [
         "load_geometry",
         "inspect_topology",
@@ -98,6 +103,25 @@ def test_confirmed_parameter_override_is_normalized_and_traced(context):
     draft = next(item for item in plan.operations if item.calculator_id == "measure_draft")
     assert draft.arguments["pull_direction"].value == [0.0, 1.0, 0.0]
     assert draft.arguments["pull_direction"].source_ref == "fact:fact_pull_direction"
+
+
+def test_material_profile_changes_hermes_rule_without_entering_backend_arguments(context):
+    adapter = build_default_process_registry().get("injection")
+
+    plan = adapter.compile(context, {"material": "ABS", "model_units": "mm"})
+
+    assert plan.rules["min_wall_mm"].value == 1.2
+    assert all("material" not in item.arguments for item in plan.operations)
+
+
+@pytest.mark.parametrize("model_units", ["inch", "cm", "unknown"])
+def test_frozen_scope_rejects_unsupported_model_units(context, model_units):
+    adapter = build_default_process_registry().get("injection")
+
+    with pytest.raises(DFMError) as exc_info:
+        adapter.compile(context, {"model_units": model_units})
+
+    assert exc_info.value.code == "process_parameter_invalid"
 
 
 @pytest.mark.parametrize(

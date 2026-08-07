@@ -12,13 +12,15 @@ import threading
 from typing import Callable
 
 from ..contracts import (
+    OBJECTIVE_SCHEMA_VERSION,
     WORKER_SCHEMA_VERSION,
     ArtifactRecord,
     Capability,
     CapabilityStatus,
+    LocalObjectiveWorkerRequest,
+    ObjectiveResultManifest,
+    ObjectiveTaskRequest,
     WorkerEvent,
-    WorkerRequest,
-    WorkerResult,
 )
 from ..errors import DFMError
 from ..runtime.process import ProcessRunner
@@ -73,7 +75,6 @@ class StepAnalyzer:
         dependency_probe: Callable[[], bool] | None = None,
         python_executable: str | None = None,
         timeout_seconds: float = 900,
-        max_evidence_findings: int = 12,
     ) -> None:
         self.runner = runner or ProcessRunner()
         self.python_executable = python_executable or sys.executable
@@ -83,7 +84,6 @@ class StepAnalyzer:
         self._dependency_status: bool | None = None
         self._dependency_lock = threading.Lock()
         self.timeout_seconds = timeout_seconds
-        self.max_evidence_findings = max_evidence_findings
 
     def capability(self, context: AnalyzerContext) -> Capability:
         if self._dependency_status is None:
@@ -153,19 +153,24 @@ class StepAnalyzer:
         run_dir = context.project_dir / "runs" / context.run_id
         output_dir = run_dir / "artifacts"
         output_dir.mkdir(parents=True, exist_ok=True)
-        request = WorkerRequest(
-            schema_version=WORKER_SCHEMA_VERSION,
+        task = ObjectiveTaskRequest(
+            schema_version=OBJECTIVE_SCHEMA_VERSION,
             run_id=context.run_id,
+            input_sha256=input_record.sha256,
+            input_format=input_record.format_id or "step",
+            process=context.plan.process,
+            scope_id=context.plan.scope_id,
+            scope_version=context.plan.scope_version,
+            operations=context.plan.operations,
+        )
+        request = LocalObjectiveWorkerRequest(
+            schema_version=WORKER_SCHEMA_VERSION,
+            backend_version=self.version,
             input_path=str(
                 (context.project_dir / input_record.relative_path).resolve()
             ),
             output_dir=str(output_dir.resolve()),
-            process=context.plan.process,
-            scope_id=context.plan.scope_id,
-            analyzer_version=self.version,
-            rules=context.plan.rules,
-            operations=context.plan.operations,
-            max_evidence_findings=self.max_evidence_findings,
+            task=task,
         )
         request_path = run_dir / "request.json"
         request_path.write_text(
@@ -207,62 +212,73 @@ class StepAnalyzer:
         completed = [event for event in events if event.type == "completed"]
         if len(completed) != 1 or not completed[0].path:
             raise DFMError(
-                "worker_result_invalid",
+                "objective_result_invalid",
                 "The STEP worker did not emit exactly one completion result.",
             )
         result_path = self._contained_file(output_dir, completed[0].path)
         try:
-            result = WorkerResult.from_dict(
+            result = ObjectiveResultManifest.from_dict(
                 json.loads(result_path.read_text(encoding="utf-8"))
             )
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
             raise DFMError(
-                "worker_result_invalid",
+                "objective_result_invalid",
                 "The STEP worker result could not be loaded.",
             ) from exc
         if (
-            result.schema_version != WORKER_SCHEMA_VERSION
-            or result.worker_version != self.version
+            result.schema_version != OBJECTIVE_SCHEMA_VERSION
+            or result.producer_version != self.version
+            or result.run_id != context.run_id
             or result.process != context.plan.process
             or result.scope_id != context.plan.scope_id
+            or result.scope_version != context.plan.scope_version
             or result.input_sha256 != input_record.sha256
         ):
             raise DFMError(
-                "worker_result_invalid",
+                "objective_result_invalid",
                 "The STEP worker result does not match its persisted plan.",
             )
         measurement_artifacts = [
-            item
-            for item in result.artifacts
-            if item.get("kind") == "measurements"
-            and item.get("path") == result.measurement_path
+            item for item in result.artifacts if item.kind == "measurements"
         ]
-        if not result.measurement_path or len(measurement_artifacts) != 1:
+        if len(measurement_artifacts) != 1:
             raise DFMError(
-                "worker_result_invalid",
+                "objective_result_invalid",
                 "The STEP worker result must reference exactly one measurements artifact.",
             )
 
-        raw_artifacts = [
-            *result.artifacts,
-            {
-                "kind": "worker_result",
-                "path": result.result_path,
-                "media_type": "application/json",
-            },
-        ]
-        artifacts = []
-        for index, item in enumerate(raw_artifacts, start=1):
-            path = self._contained_file(output_dir, str(item.get("path") or ""))
+        artifacts: list[ArtifactRecord] = []
+        for item in result.artifacts:
+            path = self._contained_file(output_dir, item.filename)
+            if path.stat().st_size != item.size_bytes or self._sha256(path) != item.sha256:
+                raise DFMError(
+                    "objective_artifact_invalid",
+                    "The local objective artifact does not match its manifest.",
+                    {"artifact_id": item.artifact_id},
+                )
             artifacts.append(
                 ArtifactRecord(
-                    str(item.get("artifact_id") or f"artifact_{context.run_id}_{index}"),
-                    str(item.get("kind") or "artifact"),
+                    item.artifact_id,
+                    item.kind,
                     path.relative_to(context.project_dir).as_posix(),
-                    str(item.get("media_type") or "application/octet-stream"),
+                    item.media_type,
                     _utc_now(),
+                    run_id=context.run_id,
+                    logical_id=item.artifact_id,
+                    size_bytes=item.size_bytes,
+                    sha256=item.sha256,
                 )
             )
+        artifacts.append(
+            self._artifact_record(
+                context.project_dir,
+                context.run_id,
+                "objective_result_manifest",
+                "worker_result",
+                result_path,
+                "application/json",
+            )
+        )
         validate_objective_result(
             context.plan.operations,
             context.project_dir,
@@ -271,9 +287,41 @@ class StepAnalyzer:
             input_sha256=input_record.sha256,
             process=context.plan.process,
             scope_id=context.plan.scope_id,
-            error_code="worker_result_invalid",
+            error_code="objective_result_invalid",
         )
         return artifacts
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        import hashlib
+
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @classmethod
+    def _artifact_record(
+        cls,
+        project_dir: Path,
+        run_id: str,
+        artifact_id: str,
+        kind: str,
+        path: Path,
+        media_type: str,
+    ) -> ArtifactRecord:
+        return ArtifactRecord(
+            artifact_id,
+            kind,
+            path.relative_to(project_dir).as_posix(),
+            media_type,
+            _utc_now(),
+            run_id=run_id,
+            logical_id=artifact_id,
+            size_bytes=path.stat().st_size,
+            sha256=cls._sha256(path),
+        )
 
     @staticmethod
     def _contained_file(output_dir: Path, raw_path: str) -> Path:
@@ -286,7 +334,7 @@ class StepAnalyzer:
             or not resolved.is_file()
         ):
             raise DFMError(
-                "artifact_invalid",
+                "objective_artifact_invalid",
                 "The STEP worker returned an invalid artifact path.",
                 {"path": raw_path},
             )

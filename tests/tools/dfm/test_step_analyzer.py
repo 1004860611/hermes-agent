@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 
 from tools.dfm.analyzers.base import AnalyzerContext, CancellationToken
@@ -7,11 +8,12 @@ from tools.dfm.contracts import (
     CapabilityStatus,
     EffectiveRule,
     InputRecord,
+    LocalObjectiveWorkerRequest,
+    ObjectiveArtifactManifest,
+    ObjectiveResultManifest,
     PlanOperation,
     PlanRecord,
     WorkerEvent,
-    WorkerRequest,
-    WorkerResult,
 )
 from tools.dfm.runtime.process import ProcessResult
 from tools.dfm.workers.step_worker import WORKER_VERSION
@@ -38,7 +40,7 @@ class SuccessfulRunner:
         self.cwd = cwd
         self.timeout_seconds = timeout_seconds
         request_path = Path(argv[-1])
-        self.request = WorkerRequest.from_dict(
+        self.request = LocalObjectiveWorkerRequest.from_dict(
             json.loads(request_path.read_text(encoding="utf-8"))
         )
         output = Path(self.request.output_dir)
@@ -111,41 +113,32 @@ class SuccessfulRunner:
                 "field_refs": ["field_draft"],
             }],
         }), encoding="utf-8")
-        result = WorkerResult(
-            1,
-            WORKER_VERSION,
-            "a" * 64,
-            "injection",
-            "injection.wall-draft",
-            self.request.rules,
-            "worker_result.json",
-            [
-                {
-                    "artifact_id": "measurements",
-                    "kind": "measurements",
-                    "path": measurements.name,
-                    "media_type": "application/json",
-                },
-                {
-                    "artifact_id": "scene_geometry",
-                    "kind": "render_scene",
-                    "path": scene.name,
-                    "media_type": "application/json",
-                },
-                {
-                    "artifact_id": "topology_geometry",
-                    "kind": "topology_map",
-                    "path": topology.name,
-                    "media_type": "application/json",
-                },
-                {
-                    "artifact_id": "field_draft",
-                    "kind": "scalar_field",
-                    "path": field.name,
-                    "media_type": "application/json",
-                },
+        def artifact(path, artifact_id, kind):
+            content = path.read_bytes()
+            return ObjectiveArtifactManifest(
+                artifact_id,
+                kind,
+                path.name,
+                "application/json",
+                len(content),
+                hashlib.sha256(content).hexdigest(),
+            )
+
+        result = ObjectiveResultManifest(
+            schema_version=2,
+            producer_version=WORKER_VERSION,
+            run_id="run_1",
+            input_sha256="a" * 64,
+            process="injection",
+            scope_id="injection.wall-draft",
+            scope_version="2.0.0",
+            result_path="worker_result.json",
+            artifacts=[
+                artifact(measurements, "measurements", "measurements"),
+                artifact(scene, "scene_geometry", "render_scene"),
+                artifact(topology, "topology_geometry", "topology_map"),
+                artifact(field, "field_draft", "scalar_field"),
             ],
-            measurements.name,
         )
         (output / result.result_path).write_text(
             json.dumps(result.to_dict()), encoding="utf-8"
@@ -179,9 +172,9 @@ def test_step_analyzer_runs_persisted_plan_and_returns_contained_artifacts(tmp_p
         "ready",
         "now",
         process="injection",
-        process_adapter_version="injection-wall-draft-v1",
+        process_adapter_version="injection-wall-draft-v2",
         scope_id="injection.wall-draft",
-        scope_version="1.0.0",
+        scope_version="2.0.0",
         input_ids=["input_1"],
         input_hashes={"input_1": "a" * 64},
         rules={
@@ -208,12 +201,13 @@ def test_step_analyzer_runs_persisted_plan_and_returns_contained_artifacts(tmp_p
 
     artifacts = analyzer.run(context, CancellationToken())
 
-    assert runner.request.process == "injection"
-    assert runner.request.scope_id == "injection.wall-draft"
+    assert runner.request.task.process == "injection"
+    assert runner.request.task.scope_id == "injection.wall-draft"
     assert runner.argv[0] == "C:/dfm/python.exe"
     assert runner.cwd == Path(__file__).resolve().parents[3]
     assert runner.timeout_seconds == 123
-    assert runner.request.max_evidence_findings == 12
+    assert "rules" not in runner.request.task.to_dict()
+    assert "max_evidence_findings" not in runner.request.task.to_dict()
     assert {artifact.kind for artifact in artifacts} == {
         "measurements",
         "render_scene",

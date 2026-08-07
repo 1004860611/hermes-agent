@@ -3,7 +3,12 @@ import json
 
 import pytest
 
-from tools.dfm.contracts import EffectiveRule, PlanOperation, ResolvedArgument, WorkerRequest
+from tools.dfm.contracts import (
+    LocalObjectiveWorkerRequest,
+    ObjectiveTaskRequest,
+    PlanOperation,
+    ResolvedArgument,
+)
 from tools.dfm.runtime.events import parse_worker_event
 
 
@@ -11,25 +16,23 @@ def _request(
     tmp_path: Path,
     *,
     process: str = "injection",
-    max_evidence_findings: int | None = None,
 ) -> Path:
     input_path = tmp_path / "part.step"
     input_path.write_bytes(b"opaque-step")
-    payload = WorkerRequest(
-        schema_version=1,
+    task = ObjectiveTaskRequest(
+        schema_version=2,
         run_id="run_worker",
-        input_path=str(input_path),
-        output_dir=str(tmp_path / "artifacts"),
+        input_sha256=__import__("hashlib").sha256(b"opaque-step").hexdigest(),
+        input_format="step",
         process=process,
         scope_id="injection.wall-draft",
-        analyzer_version="pythonocc-objective-v1",
-        rules={
-            "min_wall_mm": EffectiveRule(
-                1.2, "mm", "injection_scope_default"
-            ),
-        },
+        scope_version="2.0.0",
         operations=[
-            PlanOperation("geometry.load", "load_geometry"),
+            PlanOperation(
+                "geometry.load",
+                "load_geometry",
+                arguments={"model_unit": ResolvedArgument("mm", "fact:model_units")},
+            ),
             PlanOperation(
                 "geometry.topology", "inspect_topology", ["geometry.load"]
             ),
@@ -45,9 +48,15 @@ def _request(
                         [0.0, 0.0, 1.0], "fact:pull_dir:injection_scope_default"
                     )
                 },
-            )
+            ),
         ],
-        max_evidence_findings=max_evidence_findings,
+    )
+    payload = LocalObjectiveWorkerRequest(
+        schema_version=1,
+        backend_version="pythonocc-objective-v2",
+        input_path=str(input_path),
+        output_dir=str(tmp_path / "artifacts"),
+        task=task,
     )
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(payload.to_dict()), encoding="utf-8")
@@ -107,6 +116,8 @@ def test_worker_assigns_stable_neutral_artifact_ids(
 
     metadata = _artifact_metadata(artifact, tmp_path)
 
-    assert metadata["artifact_id"] == artifact_id
-    assert metadata["kind"] == kind
-    assert metadata["media_type"] == "application/json"
+    assert metadata.artifact_id == artifact_id
+    assert metadata.kind == kind
+    assert metadata.media_type == "application/json"
+    assert metadata.size_bytes == 2
+    assert len(metadata.sha256) == 64

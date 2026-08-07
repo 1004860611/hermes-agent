@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from pathlib import PurePosixPath
+import re
 from typing import Any
 
 from .errors import DFMError
@@ -11,6 +13,71 @@ from .errors import DFMError
 
 MANIFEST_SCHEMA_VERSION = 1
 WORKER_SCHEMA_VERSION = 1
+OBJECTIVE_SCHEMA_VERSION = 2
+
+STAGE_QUEUED = "queued"
+STAGE_STARTING = "starting"
+STAGE_OBJECTIVE_LOAD = "objective_load"
+STAGE_OBJECTIVE_COMPUTE = "objective_compute"
+STAGE_OBJECTIVE_MATERIALIZE = "objective_materialize"
+STAGE_OBJECTIVE_READY = "objective_ready"
+STAGE_RULE_EVALUATION = "rule_evaluation"
+STAGE_EVIDENCE_RENDER = "evidence_render"
+STAGE_REPORT_MATERIALIZE = "report_materialize"
+STAGE_COMPLETE = "complete"
+
+
+def normalize_objective_stage(stage: str | None) -> str:
+    """Map backend-specific progress labels onto the shared runtime vocabulary."""
+
+    value = str(stage or "").strip().lower()
+    if value in {"queued", "accepted", "nx_queued", "pending"}:
+        return STAGE_OBJECTIVE_LOAD
+    if value in {"load", "loading", "load_geometry", "objective_load"}:
+        return STAGE_OBJECTIVE_LOAD
+    if value in {
+        "materialize",
+        "write_objective_artifacts",
+        "download_artifacts",
+        "objective_materialize",
+    }:
+        return STAGE_OBJECTIVE_MATERIALIZE
+    if value in {"complete", "completed", "succeeded", "objective_ready"}:
+        return STAGE_OBJECTIVE_READY
+    return STAGE_OBJECTIVE_COMPUTE
+
+
+def normalize_objective_error(code: str | None) -> str:
+    """Collapse backend-specific failures into the public objective error taxonomy."""
+
+    value = str(code or "").strip().lower()
+    if value in {
+        "schema_invalid",
+        "unsupported_calculator",
+        "unsupported_argument",
+        "unsupported_quantity",
+        "unsupported_region_mode",
+        "objective_task_invalid",
+        "worker_request_invalid",
+    }:
+        return "objective_task_invalid"
+    if value in {"input_hash_mismatch", "objective_input_invalid"}:
+        return "objective_input_invalid"
+    if value in {"cancelled", "run_cancelled"}:
+        return "run_cancelled"
+    if value in {
+        "license_unavailable",
+        "nx_backend_unavailable",
+        "backend_unavailable",
+    }:
+        return "objective_backend_unavailable"
+    if value in {"nx_artifact_invalid", "artifact_invalid"}:
+        return "objective_artifact_invalid"
+    if value in {"nx_result_invalid", "worker_result_invalid"}:
+        return "objective_result_invalid"
+    if value in {"nx_execution_failed", "calculation_failed", "nx_analysis_failed"}:
+        return "objective_calculation_failed"
+    return value or "objective_backend_failed"
 
 
 class CapabilityStatus(str, Enum):
@@ -535,37 +602,80 @@ class EvidenceRecord:
 
 
 @dataclass(frozen=True)
-class WorkerRequest:
+class ObjectiveTaskRequest:
+    """Backend-neutral objective geometry task; contains no rules or presentation policy."""
+
     schema_version: int
     run_id: str
-    input_path: str
-    output_dir: str
+    input_sha256: str
+    input_format: str
     process: str
     scope_id: str
-    analyzer_version: str
-    rules: dict[str, EffectiveRule] = field(default_factory=dict)
+    scope_version: str
     operations: list[PlanOperation] = field(default_factory=list)
-    max_evidence_findings: int | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != OBJECTIVE_SCHEMA_VERSION
+            or not self.run_id
+            or not re.fullmatch(r"[0-9a-f]{64}", self.input_sha256)
+            or not self.input_format
+            or not self.process
+            or not self.scope_id
+            or not self.scope_version
+            or not self.operations
+        ):
+            raise ValueError("Objective task identity is invalid.")
+        for operation in self.operations:
+            operation.validate()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
-            "rules": {
-                key: value.to_dict() for key, value in self.rules.items()
-            },
             "operations": [operation.to_dict() for operation in self.operations],
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "WorkerRequest":
+    def from_dict(cls, payload: dict[str, Any]) -> "ObjectiveTaskRequest":
         values = dict(payload)
-        values["rules"] = {
-            key: EffectiveRule.from_dict(value)
-            for key, value in values.get("rules", {}).items()
-        }
         values["operations"] = [
             PlanOperation.from_dict(value) for value in values.get("operations", [])
         ]
+        return cls(**values)
+
+
+@dataclass(frozen=True)
+class LocalObjectiveWorkerRequest:
+    """Local process envelope around the same task sent to a remote backend."""
+
+    schema_version: int
+    backend_version: str
+    input_path: str
+    output_dir: str
+    task: ObjectiveTaskRequest
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != WORKER_SCHEMA_VERSION
+            or not self.backend_version
+            or not self.input_path
+            or not self.output_dir
+        ):
+            raise ValueError("Local objective worker envelope is invalid.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "backend_version": self.backend_version,
+            "input_path": self.input_path,
+            "output_dir": self.output_dir,
+            "task": self.task.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "LocalObjectiveWorkerRequest":
+        values = dict(payload)
+        values["task"] = ObjectiveTaskRequest.from_dict(values["task"])
         return cls(**values)
 
 
@@ -615,32 +725,82 @@ class WorkerEvent:
 
 
 @dataclass(frozen=True)
-class WorkerResult:
+class ObjectiveArtifactManifest:
+    artifact_id: str
+    kind: str
+    filename: str
+    media_type: str
+    size_bytes: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        path = PurePosixPath(self.filename)
+        if (
+            not self.artifact_id
+            or not self.kind
+            or not self.filename
+            or path.is_absolute()
+            or ".." in path.parts
+            or not self.media_type
+            or self.size_bytes < 0
+            or not re.fullmatch(r"[0-9a-f]{64}", self.sha256)
+        ):
+            raise ValueError("Objective artifact manifest is invalid.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ObjectiveArtifactManifest":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class ObjectiveResultManifest:
     schema_version: int
-    worker_version: str
+    producer_version: str
+    run_id: str
     input_sha256: str
     process: str
     scope_id: str
-    rules: dict[str, EffectiveRule]
+    scope_version: str
     result_path: str
-    artifacts: list[dict[str, str]] = field(default_factory=list)
-    measurement_path: str | None = None
+    artifacts: list[ObjectiveArtifactManifest] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != OBJECTIVE_SCHEMA_VERSION
+            or not self.producer_version
+            or not self.run_id
+            or not re.fullmatch(r"[0-9a-f]{64}", self.input_sha256)
+            or not self.process
+            or not self.scope_id
+            or not self.scope_version
+            or not self.result_path
+            or not self.artifacts
+        ):
+            raise ValueError("Objective result manifest identity is invalid.")
+        artifact_ids = [item.artifact_id for item in self.artifacts]
+        filenames = [item.filename for item in self.artifacts]
+        if (
+            len(artifact_ids) != len(set(artifact_ids))
+            or len(filenames) != len(set(filenames))
+        ):
+            raise ValueError("Objective result artifacts must be unique.")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
-            "rules": {
-                key: value.to_dict() for key, value in self.rules.items()
-            },
+            "artifacts": [item.to_dict() for item in self.artifacts],
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "WorkerResult":
+    def from_dict(cls, payload: dict[str, Any]) -> "ObjectiveResultManifest":
         values = dict(payload)
-        values["rules"] = {
-            key: EffectiveRule.from_dict(value)
-            for key, value in values.get("rules", {}).items()
-        }
+        values["artifacts"] = [
+            ObjectiveArtifactManifest.from_dict(item)
+            for item in values.get("artifacts", [])
+        ]
         return cls(**values)
 
 
@@ -707,6 +867,10 @@ class ArtifactRecord:
     relative_path: str
     media_type: str
     created_at: str
+    run_id: str = ""
+    logical_id: str = ""
+    size_bytes: int = 0
+    sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -715,6 +879,10 @@ class ArtifactRecord:
             "relative_path": self.relative_path,
             "media_type": self.media_type,
             "created_at": self.created_at,
+            "run_id": self.run_id,
+            "logical_id": self.logical_id or self.artifact_id,
+            "size_bytes": self.size_bytes,
+            "sha256": self.sha256,
         }
 
     @classmethod

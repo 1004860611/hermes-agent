@@ -2,7 +2,8 @@
 
 > 用途：团队启动会、架构同步、任务认领、迭代计划和跨模块验收
 > 团队基线：6 人；如果实际为 5 人，按本文“5 人合并方案”合并角色
-> 当前阶段：M2.5 已完成；优先推进 M2.6 NX 黄金产品闭环，M3 图纸文本理解并行准备
+> 当前阶段：M2.5 和 M2.6-A Hermes 基线已完成；优先推进 NX STEP/Parasolid 最小生产
+> 闭环，再逐项扩展黄金产品指标；M3 图纸文本理解并行准备
 
 ## 1. 这次同步要达成什么
 
@@ -55,9 +56,9 @@
 
 | 组合                   | 当前状态                                                   | 下一步                                             |
 | ------------------------ | ------------------------------------------------------------ | ---------------------------------------------------- |
-| 注塑 + STEP            | M1/M2 完整分析路径可用                                     | 保持回归稳定，逐步抽取通用 B-Rep calculator        |
+| 注塑 + STEP            | PythonOCC demo 的壁厚/拔模角完整链可用                    | M2.6-A 增加 NX production STEP 并复用同一正式 Scope |
 | 压铸 + STEP            | M2.5 拓扑有效性门可用                                      | 增加压铸 draft/thickness/undercut 等独立规则和计算 |
-| 注塑/压铸 +`.x_t`      | Hermes HTTP NX Client 和协议已完成，真实 Server/插件未完成 | NX 团队实现 Server、Worker Pool 和插件 calculator  |
+| 注塑/压铸 +`.x_t`      | Hermes HTTP NX Client 和 Schema 2 已完成，真实 Server/插件未完成 | M2.6-A 与 STEP 一起打通 NX；之后逐项增加压铸指标 |
 | 2D 图纸                | 可登记，真实文本理解尚未完成                               | M3 原生 PDF 文本、OCR、版面、字段和澄清闭环        |
 | STEP/`.x_t` + 图纸融合 | 尚未形成生产闭环                                           | M5 做事实融合和二维区域到三维拓扑关联              |
 
@@ -84,7 +85,7 @@ flowchart TB
     subgraph GEOMETRY[Geometry Service API]
         REGISTRY[GeometryBackendRegistry]
         OCCT[OCCT Backend<br/>StepAnalyzer / Step Worker / OpenCascade]
-        NX[NX Backend<br/>HTTP Client / NX Server / C++ Plugin]
+        NX[NX Backend<br/>STEP + Parasolid<br/>HTTP Client / NX Server / C++ Plugin]
         MEASUREMENT[Measurement-only Artifact]
     end
 
@@ -117,7 +118,7 @@ Evaluation，最后由 Finding Engine 形成风险和报告。
 
 ## 5. 主流程讲解
 
-### 5.1 STEP 注塑/压铸
+### 5.1 STEP Demo 与 Production
 
 ```text
 上传 STEP
@@ -126,32 +127,37 @@ Evaluation，最后由 Finding Engine 形成风险和报告。
 → ProcessAdapter 返回 required_facts
 → 用户确认材料/单位/拔模方向等事实
 → 编译版本化 Plan
-→ StepAnalyzer 启动隔离 OCC Worker
+→ 根据部署模式选择 Backend
+→ demo：StepAnalyzer 启动隔离 PythonOCC Worker
+→ production：HttpNXBackendClient 上传 STEP，由 NX Worker 读取
 → 输出 Measurement
 → 按 injection 或 die_casting 规则 Evaluation
 → Finding / Evidence / Report
 ```
 
-注塑和压铸可以复用客观几何测量，但不得复用未经批准的工艺阈值。
+两种部署模式使用同一 ObjectiveTaskRequest、ObjectiveResultManifest、Evaluation、Evidence、
+Finding 和报告链。Production 配置选择 NX 后，如果 NX 不可用或 STEP Calculator 未认证，
+Plan 必须阻塞，不得自动降级到 PythonOCC。注塑和压铸可以复用客观几何 Calculator，但
+不得复用未经批准的工艺阈值。
 
-### 5.2 `.x_t` 远程 NX 分析
+### 5.2 STEP/`.x_t` 远程 NX 分析
 
 ```text
-上传 x_t
-→ inspect_parasolid_xt 只做本地轻量预检
-→ format_id=parasolid_xt，geometry_verified=false
+上传 STEP 或 x_t
+→ 输入预检和 SHA256 登记
+→ format_id=step 或 parasolid_xt
 → 查询 NX Server capability
 → 检查 Plan 所需 calculator 是否 certified
 → HttpNXBackendClient 流式上传文件
 → NX Server 排队和分配许可证/NX Worker
-→ C++ Plugin 读取真实 Parasolid B-Rep 并计算
-→ Server 发布 Measurement/Artifact
-→ Hermes 校验大小和 SHA-256
-→ Evaluation / Finding
+→ C++ Plugin 通过对应 loader 形成规范化 B-Rep 并计算
+→ Server 发布 ObjectiveResultManifest + Measurement/中性几何 Artifact
+→ Hermes 校验 Run/Input/Scope、大小和 SHA-256
+→ Evaluation / Evidence / Finding / Report
 ```
 
-Hermes 不提供本地 NX 脚本 fallback。NX Server 未配置或 calculator 未认证时，Plan 必须
-明确 blocked。
+Hermes 不提供本地 NX 脚本 fallback。NX Server 未配置、目标格式 loader 不可用或
+Calculator 未认证时，Plan 必须明确 blocked。
 
 ### 5.3 2D 图纸 M3
 
@@ -328,14 +334,14 @@ Windows Service/Deployment
 [NX Server 与 NX C++ 插件开发交接规格](2026-07-23-nx-server-plugin-development-spec.md)
 为准。
 
-第一阶段聚焦：
+M2.6-A 聚焦：
 
 - `/v1/capabilities`；
 - 输入 reservation 和流式上传；
 - Job 提交/查询/取消/结果/Artifact；
 - Mock Worker；
 - 一个真实 NX Worker；
-- `inspect_topology` 垂直链路；
+- STEP/Parasolid 双格式 loader 与 `inspect_topology`、`measure_draft`、`measure_thickness` 垂直链路；
 - 许可证、崩溃、超时和清理。
 
 完成标准：API 契约测试、并发/安全测试、真实 Hermes E2E、部署/回滚文档。
@@ -356,17 +362,17 @@ Measurement/Artifact Writer
 NX Session Cleanup
 ```
 
-第一阶段聚焦：
+M2.6-A 聚焦：
 
 - 将现有插件算法从 UI/菜单入口抽成可调用 calculator；
 - 实现白名单 dispatcher；
-- 加载 `.x_t` 并识别单位、Body 类型和版本；
-- 实现 `inspect_topology`；
-- 输出标准 measurements.json；
+- 分别加载 STEP/STP 与 `.x_t`，识别单位、Body 类型和格式版本，并规范化为同一 B-Rep 计算语义；
+- 实现 `inspect_topology`、`measure_draft` 和 `measure_thickness`；
+- 输出 ObjectiveResultManifest、标准 Measurement、ScalarField、RenderScene 和 TopologyMap；
 - 支持取消安全点和进度；
 - 证明 Part/NX 对象可以清理并重复运行。
 
-第二阶段：按 draft → thickness → undercut 顺序开发，每项独立认证。
+M2.6-B：建立独立压铸 Scope/RuleBinding，按黄金产品追溯矩阵逐项增加方向、区域和 Calculator；每项都在 STEP/Parasolid 上形成独立端到端闭环并完成认证。M2.6-C 再完成全部批准指标与工程师签字。
 
 完成标准：相同输入和版本结果可重复、Schema 合法、无任意代码执行、数值认证报告通过。
 
@@ -408,7 +414,7 @@ tests/fixtures/dfm/drawings/
 | Rule Selector    | Effective Rule Set | rule id/version/source/priority/hash             | B        |
 | Effective Rule Set | Plan Compiler | required metrics、parameters、scope snapshot        | B        |
 | Plan Compiler    | Geometry Service | calculator DAG、backend requirements、input hash   | B → C/D |
-| NX Server        | Hermes      | capability、JobStatus、Artifact manifest              | D → C   |
+| NX Server        | Hermes      | capability、JobStatus、ObjectiveResultManifest         | D → C   |
 | NX 插件          | NX Server   | plugin result、Measurement、ScalarField/RenderScene/TopologyMap | E → D   |
 | NX/OCCT Backend  | EvaluationEngine | Measurement-only Artifact                        | B/E      |
 | Effective Rule Set | EvaluationEngine | operator、expected、unit、provenance              | B        |
@@ -437,19 +443,21 @@ tests/fixtures/dfm/drawings/
 
 Sprint 0 必须以 [DFM/NX Production Task Contract](../dfm-nx-task-contract.md) 为单一事实源，
 完成 Rule/Metric/Calculator/Operation/Measurement/Region ID 词典、任务级参数、结构化
-capability、Region、Measurement 回链、唯一 Schema 1 和 Hermes/NX 共用 JSON fixtures。仅开会确认
+capability、Region、Measurement 回链、唯一 Objective Task/Result Schema 2 和 Hermes/NX 共用 JSON fixtures。仅开会确认
 概念或分别维护 Python/C++ 示例不视为完成。
 
-### Sprint 1：黄金产品冻结与两条最小链路
+### Sprint 1：M2.6-A 当前 Scope 与 NX 双格式最小闭环
 
 NX 线：
 
 ```text
-x_t 上传 → Mock Job → 真实 NX 打开 → inspect_topology → measurements.json
+STEP/Parasolid 上传 → Mock Job → 真实 NX 分别打开 → topology + wall/draft
+→ ObjectiveResultManifest → Hermes Evaluation/Evidence/Finding/Report
 ```
 
-同时由模具工程师和 A/B/E 冻结黄金产品事实、所需指标、问题、规则、区域、容差和追溯
-矩阵。Topology 是中间冒烟，不是 M2.6 完成标准。
+本 Sprint 复用 `injection.wall-draft@2.0.0` 的 ABS/mm/单方向壁厚与拔模角，只验证生产
+模块和统一数据流。Topology 是中间冒烟，不是 Sprint 完成标准。与此同时，模具工程师
+和 A/B/E 准备黄金产品完整事实、指标、区域、容差和追溯矩阵。
 
 OCR 线：
 
@@ -459,27 +467,28 @@ PDF/图片 → 页面 → 原生文本/OCR TextBlock → 材料/单位候选 + b
 
 Python 线同时完善契约校验和 Hermes E2E。
 
-### Sprint 2：黄金产品所需 calculator 与生产闭环
+### Sprint 2：M2.6-B 黄金产品指标逐项扩展
 
-- NX topology 及黄金产品所需 draft/thickness/undercut 等 calculator 逐项认证；
-- 完成压铸 `.x_t` 的 Fact → Rule/Plan → NX → Measurement → Evaluation → Finding → Report；
+- 建立独立压铸 Scope/RuleBinding，不复制当前注塑阈值；
+- NX draft/thickness 的方向和区域范围逐项扩展，再按追溯矩阵增加 undercut 等 Calculator；
+- 每项都完成压铸 STEP/`.x_t` 的 Fact → Rule/Plan → NX → Measurement → Evaluation →
+  Evidence → Finding → Report，不把集成推迟到全部 Calculator 写完之后；
 - OCR 关键字段澄清/确认写回；
 - NX 取消、超时、崩溃和 Artifact 校验；
 - 图纸冲突、低置信度和证据展示；
 - 注塑 STEP 完整回归。
 
-### Sprint 3：人工核对和工程师签字
+### Sprint 3：M2.6-C 黄金产品全范围人工核对和工程师签字
 
 - 从完成的生产 Run 形成只读 Run Bundle；
 - 模具工程师使用既有分析基线逐项人工核对指标、数值、Finding、区域和证据；
 - 记录每项差异、原因、处理结论和批准人，不开发自动比较程序；
 - 修正可解释差异，模具工程师完成签字；
-- M2.6 通过后再扩大产品和 calculator 认证范围。
+- 只有黄金产品全部批准指标通过后才声明 M2.6 完成；之后再扩大产品和 Calculator 认证范围。
 
 ### 后续 Sprint
 
-- NX draft/thickness/undercut；
-- 压铸规则扩展；
+- 更多代表性产品和 Calculator 认证范围；
 - M4 2D 工程特征；
 - M5 图纸与三维事实融合；
 - M6 规则库后台和版本发布。

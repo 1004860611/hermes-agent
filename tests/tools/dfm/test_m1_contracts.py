@@ -2,13 +2,16 @@ import pytest
 
 from tools.dfm.contracts import (
     EffectiveRule,
+    LocalObjectiveWorkerRequest,
+    ObjectiveArtifactManifest,
+    ObjectiveResultManifest,
+    ObjectiveTaskRequest,
     PlanOperation,
     PlanRecord,
     RunRecord,
     RunStatus,
     WorkerEvent,
-    WorkerRequest,
-    WorkerResult,
+    ResolvedArgument,
 )
 from tools.dfm.errors import DFMError
 
@@ -67,28 +70,57 @@ def test_worker_event_rejects_invalid_payload(payload):
     assert exc_info.value.code == "worker_event_invalid"
 
 
-def test_worker_request_and_result_round_trip():
-    rule = EffectiveRule(1.0, "degree", "project_fact")
-    request = WorkerRequest(
-        schema_version=1,
+def test_objective_task_and_result_round_trip_exclude_rule_and_render_policy():
+    task = ObjectiveTaskRequest(
+        schema_version=2,
         run_id="run_1",
+        input_sha256="a" * 64,
+        input_format="step",
+        process="injection",
+        scope_id="injection.wall-draft",
+        scope_version="2.0.0",
+        operations=[
+            PlanOperation(
+                "geometry.draft",
+                "measure_draft",
+                arguments={
+                    "pull_direction": ResolvedArgument([0, 0, 1], "fact:pull_dir")
+                },
+            )
+        ],
+    )
+    request = LocalObjectiveWorkerRequest(
+        schema_version=1,
+        backend_version="worker-v1",
         input_path="inputs/part.step",
         output_dir="runs/run_1/artifacts",
-        process="injection",
-        scope_id="injection.wall-draft",
-        analyzer_version="worker-v1",
-        rules={"min_draft_deg": rule},
+        task=task,
     )
-    result = WorkerResult(
-        schema_version=1,
-        worker_version="worker-v1",
-        input_sha256="b" * 64,
+    result = ObjectiveResultManifest(
+        schema_version=2,
+        producer_version="worker-v1",
+        run_id="run_1",
+        input_sha256="a" * 64,
         process="injection",
         scope_id="injection.wall-draft",
-        rules={"min_draft_deg": rule},
-        result_path="runs/run_1/artifacts/worker_result.json",
-        artifacts=[{"kind": "report_json", "path": "runs/run_1/artifacts/dfm_report.json"}],
+        scope_version="2.0.0",
+        result_path="worker_result.json",
+        artifacts=[
+            ObjectiveArtifactManifest(
+                "measurements",
+                "measurements",
+                "measurements.json",
+                "application/json",
+                42,
+                "b" * 64,
+            )
+        ],
     )
 
-    assert WorkerRequest.from_dict(request.to_dict()) == request
-    assert WorkerResult.from_dict(result.to_dict()) == result
+    payload = task.to_dict()
+    assert "rules" not in payload
+    assert "max_evidence_findings" not in payload
+    assert "input_path" not in payload
+    assert ObjectiveTaskRequest.from_dict(payload) == task
+    assert LocalObjectiveWorkerRequest.from_dict(request.to_dict()) == request
+    assert ObjectiveResultManifest.from_dict(result.to_dict()) == result

@@ -11,7 +11,17 @@ import sys
 import traceback
 from typing import Any
 
-from ..contracts import WORKER_SCHEMA_VERSION, WorkerEvent, WorkerRequest, WorkerResult
+from ..contracts import (
+    OBJECTIVE_SCHEMA_VERSION,
+    WORKER_SCHEMA_VERSION,
+    LocalObjectiveWorkerRequest,
+    ObjectiveArtifactManifest,
+    ObjectiveResultManifest,
+    STAGE_OBJECTIVE_COMPUTE,
+    STAGE_OBJECTIVE_MATERIALIZE,
+    STAGE_OBJECTIVE_READY,
+    WorkerEvent,
+)
 from ..errors import DFMError
 from ..runtime.events import encode_worker_event
 from ..geometry.step.field_export import (
@@ -22,7 +32,7 @@ from ..geometry.step.field_export import (
 from ..geometry.step.pipeline import validate_operations
 
 
-WORKER_VERSION = "pythonocc-objective-v1"
+WORKER_VERSION = "pythonocc-objective-v2"
 
 
 def _emit(event_type: str, **values: Any) -> None:
@@ -45,10 +55,10 @@ def _occ_available() -> bool:
         return False
 
 
-def _load_request(path: Path) -> WorkerRequest:
+def _load_request(path: Path) -> LocalObjectiveWorkerRequest:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        request = WorkerRequest.from_dict(payload)
+        request = LocalObjectiveWorkerRequest.from_dict(payload)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise DFMError(
             "worker_request_invalid",
@@ -60,10 +70,22 @@ def _load_request(path: Path) -> WorkerRequest:
             "The STEP worker request schema version is unsupported.",
             {"schema_version": request.schema_version},
         )
+    if request.task.schema_version != OBJECTIVE_SCHEMA_VERSION:
+        raise DFMError(
+            "objective_task_invalid",
+            "The objective task schema version is unsupported.",
+        )
+    if request.backend_version != WORKER_VERSION:
+        raise DFMError(
+            "objective_protocol_invalid",
+            "The local objective backend version does not match this worker.",
+        )
     return request
 
 
-def _artifact_metadata(path: Path, output_dir: Path) -> dict[str, str]:
+def _artifact_metadata(
+    path: Path, output_dir: Path
+) -> ObjectiveArtifactManifest:
     suffix = path.suffix.lower()
     if path.name == "measurements.json":
         artifact_id, kind, media_type = "measurements", "measurements", "application/json"
@@ -75,12 +97,14 @@ def _artifact_metadata(path: Path, output_dir: Path) -> dict[str, str]:
         artifact_id, kind, media_type = path.stem.removeprefix("scalar_"), "scalar_field", "application/json"
     else:
         artifact_id, kind, media_type = path.stem, "diagnostic", "application/octet-stream"
-    return {
-        "artifact_id": artifact_id,
-        "kind": kind,
-        "path": path.relative_to(output_dir).as_posix(),
-        "media_type": media_type,
-    }
+    return ObjectiveArtifactManifest(
+        artifact_id,
+        kind,
+        path.relative_to(output_dir).as_posix(),
+        media_type,
+        path.stat().st_size,
+        _input_sha256(path),
+    )
 
 
 def _input_sha256(path: Path) -> str:
@@ -91,13 +115,14 @@ def _input_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _execute(request: WorkerRequest) -> WorkerResult:
-    if request.process not in {"injection", "die_casting"}:
+def _execute(request: LocalObjectiveWorkerRequest) -> ObjectiveResultManifest:
+    task = request.task
+    if task.process not in {"injection", "die_casting"}:
         raise DFMError(
             "unsupported_capability",
-            f"DFM process is not supported: {request.process}",
+            f"DFM process is not supported: {task.process}",
             {
-                "requested_process": request.process,
+                "requested_process": task.process,
                 "supported_processes": ["die_casting", "injection"],
             },
         )
@@ -107,7 +132,7 @@ def _execute(request: WorkerRequest) -> WorkerResult:
             "pythonocc-core/OpenCascade is required by the STEP worker.",
             {"dependency": "pythonocc-core"},
         )
-    validate_operations(request.operations)
+    validate_operations(task.operations)
 
     input_path = Path(request.input_path).expanduser().resolve()
     output_dir = Path(request.output_dir).expanduser().resolve()
@@ -118,23 +143,28 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         )
     output_dir.mkdir(parents=True, exist_ok=True)
     input_sha256 = _input_sha256(input_path)
-    _emit("progress", stage="objective_geometry", percent=10)
+    if input_sha256 != task.input_sha256:
+        raise DFMError(
+            "objective_input_invalid",
+            "The objective task input hash does not match the local file.",
+        )
+    _emit("progress", stage=STAGE_OBJECTIVE_COMPUTE, percent=10)
     exported = export_objective_fields(
         input_path,
-        run_id=request.run_id,
+        run_id=task.run_id,
         input_sha256=input_sha256,
-        operations=request.operations,
+        operations=task.operations,
     )
-    _emit("progress", stage="write_objective_artifacts", percent=85)
+    _emit("progress", stage=STAGE_OBJECTIVE_MATERIALIZE, percent=65)
     measurement_path = output_dir / "measurements.json"
     measurement_path.write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "run_id": request.run_id,
+                "run_id": task.run_id,
                 "input_sha256": input_sha256,
-                "process": request.process,
-                "scope_id": request.scope_id,
+                "process": task.process,
+                "scope_id": task.scope_id,
                 "measurements": [
                     item.to_dict() for item in exported["measurements"]
                 ],
@@ -161,15 +191,15 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         for path in sorted(output_dir.iterdir())
         if path.is_file() and path.name != "worker_result.json"
     ]
-    result = WorkerResult(
-        schema_version=WORKER_SCHEMA_VERSION,
-        worker_version=WORKER_VERSION,
+    result = ObjectiveResultManifest(
+        schema_version=OBJECTIVE_SCHEMA_VERSION,
+        producer_version=WORKER_VERSION,
+        run_id=task.run_id,
         input_sha256=input_sha256,
-        process=request.process,
-        scope_id=request.scope_id,
-        rules=request.rules,
+        process=task.process,
+        scope_id=task.scope_id,
+        scope_version=task.scope_version,
         result_path="worker_result.json",
-        measurement_path=measurement_path.name,
         artifacts=artifacts,
     )
     result_path = output_dir / result.result_path
@@ -178,9 +208,9 @@ def _execute(request: WorkerRequest) -> WorkerResult:
         encoding="utf-8",
     )
     for artifact in artifacts:
-        _emit("artifact", kind=artifact["kind"], path=artifact["path"])
+        _emit("artifact", kind=artifact.kind, path=artifact.filename)
     _emit("artifact", kind="worker_result", path=result.result_path)
-    _emit("progress", stage="complete", percent=100)
+    _emit("progress", stage=STAGE_OBJECTIVE_READY, percent=70)
     _emit("completed", path=result.result_path)
     return result
 

@@ -30,6 +30,20 @@ def export_objective_fields(
 ) -> dict[str, Any]:
     """Calculate only objective wall-thickness and draft artifacts."""
 
+    by_calculator = {item.calculator_id: item for item in operations}
+    load_operation = by_calculator.get("load_geometry")
+    model_unit_argument = (
+        load_operation.arguments.get("model_unit") if load_operation else None
+    )
+    model_unit = str(
+        model_unit_argument.value if model_unit_argument is not None else ""
+    ).lower()
+    if model_unit != "mm":
+        raise DFMError(
+            "objective_unit_unsupported",
+            "The frozen objective geometry contract requires millimeter input.",
+            {"model_unit": model_unit or None, "supported_units": ["mm"]},
+        )
     occ = legacy.import_occ()
     shape = legacy.read_step(input_path, occ)
     mesh = _mesh(shape, occ, input_sha256)
@@ -39,7 +53,7 @@ def export_objective_fields(
         "run_id": run_id,
         "input_sha256": input_sha256,
         "coordinate_system": "model",
-        "unit": "mm",
+        "unit": model_unit,
         "primitives": [item["primitive"] for item in mesh],
     }
     topology = {
@@ -65,7 +79,26 @@ def export_objective_fields(
 
     fields: list[tuple[str, dict[str, Any]]] = []
     measurements: list[MeasurementRecord] = []
-    by_calculator = {item.calculator_id: item for item in operations}
+    if operation := by_calculator.get("inspect_topology"):
+        if operation.metric_ids and operation.required_quantities:
+            measurements.append(
+                MeasurementRecord(
+                    measurement_id="measurement-valid_brep",
+                    operation_id=operation.operation_id,
+                    calculator_id=operation.calculator_id,
+                    metric_id=operation.metric_ids[0],
+                    quantity_id=operation.required_quantities[0],
+                    value=True,
+                    unit=None,
+                    status="measured",
+                    geometry_refs=[],
+                    method="pythonocc_brep_load",
+                    algorithm_version=ALGORITHM_VERSION,
+                    input_sha256=input_sha256,
+                    quality={"backend": "pythonocc_demo", "certified": False},
+                    diagnostics={"face_count": len(mesh)},
+                )
+            )
     if operation := by_calculator.get("measure_wall_thickness"):
         field_id = "field_wall_thickness"
         field, measurement = _thickness_field(
@@ -88,11 +121,7 @@ def export_objective_fields(
         fields.append((field_id, field))
         measurements.append(measurement)
 
-    required = {
-        item.calculator_id
-        for item in operations
-        if item.calculator_id in {"measure_wall_thickness", "measure_draft"}
-    }
+    required = {item.calculator_id for item in operations if item.metric_ids}
     if len(measurements) != len(required):
         raise DFMError(
             "calculation_failed",

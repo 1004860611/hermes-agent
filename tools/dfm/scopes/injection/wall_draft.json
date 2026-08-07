@@ -1,8 +1,24 @@
 {
   "scope_id": "injection.wall-draft",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "process": "injection",
+  "material_profiles": {
+    "ABS": {
+      "min_wall_mm": 1.2,
+      "source": "validated_demo_baseline"
+    }
+  },
   "parameters": {
+    "material": {
+      "value": "ABS",
+      "unit": null,
+      "kind": "engineering_context"
+    },
+    "model_units": {
+      "value": "mm",
+      "unit": null,
+      "kind": "engineering_context"
+    },
     "pull_dir": {
       "value": [0, 0, 1],
       "unit": null,

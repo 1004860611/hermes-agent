@@ -8,13 +8,16 @@ import pytest
 from tools.dfm.analyzers.base import AnalyzerContext, CancellationToken
 from tools.dfm.analyzers.parasolid import ParasolidAnalyzer
 from tools.dfm.backends.nx.contracts import (
-    NXArtifact,
     NXCalculatorCapability,
     NXCapability,
     NXJobStatus,
 )
+from tools.dfm.backends.nx.client import HttpNXBackendClient
 from tools.dfm.contracts import (
     InputRecord,
+    ObjectiveArtifactManifest,
+    ObjectiveResultManifest,
+    ObjectiveTaskRequest,
     PlanOperation,
     PlanRecord,
     ResolvedArgument,
@@ -64,17 +67,27 @@ class FakeNXClient:
         self.cancelled.append(job_id)
         return NXJobStatus(job_id, "cancelled")
 
-    def artifacts(self, job_id):
-        return [
-            NXArtifact(
+    def result(self, job_id):
+        return ObjectiveResultManifest(
+            schema_version=2,
+            producer_version="fake-nx-2",
+            run_id="run_1",
+            input_sha256="a" * 64,
+            process="die_casting",
+            scope_id="die_casting.topology-baseline",
+            scope_version="1.0.0",
+            result_path="remote_result.json",
+            artifacts=[
+                ObjectiveArtifactManifest(
                 "measurements",
                 "measurements",
                 "measurements.json",
                 "application/json",
-                hashlib.sha256(self.payload).hexdigest(),
                 len(self.payload),
+                hashlib.sha256(self.payload).hexdigest(),
             )
-        ]
+            ],
+        )
 
     def download(self, job_id, artifact, target):
         target.write(self.payload)
@@ -106,24 +119,35 @@ class TaskContractNXClient(FakeNXClient):
             json.loads((FIXTURE_ROOT / "task_contract_capability.json").read_text())
         )
 
-    def artifacts(self, job_id):
+    def result(self, job_id):
         definitions = (
             ("measurements", "measurements", "measurements.json"),
             ("field_draft_fixed_half", "scalar_field", "draft_field.json"),
             ("scene_golden_part", "render_scene", "render_scene.json"),
             ("topology_golden_part", "topology_map", "topology_map.json"),
         )
-        return [
-            NXArtifact(
+        artifacts = [
+            ObjectiveArtifactManifest(
                 artifact_id,
                 kind,
                 filename,
                 "application/json",
-                hashlib.sha256(self.payloads[artifact_id]).hexdigest(),
                 len(self.payloads[artifact_id]),
+                hashlib.sha256(self.payloads[artifact_id]).hexdigest(),
             )
             for artifact_id, kind, filename in definitions
         ]
+        return ObjectiveResultManifest(
+            schema_version=2,
+            producer_version="fake-nx-2",
+            run_id="run_1",
+            input_sha256="a" * 64,
+            process="die_casting",
+            scope_id="die_casting.topology-baseline",
+            scope_version="1.0.0",
+            result_path="remote_result.json",
+            artifacts=artifacts,
+        )
 
     def download(self, job_id, artifact, target):
         target.write(self.payloads[artifact.artifact_id])
@@ -168,17 +192,22 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
     jsonschema = pytest.importorskip("jsonschema")
     operation = json.loads((FIXTURE_ROOT / "task_contract_request.json").read_text())
     request = {
-        "schema_version": 1,
-        "run_id": "run_1",
-        "process": "die_casting",
-        "scope_id": "die_casting.golden-product",
-        "scope_version": "1.0.0",
+        "schema_version": 2,
         "input": {
             "input_id": "input_1",
             "sha256": "a" * 64,
             "format_id": "parasolid_xt",
         },
-        "operations": [operation],
+        "task": {
+            "schema_version": 2,
+            "run_id": "run_1",
+            "input_sha256": "a" * 64,
+            "input_format": "parasolid_xt",
+            "process": "die_casting",
+            "scope_id": "die_casting.golden-product",
+            "scope_version": "1.0.0",
+            "operations": [operation],
+        },
     }
     capability = json.loads(
         (FIXTURE_ROOT / "task_contract_capability.json").read_text()
@@ -186,9 +215,40 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
     measurements = json.loads(
         (FIXTURE_ROOT / "task_contract_measurements.json").read_text()
     )
+    result_artifacts = []
+    for artifact_id, kind, filename, fixture_name in (
+        ("measurements", "measurements", "measurements.json", "task_contract_measurements.json"),
+        ("field_draft_fixed_half", "scalar_field", "draft_field.json", "task_contract_scalar_field.json"),
+        ("scene_golden_part", "render_scene", "render_scene.json", "task_contract_render_scene.json"),
+        ("topology_golden_part", "topology_map", "topology_map.json", "task_contract_topology_map.json"),
+    ):
+        content = (FIXTURE_ROOT / fixture_name).read_bytes()
+        result_artifacts.append(
+            ObjectiveArtifactManifest(
+                artifact_id,
+                kind,
+                filename,
+                "application/json",
+                len(content),
+                hashlib.sha256(content).hexdigest(),
+            ).to_dict()
+        )
+    result_manifest = {
+        "schema_version": 2,
+        "producer_version": "nx-golden-fixture-2",
+        "run_id": "run_1",
+        "input_sha256": "a" * 64,
+        "process": "die_casting",
+        "scope_id": "die_casting.golden-product",
+        "scope_version": "1.0.0",
+        "result_path": "remote_result.json",
+        "artifacts": result_artifacts,
+    }
 
     for payload, schema_name in (
         (request, "nx_request.schema.json"),
+        (request["task"], "objective_task.schema.json"),
+        (result_manifest, "objective_result_manifest.schema.json"),
         (capability, "nx_capability.schema.json"),
         (measurements, "measurement.schema.json"),
         (
@@ -223,6 +283,43 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
         "minimum",
     )
     jsonschema.Draft202012Validator(binding_schema).validate(binding.to_dict())
+
+
+def test_http_client_wraps_common_task_without_mutating_it(tmp_path, monkeypatch):
+    input_path = tmp_path / "part.x_t"
+    input_path.write_bytes(b"parasolid")
+    digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    task = ObjectiveTaskRequest(
+        2,
+        "run_1",
+        digest,
+        "parasolid_xt",
+        "injection",
+        "injection.wall-draft",
+        "2.0.0",
+        [PlanOperation("geometry.load", "load_geometry")],
+    ).to_dict()
+    calls = []
+    client = HttpNXBackendClient("https://nx.example")
+
+    def fake_json(method, path, payload=None):
+        calls.append((method, path, payload))
+        if path == "/v1/inputs":
+            return {"input_id": "input_1", "upload_required": False}
+        return {"job_id": "job_1", "status": "queued"}
+
+    monkeypatch.setattr(client, "_json", fake_json)
+
+    client.submit(task, input_path)
+
+    envelope = calls[-1][2]
+    assert envelope["task"] == task
+    assert envelope["input"] == {
+        "input_id": "input_1",
+        "sha256": digest,
+        "format_id": "parasolid_xt",
+    }
+    assert set(envelope) == {"schema_version", "input", "task"}
 
 
 def test_parasolid_analyzer_uses_http_client_contract_and_downloads_measurements(
@@ -269,7 +366,7 @@ def test_parasolid_analyzer_uses_production_contract_for_metric_scoped_operation
     artifacts = analyzer.run(context, CancellationToken())
 
     request = client.submitted[0][0]
-    assert request["schema_version"] == 1
+    assert request["schema_version"] == 2
     assert request["operations"][-1] == json.loads(
         (FIXTURE_ROOT / "task_contract_request.json").read_text()
     )
@@ -278,6 +375,7 @@ def test_parasolid_analyzer_uses_production_contract_for_metric_scoped_operation
         "scalar_field",
         "render_scene",
         "topology_map",
+        "worker_result",
     }
 
 
@@ -330,7 +428,7 @@ def test_parasolid_analyzer_rejects_measurement_linked_to_wrong_metric(tmp_path)
             context, CancellationToken()
         )
 
-    assert exc_info.value.code == "nx_result_invalid"
+    assert exc_info.value.code == "objective_result_invalid"
 
 
 def _task_arguments():

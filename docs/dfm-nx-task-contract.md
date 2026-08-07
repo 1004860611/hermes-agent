@@ -1,7 +1,7 @@
 # DFM/NX Production Task Contract
 
-> 状态：Proposed，等待 Hermes/NX 联合评审与认证。
-> 数据 Schema：`1`。这是唯一生产数据契约，不提供 demo 契约兼容路径。
+> 状态：Hermes freeze candidate；真实 NX 联合评审、配对 Golden Model 和 Calculator 认证仍是生产发布门。
+> Objective Task/Result Schema：`2`。Measurement/ScalarField/RenderScene/TopologyMap 仍各自使用 Schema `1`；这是对象类型的版本差异，不是 V1/V2 双轨。
 > 正式定义：`tools/dfm/schemas/*.schema.json`。
 
 ## 1. 边界与数据流
@@ -25,6 +25,14 @@ failed patches --> Hermes Evidence Renderer --> EvidenceRecord --> Finding
 ```
 
 规则阈值不会发送给 NX。NX 不返回 pass/fail、severity 或 recommendation。
+
+### 1.1 输入格式与 Backend 选择
+
+- `ObjectiveTaskRequest.input_format` 支持 `step` 与 `parasolid_xt`。
+- PythonOCC 只承载 STEP demo；NX production 同时承载 STEP 与 Parasolid，并在 NX 内使用两个 loader 规范化为相同的 B-Rep 计算输入。
+- 输入格式不进入 `operation_id`、`metric_id` 或 `calculator_id`。同一个 `measure_draft` 或 `measure_thickness` Calculator 对两种格式保持相同的参数、Quantity 和 Artifact 语义。
+- NX Capability 必须在每个 Calculator 的 `supported_formats` 中分别认证 `step` 和 `parasolid_xt`；没有对应格式认证时，Hermes 在提交前将计划置为 blocked。
+- 一旦计划选择 NX production，Backend 不可用、格式不受支持或计算失败都必须明确失败，不得自动降级到 PythonOCC。
 
 ## 2. Plan
 
@@ -92,13 +100,13 @@ Region 是输入版本绑定的正式记录，至少包含：
 
 `GET /v1/capabilities` 中每个 Calculator 必须是结构化对象，不接受字符串状态。结构包含：
 
-- `status` 与 `contract_version=1`；
+- `status` 与 `contract_version=2`；
 - `implementation_version`；
 - `required_arguments`、`optional_arguments`、`supported_algorithm_options`、`output_quantities`、`output_artifact_kinds`；
 - `supported_formats`、`supported_region_modes`、`supported_nx_versions`；
 - `certification_report_sha256`。
 
-Hermes 在提交前校验 Calculator 认证状态、参数集合、输出 Quantity、格式和 Region mode。不匹配时计划处于 blocked，而不是降级到另一套请求格式。
+Hermes 在提交前校验 Calculator 认证状态、参数集合、输出 Quantity、格式和 Region mode。不匹配时计划处于 blocked，而不是改写请求格式或降级到另一个 Backend。某 Calculator 支持 `parasolid_xt` 不代表它自动支持 `step`，反之亦然。
 
 ## 5. Measurement
 
@@ -145,10 +153,7 @@ Evaluation 失败后，Hermes 对 ScalarField 应用同一 operator/expected，�
 
 Finding 显式保存：`evaluation_ids`、`measurement_ids`、`metric_ids`、`region_refs`、`evidence_refs` 和 `rule_refs`。生产 Finding 只从独立 Evaluation 与 EvidenceRecord 生成；`evidence_refs` 保存 Evidence ID，不把一次 Run 的全部图片分配给每个 Finding。
 
-代码保留两条明确链路，但不是两个 Schema 版本：
-
-- STEP 历史链路：STEP Worker 自行渲染，`materialize_legacy_step_findings()` 适配旧报告；
-- NX 生产链路：`EvaluationEngine` → `FieldEvidenceEngine` → `materialize_evaluated_findings()`。
+PythonOCC demo 与 NX production 只在输入适配和客观几何实现上不同；NX 内部的 STEP loader 与 Parasolid loader 也只负责把不同文件格式规范化为同一计算输入。所有路径统一输出 ObjectiveResultManifest、Measurement、ScalarField、RenderScene 和 TopologyMap，并统一进入 `EvaluationEngine` → `FieldEvidenceEngine` → `materialize_evaluated_findings()` → 报告装配。截图策略、规则和 Finding 不进入任何几何 Backend。
 
 ## 8. 联合验收
 
@@ -158,4 +163,6 @@ Finding 显式保存：`evaluation_ids`、`measurement_ids`、`metric_ids`、`re
 4. 曲面局部失败能由 Hermes 生成只覆盖失败三角形的截图；通过结果不生成问题截图；
 5. 同一 Measurement 经相同 Rule 快照生成相同 Evaluation、Patch 和 Finding 引用；
 6. 并发项目/Run 的 Artifact 不得交叉引用；
-7. Schema 冻结只能发生在 Hermes/NX 联合评审和真实 golden part E2E 通过之后。
+7. 同一 CAD 源导出的 STEP 与 Parasolid golden model 都必须真实进入 NX，并按批准的数值容差和问题区域语义通过壁厚、拔模角验收；不要求两个格式的采样点逐点完全相同；
+8. NX production 失败时必须明确失败，验收不得接受自动降级产生的 PythonOCC 结果；
+9. Schema 冻结只能发生在 Hermes/NX 联合评审和真实 golden part E2E 通过之后。

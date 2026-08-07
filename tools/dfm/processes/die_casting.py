@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..analyzers.base import AnalyzerContext
-from ..contracts import Capability, CapabilityStatus, PlanOperation
+from ..contracts import Capability, CapabilityStatus, PlanOperation, ResolvedArgument
 from ..errors import DFMError
 from .base import ProcessPlan
 
@@ -50,21 +50,45 @@ class DieCastingProcessAdapter:
         context: AnalyzerContext,
         raw_parameters: Mapping[str, Any],
     ) -> ProcessPlan:
-        if raw_parameters:
+        if set(raw_parameters) - {"model_units"}:
             raise DFMError(
                 "process_parameter_invalid",
                 "The initial die-casting topology scope does not accept rule overrides.",
                 {"parameters": sorted(raw_parameters)},
             )
         scope = self._load_scope()
+        raw_unit = raw_parameters.get("model_units", "mm")
+        if isinstance(raw_unit, Mapping):
+            unit = str(raw_unit.get("value") or "").strip().lower()
+            source_ref = str(raw_unit.get("source_ref") or "fact:model_units")
+        else:
+            unit = str(raw_unit or "").strip().lower()
+            source_ref = "scope:die_casting.topology-baseline@1.0.0/model_units"
+        if unit not in {"mm", "millimeter", "millimeters"}:
+            raise DFMError(
+                "process_parameter_invalid",
+                "The frozen die-casting scope requires millimeter geometry.",
+            )
+        operations = [PlanOperation.from_dict(item) for item in scope["operations"]]
+        load = operations[0]
+        operations[0] = PlanOperation(
+            operation_id=load.operation_id,
+            calculator_id=load.calculator_id,
+            depends_on=load.depends_on,
+            metric_ids=load.metric_ids,
+            required_quantities=load.required_quantities,
+            required_artifacts=load.required_artifacts,
+            arguments={"model_unit": ResolvedArgument("mm", source_ref)},
+            algorithm_options=load.algorithm_options,
+        )
         return ProcessPlan(
             process=self.key,
             adapter_version=self.version,
             scope_id=str(scope["scope_id"]),
             scope_version=str(scope["version"]),
             rules={},
-            operations=[PlanOperation.from_dict(item) for item in scope["operations"]],
-            accepted_inputs=set(scope["parameters"]),
+            operations=operations,
+            accepted_inputs={"model_units"},
         )
 
     def _load_scope(self) -> dict[str, Any]:

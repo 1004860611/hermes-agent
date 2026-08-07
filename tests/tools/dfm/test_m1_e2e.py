@@ -144,9 +144,18 @@ def test_m1_real_tool_vertical_slice(tmp_path):
             item for item in evaluation_payload["evaluations"] if item["outcome"] == "fail"
         ]
         assert len(findings) == len(failed_evaluations)
+        evidence_artifact = next(
+            item
+            for item in result["run"]["artifacts"]
+            if item["kind"] == "evidence_records"
+        )
+        evidence_payload = json.loads(
+            Path(evidence_artifact["path"]).read_text(encoding="utf-8")
+        )
+        evidence_ids = {item["evidence_id"] for item in evidence_payload["records"]}
         assert all(
-            item["rule_refs"][0].startswith("injection.legacy-issues@1.0.0:")
-            and measurement_artifact["relative_path"] in item["evidence_refs"]
+            item["rule_refs"]
+            and set(item["evidence_refs"]) <= evidence_ids
             for item in findings
         )
     finally:

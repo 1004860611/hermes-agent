@@ -25,14 +25,14 @@ _TRUSTED_SOURCES = {"project_fact", "user_confirmed"}
 
 class InjectionProcessAdapter:
     key = "injection"
-    version = "injection-wall-draft-v1"
+    version = "injection-wall-draft-v2"
 
     def __init__(self, scope_path: Path | None = None) -> None:
         self.scope_path = scope_path or (
             Path(__file__).resolve().parents[1]
             / "scopes"
             / "injection"
-            / "wall_draft_v1.json"
+            / "wall_draft.json"
         )
 
     def capability(self, context: AnalyzerContext) -> Capability:
@@ -94,6 +94,27 @@ class InjectionProcessAdapter:
                 "kind": str(defaults[key].get("kind") or "rule"),
             }
 
+        material = str(resolved["material"]["value"])
+        material_profile = dict(scope.get("material_profiles", {}).get(material) or {})
+        if not material_profile:
+            self._invalid(
+                "The injection material does not have a frozen wall-thickness profile.",
+                {"material": material},
+            )
+        if "min_wall_mm" not in raw_parameters:
+            resolved["min_wall_mm"] = {
+                "value": self._normalize_value(
+                    "min_wall_mm", material_profile["min_wall_mm"]
+                ),
+                "unit": "mm",
+                "source": "material_profile",
+                "source_ref": (
+                    f"scope:{scope['scope_id']}@{scope['version']}"
+                    f"/materials/{material}/min_wall_mm"
+                ),
+                "kind": "rule",
+            }
+
         rules = {
             key: EffectiveRule(
                 value=item["value"],
@@ -109,7 +130,12 @@ class InjectionProcessAdapter:
         for operation in operations:
             arguments = dict(operation.arguments)
             algorithm_options = dict(operation.algorithm_options)
-            if operation.calculator_id == "measure_draft":
+            if operation.calculator_id == "load_geometry":
+                units = resolved["model_units"]
+                arguments["model_unit"] = ResolvedArgument(
+                    units["value"], units["source_ref"], None
+                )
+            elif operation.calculator_id == "measure_draft":
                 pull = resolved["pull_dir"]
                 arguments["pull_direction"] = ResolvedArgument(
                     pull["value"], pull["source_ref"], pull["unit"]
@@ -152,7 +178,7 @@ class InjectionProcessAdapter:
             ) from exc
         if (
             scope.get("scope_id") != "injection.wall-draft"
-            or scope.get("version") != "1.0.0"
+            or scope.get("version") != "2.0.0"
             or scope.get("process") != self.key
             or not isinstance(scope.get("parameters"), dict)
             or not isinstance(scope.get("operations"), list)
@@ -165,6 +191,19 @@ class InjectionProcessAdapter:
         return scope
 
     def _normalize_value(self, key: str, value: Any) -> Any:
+        if key == "material":
+            material = str(value or "").strip().upper()
+            if not material:
+                self._invalid("material must be a non-empty material identifier.")
+            return material
+        if key == "model_units":
+            unit = str(value or "").strip().lower()
+            if unit not in {"mm", "millimeter", "millimeters"}:
+                self._invalid(
+                    "The frozen injection scope currently requires millimeter geometry.",
+                    {"model_units": value, "supported_units": ["mm"]},
+                )
+            return "mm"
         if key == "pull_dir":
             if not isinstance(value, (list, tuple)) or len(value) != 3:
                 self._invalid("pull_dir must contain exactly three numbers.")

@@ -23,6 +23,11 @@ from ..contracts import (
     ProjectManifest,
     RunRecord,
     RunStatus,
+    STAGE_COMPLETE,
+    STAGE_EVIDENCE_RENDER,
+    STAGE_OBJECTIVE_READY,
+    STAGE_REPORT_MATERIALIZE,
+    STAGE_RULE_EVALUATION,
     WorkerEvent,
     ensure_run_transition,
 )
@@ -33,6 +38,7 @@ from ..findings import materialize_evaluated_findings
 from ..project.manifest import ManifestStore
 from ..project.workspace import DFMWorkspace
 from ..reporting.result_assembler import materialize_result_reports
+from .objective_cache import ObjectiveOperationCache
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +72,7 @@ class JobManager:
         self.runtime_id = f"runtime_{uuid4().hex[:16]}"
         self.evaluation_engine = EvaluationEngine()
         self.field_evidence_engine = FieldEvidenceEngine()
+        self.objective_cache = ObjectiveOperationCache()
         if reconcile:
             self.reconcile_incomplete_runs()
 
@@ -169,6 +176,18 @@ class JobManager:
         with self._lock:
             self._futures.pop(run_id, None)
 
+    @staticmethod
+    def _plan_input_sha256(manifest: ProjectManifest, plan: PlanRecord | None) -> str:
+        if plan is None:
+            return ""
+        by_id = {item.input_id: item.sha256 for item in manifest.inputs}
+        hashes = {
+            plan.input_hashes.get(input_id) or by_id.get(input_id, "")
+            for input_id in plan.input_ids
+        }
+        hashes.discard("")
+        return next(iter(hashes)) if len(hashes) == 1 else ""
+
     def _replace_run(self, project_id: str, run_id: str, transform) -> RunRecord:
         selected: RunRecord | None = None
 
@@ -224,9 +243,36 @@ class JobManager:
                 plan,
                 lambda event: self._record_event(project_id, run_id, event),
             )
-            artifacts = analyzer.run(context, token)
+            input_sha256 = self._plan_input_sha256(manifest, plan)
+            artifacts = (
+                self.objective_cache.restore(
+                    context.project_dir,
+                    run_id,
+                    plan,
+                    input_sha256=input_sha256,
+                    analyzer_key=analyzer.key,
+                    analyzer_version=analyzer.version,
+                )
+                if plan is not None and input_sha256
+                else None
+            )
+            if artifacts is None:
+                artifacts = analyzer.run(context, token)
+            else:
+                self._advance_stage(project_id, run_id, STAGE_OBJECTIVE_READY, 70)
             checked = [self._validate_artifact(context.project_dir, item) for item in artifacts]
+            if plan is not None and input_sha256:
+                self.objective_cache.publish(
+                    context.project_dir,
+                    run_id,
+                    plan,
+                    checked,
+                    input_sha256=input_sha256,
+                    analyzer_key=analyzer.key,
+                    analyzer_version=analyzer.version,
+                )
             if plan is not None and any(item.kind == "measurements" for item in checked):
+                self._advance_stage(project_id, run_id, STAGE_RULE_EVALUATION, 75)
                 evaluation_artifact = self.evaluation_engine.materialize(
                     context.project_dir,
                     run_id,
@@ -237,6 +283,7 @@ class JobManager:
                     self._validate_artifact(context.project_dir, evaluation_artifact)
                 )
                 if any(item.kind == "scalar_field" for item in checked):
+                    self._advance_stage(project_id, run_id, STAGE_EVIDENCE_RENDER, 82)
                     evidence_artifacts = self.field_evidence_engine.materialize(
                         context.project_dir,
                         run_id,
@@ -247,6 +294,7 @@ class JobManager:
                         self._validate_artifact(context.project_dir, item)
                         for item in evidence_artifacts
                     )
+                self._advance_stage(project_id, run_id, STAGE_REPORT_MATERIALIZE, 94)
                 report_artifacts = materialize_result_reports(
                     context.project_dir,
                     run_id,
@@ -304,6 +352,23 @@ class JobManager:
         except DFMError:
             return
 
+    def _advance_stage(
+        self, project_id: str, run_id: str, stage: str, percent: int
+    ) -> None:
+        now = _utc_now()
+        updated = self._replace_run(
+            project_id,
+            run_id,
+            lambda run: replace(
+                run,
+                stage=stage,
+                progress_percent=max(run.progress_percent, percent),
+                heartbeat_at=now,
+                updated_at=now,
+            ),
+        )
+        self._notify(run_id, updated)
+
     def _complete_success(
         self,
         project_id: str,
@@ -329,14 +394,14 @@ class JobManager:
                         status=RunStatus.SUCCEEDED,
                         updated_at=now,
                         heartbeat_at=now,
-                        stage="complete",
+                        stage=STAGE_COMPLETE,
                         progress_percent=100,
                         artifacts=list(combined.values()),
                     )
                 )
             if not found:
                 raise DFMError("run_not_found", "DFM run was not found.", {"run_id": run_id})
-            known = {item.artifact_id for item in current.artifacts}
+            known_paths = {item.relative_path for item in current.artifacts}
             findings = materialize_evaluated_findings(
                 self.workspace.project_dir(project_id), artifacts
             )
@@ -344,7 +409,14 @@ class JobManager:
             return replace(
                 current,
                 runs=runs,
-                artifacts=[*current.artifacts, *[item for item in artifacts if item.artifact_id not in known]],
+                artifacts=[
+                    *current.artifacts,
+                    *[
+                        item
+                        for item in artifacts
+                        if item.relative_path not in known_paths
+                    ],
+                ],
                 findings=[item for item in current.findings if item.finding_id not in finding_ids] + findings,
                 updated_at=now,
             )
@@ -451,7 +523,38 @@ class JobManager:
                 "Analyzer returned an invalid artifact path.",
                 {"path": artifact.relative_path},
             )
-        return artifact
+        size_bytes = resolved.stat().st_size
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        sha256 = digest.hexdigest()
+        if artifact.size_bytes not in {0, size_bytes} or (
+            artifact.sha256 and artifact.sha256 != sha256
+        ):
+            raise DFMError(
+                "artifact_invalid",
+                "Analyzer artifact size or content hash does not match its manifest.",
+                {"path": artifact.relative_path},
+            )
+        parts = relative.parts
+        run_id = artifact.run_id
+        if len(parts) >= 2 and parts[0] == "runs":
+            path_run_id = parts[1]
+            if run_id and run_id != path_run_id:
+                raise DFMError(
+                    "artifact_invalid",
+                    "Analyzer artifact belongs to a different run.",
+                    {"path": artifact.relative_path},
+                )
+            run_id = path_run_id
+        return replace(
+            artifact,
+            run_id=run_id,
+            logical_id=artifact.logical_id or artifact.artifact_id,
+            size_bytes=size_bytes,
+            sha256=sha256,
+        )
 
     def cancel(self, project_id: str, run_id: str) -> RunRecord:
         run = self.status(project_id, run_id)
