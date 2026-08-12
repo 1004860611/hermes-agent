@@ -153,11 +153,8 @@ dfm:
 
 配置 `dfm.nx.endpoint` 后，Parasolid `.x_t` 通过 HTTP NX Backend 执行；未配置时
 返回 `dependency_missing`，不会尝试本地启动 NX。认证 Token 是机密，通过
-`NX_BACKEND_TOKEN` 提供，不写入 `config.yaml`。完整 Server/C++ 插件协议见
-[NX HTTP Backend 契约](plans/2026-07-23-dfm-nx-http-backend-contract.md)。
-NX Server 和 C++ 插件开发团队应以
-[NX Server 与 NX C++ 插件开发交接规格](plans/2026-07-23-nx-server-plugin-development-spec.md)
-作为实施与验收清单。
+`NX_BACKEND_TOKEN` 提供，不写入 `config.yaml`。Server、C++ 插件、运行流程和数据契约见
+[DFM 架构、工作流与 NX 契约](plans/2026-08-12-dfm-architecture-workflow-and-nx-contract.md)。
 
 - `runtime.python: auto`：worker 使用当前 Hermes Python 解释器。
 - `runtime.python: /absolute/path/to/python`：worker 使用独立 DFM/OCC 环境。

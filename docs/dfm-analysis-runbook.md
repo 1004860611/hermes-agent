@@ -2,16 +2,18 @@
 title: "单次 DFM 分析数据说明"
 status: active
 milestone: M2.5
-last_updated: 2026-07-21
+last_updated: 2026-08-12
 type: living-runbook
 owners: DFM 工程团队
 ---
 
 # 单次 DFM 分析数据说明
 
-本文说明当前 M2.5 开发版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
+本文说明当前开发版本中，一次真实 DFM 分析如何执行、输入和过程数据保存在哪里、结果文件分别有什么用途，以及出现异常时应检查哪些文件。
 
-本文是随 DFM 里程碑持续更新的活文档。这里描述的是**当前已实现行为**；长期目标、尚未实现的输入模式和演进路线参见 [DFM Hermes Agent 开发目标与路线图](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)。
+本文是随 DFM 里程碑持续更新的活文档。这里描述的是**当前已实现行为**；开发阶段参见
+[DFM 开发路径](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)，架构和契约参见
+[DFM 架构、工作流与 NX 契约](plans/2026-08-12-dfm-architecture-workflow-and-nx-contract.md)。
 
 ## 1. M1.2 适用范围
 
