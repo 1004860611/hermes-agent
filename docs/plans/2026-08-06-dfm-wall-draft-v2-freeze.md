@@ -1,8 +1,12 @@
 # DFM 壁厚/拔模角当前版本冻结说明
 
-> 状态：Hermes 侧冻结候选（2026-08-06）  
+> 状态：客观场/后处理基线保留；发现驱动契约于 2026-08-11 重新打开
 > 范围：注塑成型；壁厚与拔模角；PythonOCC demo 与 NX production  
-> 生产发布状态：未通过。当前冻结的是公共数据契约与 Hermes 后处理基线；NX STEP/Parasolid 双格式实现、真实 NX Server、C++ Calculator、配对 Golden Model 和工程师签字仍未交付。
+> 生产发布状态：未通过。壁厚/拔模角 ScalarField、Evidence 和 Finding 后处理仍是有效基线；Feature/Region/Observation/Fusion、DiscoveryPlan/AnalysisPlan 和 Feature-aware 回链已纳入 M2.6，完成联合评审前不再把整份生产契约称为冻结。
+
+本文仅记录 2026-08-06 已完成的客观场基线。新的运行时主流程和正式字段以
+[DFM/NX Production Task Contract](../dfm-nx-task-contract.md) 与
+[DFM 产品路线图](2026-07-13-dfm-hermes-agent-development-roadmap.md) 为准。
 
 ## 1. 冻结边界
 
@@ -28,9 +32,9 @@ Backend 不接收 Rule、阈值、截图数量、截图视角或 Finding 策略�
    - `material=ABS` 在 Hermes 选择冻结的壁厚规则 profile；Material 不下沉到纯几何 Calculator。
    - `model_units=mm` 进入 `load_geometry.model_unit`；当前冻结版不猜单位，也不支持隐式英寸换算。
 2. PythonOCC 与 NX 使用相同 `ObjectiveTaskRequest`。本地文件路径仅在 `LocalObjectiveWorkerRequest`，NX 的 `input_id` 仅在 HTTP Job envelope。
-3. 两条链路统一使用 `ObjectiveResultManifest` Schema 2。Result 和每个 Artifact 都携带 Run/Input/Scope 身份、大小与 SHA256。
+3. 两条链路统一使用 `ObjectiveResultManifest` Schema 4。ObjectiveTask 携带冻结 Region 选择器；Result 和每个 Artifact 都携带 Run/Input/Scope 身份、大小与 SHA256，并要求 Operation/Measurement/ScalarField 携带 Feature/Region 身份。
 4. NX Analyzer 只保留公共 `validate_objective_result()`，旧的 Measurement/Geometry 重复校验已删除。
-5. Capability contract version 固定为 2；运行阶段固定为 objective load/compute/materialize/ready、rule evaluation、evidence render、report materialize、complete。
+5. Capability contract version固定为 4；运行阶段固定为 objective load/compute/materialize/ready、rule evaluation、evidence render、report materialize、complete。
 6. 客观计算检查点使用 Operation 指纹。指纹包含输入 SHA256、Backend/算法版本、Operation 参数和依赖指纹；规则阈值不参与，所以只改规则会复用几何结果。恢复时重新校验大小/SHA256并改写新 Run 身份。
 7. PythonOCC 真实 STEP E2E 与 141 项 DFM 回归已通过；NX JSON fixture 已覆盖 Task、Capability、Result Manifest、Measurement、ScalarField、RenderScene 和 TopologyMap Schema。
 

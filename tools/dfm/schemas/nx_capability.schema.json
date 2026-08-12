@@ -19,7 +19,7 @@
         "required": ["status", "contract_version", "implementation_version", "required_arguments", "optional_arguments", "supported_algorithm_options", "output_quantities", "output_artifact_kinds", "supported_formats", "supported_region_modes", "supported_nx_versions", "certification_report_sha256"],
         "properties": {
           "status": {"enum": ["certified", "not_implemented", "unhealthy"]},
-          "contract_version": {"const": 2},
+          "contract_version": {"const": 4},
           "implementation_version": {"type": "string"},
           "required_arguments": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
           "optional_arguments": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},

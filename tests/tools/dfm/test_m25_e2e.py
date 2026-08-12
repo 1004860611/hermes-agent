@@ -18,9 +18,10 @@ def test_die_casting_step_topology_vertical_slice(tmp_path):
     try:
         project_id = service.project("create", name="M2.5 die casting E2E")["project_id"]
         service.project("add_input", project_id=project_id, path=str(FIXTURE))
-        blocked = service.analysis("plan", project_id=project_id, process="die_casting")
+        blocked = service.analysis("discover", project_id=project_id, process="die_casting")
         assert [item["clarification_id"] for item in blocked["clarifications"]] == ["clarification_model_units"]
         service.project("confirm_fact", project_id=project_id, fact_name="model_units", fact_value="mm")
+        service.analysis("discover", project_id=project_id, process="die_casting")
         plan = service.analysis("plan", project_id=project_id, process="die_casting")
         assert plan["plan"]["scope_id"] == "die_casting.topology-baseline"
         started = service.analysis("start", project_id=project_id, plan_id=plan["plan"]["plan_id"])

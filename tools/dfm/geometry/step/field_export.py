@@ -2,23 +2,32 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from ...contracts import GeometryRef, MeasurementRecord, PlanOperation
+from ...contracts import GeometryRef, MeasurementRecord, PlanOperation, RegionRecord
 from ...errors import DFMError
 from . import legacy_analyzer as legacy
 
 
-SCHEMA_VERSION = 1
-ALGORITHM_VERSION = "pythonocc-demo-field-v1"
+SCHEMA_VERSION = 2
+ALGORITHM_VERSION = "pythonocc-demo-field-v2"
 SCENE_ARTIFACT_ID = "scene_geometry"
 TOPOLOGY_ARTIFACT_ID = "topology_geometry"
 _DEFLECTION_MM = 0.8
 _THICKNESS_SAMPLE_LIMIT = 4000
 _MIN_HIT_MM = 0.01
+
+
+def _content_sha256(payload: Any) -> str:
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def export_objective_fields(
@@ -27,11 +36,14 @@ def export_objective_fields(
     run_id: str,
     input_sha256: str,
     operations: list[PlanOperation],
+    regions: list[RegionRecord],
 ) -> dict[str, Any]:
     """Calculate only objective wall-thickness and draft artifacts."""
 
-    by_calculator = {item.calculator_id: item for item in operations}
-    load_operation = by_calculator.get("load_geometry")
+    by_calculator: dict[str, list[PlanOperation]] = {}
+    for operation in operations:
+        by_calculator.setdefault(operation.calculator_id, []).append(operation)
+    load_operation = next(iter(by_calculator.get("load_geometry", [])), None)
     model_unit_argument = (
         load_operation.arguments.get("model_unit") if load_operation else None
     )
@@ -47,6 +59,46 @@ def export_objective_fields(
     occ = legacy.import_occ()
     shape = legacy.read_step(input_path, occ)
     mesh = _mesh(shape, occ, input_sha256)
+    topology_content_sha256 = _content_sha256(
+        [
+            {
+                "entity_id": item["geometry_ref"]["entity_id"],
+                "kind": item["geometry_ref"]["kind"],
+                "index": item["geometry_ref"]["index"],
+            }
+            for item in mesh
+        ]
+    )
+    topology_snapshot_id = f"topology_{topology_content_sha256[:16]}"
+    for item in mesh:
+        item["geometry_ref"]["topology_snapshot_id"] = topology_snapshot_id
+    scene_primitives = [item["primitive"] for item in mesh]
+    render_mesh_sha256 = _content_sha256(scene_primitives)
+    render_mesh_snapshot_id = f"mesh_{render_mesh_sha256[:16]}"
+    for primitive in scene_primitives:
+        primitive["render_mesh_snapshot_id"] = render_mesh_snapshot_id
+    topology_snapshot = {
+        "topology_snapshot_id": topology_snapshot_id,
+        "input_sha256": input_sha256,
+        "backend": "pythonocc",
+        "backend_version": ALGORITHM_VERSION,
+        "loader_id": "pythonocc-step-loader",
+        "loader_version": ALGORITHM_VERSION,
+        "indexer_id": "pythonocc-face-indexer",
+        "indexer_version": "1",
+        "entity_count": {"body": 1, "face": len(mesh)},
+        "topology_content_sha256": topology_content_sha256,
+    }
+    render_mesh_snapshot = {
+        "render_mesh_snapshot_id": render_mesh_snapshot_id,
+        "topology_snapshot_id": topology_snapshot_id,
+        "input_sha256": input_sha256,
+        "producer": "pythonocc",
+        "producer_version": ALGORITHM_VERSION,
+        "tessellation": {"linear_deflection_mm": _DEFLECTION_MM},
+        "triangle_count": sum(len(item["triangles"]) for item in scene_primitives),
+        "render_mesh_sha256": render_mesh_sha256,
+    }
     scene = {
         "schema_version": SCHEMA_VERSION,
         "scene_id": SCENE_ARTIFACT_ID,
@@ -54,7 +106,9 @@ def export_objective_fields(
         "input_sha256": input_sha256,
         "coordinate_system": "model",
         "unit": model_unit,
-        "primitives": [item["primitive"] for item in mesh],
+        "topology_snapshot_ref": topology_snapshot_id,
+        "render_mesh_snapshot": render_mesh_snapshot,
+        "primitives": scene_primitives,
     }
     topology = {
         "schema_version": SCHEMA_VERSION,
@@ -62,6 +116,8 @@ def export_objective_fields(
         "run_id": run_id,
         "input_sha256": input_sha256,
         "scene_ref": SCENE_ARTIFACT_ID,
+        "topology_snapshot": topology_snapshot,
+        "render_mesh_snapshot_ref": render_mesh_snapshot_id,
         "faces": [
             {
                 "geometry_ref": item["geometry_ref"],
@@ -69,6 +125,7 @@ def export_objective_fields(
                     {
                         "primitive_id": item["primitive"]["primitive_id"],
                         "triangle_id": triangle_id,
+                        "render_mesh_snapshot_id": render_mesh_snapshot_id,
                     }
                     for triangle_id in range(len(item["primitive"]["triangles"]))
                 ],
@@ -79,7 +136,8 @@ def export_objective_fields(
 
     fields: list[tuple[str, dict[str, Any]]] = []
     measurements: list[MeasurementRecord] = []
-    if operation := by_calculator.get("inspect_topology"):
+    if topology_operations := by_calculator.get("inspect_topology"):
+        operation = topology_operations[0]
         if operation.metric_ids and operation.required_quantities:
             measurements.append(
                 MeasurementRecord(
@@ -92,6 +150,8 @@ def export_objective_fields(
                     unit=None,
                     status="measured",
                     geometry_refs=[],
+                    region_refs=list(operation.region_refs),
+                    feature_refs=list(operation.feature_refs),
                     method="pythonocc_brep_load",
                     algorithm_version=ALGORITHM_VERSION,
                     input_sha256=input_sha256,
@@ -99,19 +159,22 @@ def export_objective_fields(
                     diagnostics={"face_count": len(mesh)},
                 )
             )
-    if operation := by_calculator.get("measure_wall_thickness"):
-        field_id = "field_wall_thickness"
+    region_by_id = {item.region_id: item for item in regions}
+    for operation in by_calculator.get("measure_wall_thickness", []):
+        target_mesh = _operation_mesh(mesh, operation, region_by_id, input_sha256)
+        field_id = _field_id("wall_thickness", operation)
         field, measurement = _thickness_field(
-            shape, occ, mesh, operation, run_id, input_sha256, field_id
+            shape, occ, target_mesh, operation, run_id, input_sha256, field_id
         )
         fields.append((field_id, field))
         measurements.append(measurement)
-    if operation := by_calculator.get("measure_draft"):
-        field_id = "field_draft"
+    for operation in by_calculator.get("measure_draft", []):
+        target_mesh = _operation_mesh(mesh, operation, region_by_id, input_sha256)
+        field_id = _field_id("draft", operation)
         pull = operation.arguments.get("pull_direction")
         pull_direction = pull.value if pull is not None else [0, 0, 1]
         field, measurement = _draft_field(
-            mesh,
+            target_mesh,
             operation,
             run_id,
             input_sha256,
@@ -121,7 +184,7 @@ def export_objective_fields(
         fields.append((field_id, field))
         measurements.append(measurement)
 
-    required = {item.calculator_id for item in operations if item.metric_ids}
+    required = [item for item in operations if item.metric_ids]
     if len(measurements) != len(required):
         raise DFMError(
             "calculation_failed",
@@ -133,6 +196,73 @@ def export_objective_fields(
         "fields": fields,
         "measurements": measurements,
     }
+
+
+def _field_id(kind: str, operation: PlanOperation) -> str:
+    suffix = operation.operation_id.rsplit(".", 1)[-1]
+    return f"field_{kind}_{suffix}"
+
+
+def _operation_mesh(
+    mesh: list[dict[str, Any]],
+    operation: PlanOperation,
+    regions: dict[str, RegionRecord],
+    input_sha256: str,
+) -> list[dict[str, Any]]:
+    if len(operation.region_refs) != 1:
+        raise DFMError(
+            "objective_region_invalid",
+            "Each regional objective operation must reference exactly one region.",
+            {"operation_id": operation.operation_id},
+        )
+    region = regions.get(operation.region_refs[0])
+    if region is None or region.input_sha256 != input_sha256:
+        raise DFMError(
+            "objective_region_invalid",
+            "The objective operation region does not match the input geometry.",
+            {"operation_id": operation.operation_id},
+        )
+    included = {(item.kind, item.index) for item in region.geometry_refs}
+    excluded = {(item.kind, item.index) for item in region.excluded_geometry_refs}
+    selected = []
+    for item in mesh:
+        ref = item["geometry_ref"]
+        key = (str(ref["kind"]), int(ref["index"]))
+        keep = region.mode == "whole_model"
+        if region.mode == "topology_refs":
+            keep = key in included
+        elif region.mode == "topology_complement":
+            keep = key not in excluded
+        elif region.mode == "bbox" and region.bbox is not None:
+            minimum, maximum = region.bbox.minimum, region.bbox.maximum
+            triangles = []
+            triangle_ids = []
+            source_ids = item.get("triangle_ids") or list(
+                range(len(item["primitive"]["triangles"]))
+            )
+            for local_id, triangle in enumerate(item["primitive"]["triangles"]):
+                center = [
+                    sum(item["vertices"][index][axis] for index in triangle) / 3.0
+                    for axis in range(3)
+                ]
+                if all(minimum[axis] <= center[axis] <= maximum[axis] for axis in range(3)):
+                    triangles.append(triangle)
+                    triangle_ids.append(source_ids[local_id])
+            if triangles:
+                copied = dict(item)
+                copied["primitive"] = {**item["primitive"], "triangles": triangles}
+                copied["triangle_ids"] = triangle_ids
+                selected.append(copied)
+            continue
+        if keep:
+            selected.append(item)
+    if not selected:
+        raise DFMError(
+            "objective_region_empty",
+            "The objective region resolved to no model topology.",
+            {"operation_id": operation.operation_id, "region_id": region.region_id},
+        )
+    return selected
 
 
 def _mesh(shape: Any, occ: SimpleNamespace, input_sha256: str) -> list[dict[str, Any]]:
@@ -176,8 +306,10 @@ def _mesh(shape: Any, occ: SimpleNamespace, input_sha256: str) -> list[dict[str,
                     "vertices": vertices,
                     "triangles": triangles,
                 },
+                "triangle_ids": list(range(len(triangles))),
                 "geometry_ref": GeometryRef(
-                    "face", face_index, input_sha256
+                    "face", face_index, input_sha256,
+                    entity_id=f"face_{face_index:06d}",
                 ).to_dict(),
             }
         )
@@ -213,7 +345,9 @@ def _draft_field(
         primitive = item["primitive"]
         normal_by_vertex = _vertex_normals(item)
         sample_ids: dict[int, str] = {}
-        for vertex_id, point in enumerate(item["vertices"]):
+        used_vertices = sorted({index for triangle in primitive["triangles"] for index in triangle})
+        for vertex_id in used_vertices:
+            point = item["vertices"][vertex_id]
             uv = item["uvs"][vertex_id]
             normal = _surface_normal(item, uv)
             if normal is None:
@@ -236,10 +370,13 @@ def _draft_field(
                     "mesh_vertex_ref": {
                         "primitive_id": primitive["primitive_id"],
                         "vertex_id": vertex_id,
+                        "render_mesh_snapshot_id": primitive["render_mesh_snapshot_id"],
                     },
                 }
             )
-        for triangle_id, triangle in enumerate(primitive["triangles"]):
+        triangle_ids = item.get("triangle_ids") or list(range(len(primitive["triangles"])))
+        for local_triangle_id, triangle in enumerate(primitive["triangles"]):
+            triangle_id = triangle_ids[local_triangle_id]
             cells.append(
                 {
                     "cell_id": f"draft-{primitive['primitive_id']}-t{triangle_id}",
@@ -248,6 +385,7 @@ def _draft_field(
                     "triangle_ref": {
                         "primitive_id": primitive["primitive_id"],
                         "triangle_id": triangle_id,
+                        "render_mesh_snapshot_id": primitive["render_mesh_snapshot_id"],
                     },
                 }
             )
@@ -299,7 +437,9 @@ def _thickness_field(
     ordinal = 0
     for item in mesh:
         primitive = item["primitive"]
-        for triangle_id, triangle in enumerate(primitive["triangles"]):
+        triangle_ids = item.get("triangle_ids") or list(range(len(primitive["triangles"])))
+        for local_triangle_id, triangle in enumerate(primitive["triangles"]):
+            triangle_id = triangle_ids[local_triangle_id]
             ordinal += 1
             if (ordinal - 1) % stride:
                 continue
@@ -332,6 +472,7 @@ def _thickness_field(
                     "triangle_ref": {
                         "primitive_id": primitive["primitive_id"],
                         "triangle_id": triangle_id,
+                        "render_mesh_snapshot_id": primitive["render_mesh_snapshot_id"],
                     },
                 }
             )
@@ -391,15 +532,19 @@ def _field_and_measurement(
         "unit": unit,
         "scene_ref": SCENE_ARTIFACT_ID,
         "topology_map_ref": TOPOLOGY_ARTIFACT_ID,
+        "topology_snapshot_ref": samples[0]["geometry_ref"]["topology_snapshot_id"],
+        "render_mesh_snapshot_ref": cells[0]["triangle_ref"]["render_mesh_snapshot_id"],
         "interpolation": interpolation,
         "calculation_context": calculation_context or {},
         "samples": samples,
         "cells": cells,
         "quality": quality,
+        "feature_refs": list(operation.feature_refs),
+        "region_refs": list(operation.region_refs),
     }
     controlling = min(samples, key=lambda item: float(item["value"]))
     measurement = MeasurementRecord(
-        measurement_id=f"measurement-{quantity_id}",
+        measurement_id=f"measurement-{quantity_id}-{operation.operation_id.rsplit('.', 1)[-1]}",
         operation_id=operation.operation_id,
         calculator_id=operation.calculator_id,
         metric_id=operation.metric_ids[0],
@@ -414,6 +559,8 @@ def _field_and_measurement(
         quality=quality,
         diagnostics={**diagnostics, "minimum_point": controlling["point"]},
         field_refs=[field_id],
+        feature_refs=list(operation.feature_refs),
+        region_refs=list(operation.region_refs),
     )
     return field, measurement
 

@@ -32,6 +32,7 @@ DFM_PROJECT_SCHEMA = {
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["create", "add_input", "status", "confirm_fact", "list"]},
         "project_id": {"type": "string"}, "name": {"type": "string"},
+        "process": {"type": "string", "enum": ["injection", "die_casting"], "description": "Manufacturing intent selected by the user when creating the project."},
         "path": {"type": "string", "description": "Local path or Desktop @file: reference"},
         "fact_name": {"type": "string", "description": "Canonical names: material, model_units, pull_dir. Use only the user's explicit answer."}, "fact_value": {"description": "The user's explicit answer; never a model-inferred value."}, "idempotency_key": {"type": "string"},
     }, "required": ["action"]},
@@ -41,10 +42,10 @@ DFM_ANALYSIS_SCHEMA = {
     "name": "dfm_analysis",
     "description": "Plan and manage non-blocking DFM runs. Unavailable analyzers fail explicitly; never infer engineering findings from that status.",
     "parameters": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["plan", "start", "status", "cancel", "result"]},
+        "action": {"type": "string", "enum": ["discover", "plan", "start", "status", "cancel", "result"]},
         "project_id": {"type": "string"}, "plan_id": {"type": "string"}, "run_id": {"type": "string", "description": "Run ID returned by start. Always pass it to status, result, or cancel; if omitted, the service can infer it only when unambiguous."},
         "base_plan_id": {"type": "string", "description": "Invalidated plan to rebuild with only affected operations."},
-        "process": {"type": "string", "enum": ["injection", "die_casting"], "description": "Manufacturing process selected by the user. Omit only to keep the project's current/default process."},
+        "process": {"type": "string", "enum": ["injection", "die_casting"], "description": "Manufacturing process selected by the user. Pass it to discover before compiling the analysis plan."},
         "analyzer_key": {"type": "string", "enum": ["step", "parasolid", "drawing", "fusion"]},
         "idempotency_key": {"type": "string"},
     }, "required": ["action", "project_id"]},

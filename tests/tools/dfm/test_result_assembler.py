@@ -13,7 +13,7 @@ def test_shared_report_assembles_failed_evaluation_and_evidence(tmp_path, monkey
             "input_sha256": "a" * 64,
             "measurements": [{
                 "measurement_id": "measurement-draft",
-                "algorithm_version": "pythonocc-objective-v2",
+                "algorithm_version": "pythonocc-objective-v4",
                 "quality": {"backend": "pythonocc_demo", "certified": False},
             }],
         },

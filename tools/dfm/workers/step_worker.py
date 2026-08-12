@@ -32,7 +32,7 @@ from ..geometry.step.field_export import (
 from ..geometry.step.pipeline import validate_operations
 
 
-WORKER_VERSION = "pythonocc-objective-v2"
+WORKER_VERSION = "pythonocc-objective-v4"
 
 
 def _emit(event_type: str, **values: Any) -> None:
@@ -154,6 +154,7 @@ def _execute(request: LocalObjectiveWorkerRequest) -> ObjectiveResultManifest:
         run_id=task.run_id,
         input_sha256=input_sha256,
         operations=task.operations,
+        regions=task.regions,
     )
     _emit("progress", stage=STAGE_OBJECTIVE_MATERIALIZE, percent=65)
     measurement_path = output_dir / "measurements.json"

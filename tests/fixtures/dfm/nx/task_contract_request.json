@@ -5,26 +5,13 @@
   "metric_ids": ["dc.geometry.draft.fixed_half"],
   "required_quantities": ["draft_angle_deg"],
   "required_artifacts": ["scalar_field", "render_scene", "topology_map"],
+  "required_fact_names": ["pull_dir"],
+  "feature_refs": ["feature.screw_boss.003"],
+  "region_refs": ["region.fixed_half"],
   "arguments": {
     "pull_direction": {
       "value": [0, 0, 1],
       "source_ref": "fact:pull_direction.fixed_half",
-      "unit": null
-    },
-    "region": {
-      "value": {
-        "region_id": "region.fixed_half",
-        "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "coordinate_system": "model",
-        "mode": "bbox",
-        "semantic_label": "fixed half",
-        "source_refs": ["fact:parting.fixed_half"],
-        "version": "1",
-        "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "bbox": {"minimum": [0, 0, 0], "maximum": [10, 20, 30]},
-        "geometry_refs": []
-      },
-      "source_ref": "region:region.fixed_half@1",
       "unit": null
     }
   },

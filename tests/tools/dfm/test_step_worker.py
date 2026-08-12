@@ -20,7 +20,7 @@ def _request(
     input_path = tmp_path / "part.step"
     input_path.write_bytes(b"opaque-step")
     task = ObjectiveTaskRequest(
-        schema_version=2,
+        schema_version=4,
         run_id="run_worker",
         input_sha256=__import__("hashlib").sha256(b"opaque-step").hexdigest(),
         input_format="step",
@@ -53,7 +53,7 @@ def _request(
     )
     payload = LocalObjectiveWorkerRequest(
         schema_version=1,
-        backend_version="pythonocc-objective-v2",
+        backend_version="pythonocc-objective-v4",
         input_path=str(input_path),
         output_dir=str(tmp_path / "artifacts"),
         task=task,

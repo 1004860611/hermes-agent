@@ -26,7 +26,7 @@ def test_die_casting_topology_gate_has_process_specific_evaluation_and_finding(
             "measured",
             [],
             "pythonocc_topology",
-            "pythonocc-objective-v2",
+            "pythonocc-objective-v4",
             "c" * 64,
         )
     ]

@@ -37,6 +37,8 @@ def test_rule_binding_evaluates_nx_measurement_without_diagnostic_hint():
         method="nx_open_draft_analysis",
         algorithm_version="nx-draft-1",
         input_sha256="a" * 64,
+        feature_refs=["feature.screw_boss.003"],
+        region_refs=["region.screw_boss.003.outer_wall"],
     )
     plan = PlanRecord(
         "plan_1",
@@ -59,6 +61,8 @@ def test_rule_binding_evaluates_nx_measurement_without_diagnostic_hint():
                 "die_casting.min_draft.fixed_half",
                 ">=",
                 "minimum",
+                feature_refs=["feature.screw_boss.003"],
+                region_refs=["region.screw_boss.003.outer_wall"],
             )
         ],
         operations=[
@@ -76,6 +80,8 @@ def test_rule_binding_evaluates_nx_measurement_without_diagnostic_hint():
     assert evaluations[0].outcome == "fail"
     assert evaluations[0].expected == 1.5
     assert evaluations[0].rule_version == "3"
+    assert evaluations[0].feature_refs == ["feature.screw_boss.003"]
+    assert evaluations[0].region_refs == ["region.screw_boss.003.outer_wall"]
     assert provenance[evaluations[0].evaluation_id]["binding_id"] == (
         "binding.draft.fixed_half"
     )
@@ -110,14 +116,15 @@ def test_failed_scalar_field_renders_precise_evidence_and_finding(tmp_path):
     patch = geometry["failed_patches"][0]
     assert patch["sample_ids"] == ["sample-1", "sample-2"]
     assert patch["triangle_refs"] == [
-        {"primitive_id": "body-1", "triangle_id": 0}
+        {"primitive_id": "body-1", "triangle_id": 0, "render_mesh_snapshot_id": "mesh_910e4f54e289d3ee"}
     ]
     assert patch["geometry_refs"] == [
-        {"kind": "face", "index": 17, "input_sha256": "a" * 64}
+        {"kind": "face", "index": 17, "input_sha256": "a" * 64, "topology_snapshot_id": "topology_ba5565e33756d25", "entity_id": "face_000017"}
     ]
     assert patch["surface_normal"] == pytest.approx(
         [0.9998871487923587, 0, 0.015022971739553945]
     )
+    assert patch["feature_refs"] == ["feature.screw_boss.003"]
 
     records_artifact = next(
         item for item in generated if item.kind == "evidence_records"
@@ -129,6 +136,7 @@ def test_failed_scalar_field_renders_precise_evidence_and_finding(tmp_path):
         "evaluation-measurement_draft_fixed_half_min"
     ]
     assert records["records"][0]["artifact_ref"] == image_artifact.artifact_id
+    assert records["records"][0]["feature_refs"] == ["feature.screw_boss.003"]
     assert [item["render"]["view_id"] for item in records["records"]] == [
         "pull",
         "surface",
@@ -156,6 +164,7 @@ def test_failed_scalar_field_renders_precise_evidence_and_finding(tmp_path):
         item["evidence_id"] for item in records["records"]
     ]
     assert finding.measurement_ids == ["measurement_draft_fixed_half_min"]
+    assert finding.feature_refs == ["feature.screw_boss.003"]
 
 
 def test_field_evidence_rejects_cross_run_scene(tmp_path):
@@ -170,6 +179,20 @@ def test_field_evidence_rejects_cross_run_scene(tmp_path):
         FieldEvidenceEngine().materialize(tmp_path, "run_1", artifacts)
 
     assert exc_info.value.code == "evidence_field_invalid"
+
+
+def test_field_evidence_rejects_retriangulated_scene_snapshot(tmp_path):
+    artifacts = _write_pipeline_inputs(tmp_path)
+    scene_artifact = next(item for item in artifacts if item.kind == "render_scene")
+    scene_path = tmp_path / scene_artifact.relative_path
+    scene = json.loads(scene_path.read_text(encoding="utf-8"))
+    scene["render_mesh_snapshot"]["render_mesh_snapshot_id"] = "mesh_other"
+    scene_path.write_text(json.dumps(scene), encoding="utf-8")
+
+    with pytest.raises(DFMError) as exc_info:
+        FieldEvidenceEngine().materialize(tmp_path, "run_1", artifacts)
+
+    assert exc_info.value.code == "evidence_snapshot_mismatch"
 
 
 @pytest.mark.parametrize(
@@ -246,6 +269,8 @@ def _write_pipeline_inputs(tmp_path: Path) -> list[ArtifactRecord]:
                 "operation_id": "draft.fixed_half",
                 "metric_id": "dc.geometry.draft.fixed_half",
                 "measurement_ids": ["measurement_draft_fixed_half_min"],
+                "feature_refs": ["feature.screw_boss.003"],
+                "region_refs": ["region.fixed_half"],
                 "rule_id": "die_casting.min_draft.fixed_half",
                 "rule_version": "3",
                 "rule_hash": "c" * 64,

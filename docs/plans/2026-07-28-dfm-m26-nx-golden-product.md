@@ -14,22 +14,27 @@ M2.6 验证的是“第一条业务纵向闭环”，不是仅验证 NX 能打�
 
 | 阶段 | 范围 | 完成后能声明什么 | 当前状态 |
 | --- | --- | --- | --- |
-| M2.6-A 当前 Scope 最小闭环 | `injection.wall-draft@2.0.0`；ABS、mm、一个开模方向、壁厚和拔模角；NX 同时支持 STEP/Parasolid | NX 与 Hermes 的生产形态模块已经真实端到端打通 | Hermes 基线完成；NX Server/插件待实现 |
-| M2.6-B 指标逐项扩展 | 建立独立压铸 Scope/RuleBinding，按追溯矩阵逐项增加方向、区域和 Calculator | 已加入的每一项指标各自形成完整、可回归闭环 | 待 M2.6-A 通过后推进 |
+| M2.6-A 发现驱动最小闭环 | 两阶段 Plan、Observation/Feature/Region/Fusion 契约、实际三维特征识别；`injection.wall-draft@3.0.0` 壁厚/拔模角；NX 同时支持 STEP/Parasolid | 发现、规则选择、区域计算与证据的生产形态已经真实端到端打通 | Hermes 两阶段骨架与 ordinary fallback 已完成；真实 Recognizer、NX Server/插件待实现 |
+| M2.6-B 特征规则与指标逐项扩展 | 主壁/螺柱/筋/Boss 区域化壁厚和拔模角、根部 R 角，再按追溯矩阵扩展其它指标；压铸使用独立 Scope | 已加入的每一项特征/指标各自形成完整、可回归闭环 | 待 M2.6-A 通过后推进 |
 | M2.6-C 黄金产品全范围 | 全部批准指标、真实生产 Run Bundle、工程师人工核对与签字 | M2.6 黄金产品第一条真实 DFM 纵向闭环完成 | 未开始 |
 
-M2.6-A 使用注塑正式 Scope 是为了冻结数据流和模块职责，不把注塑阈值当成压铸工程
-规则。进入 M2.6-B 前必须建立独立压铸 Scope，未经工程审批不得复制 ABS 壁厚阈值或
-注塑拔模角阈值。
+M2.6-A 使用注塑正式 Scope 是为了冻结发现驱动数据流和模块职责。M2.6-B 先完成注塑
+特征区域规则；黄金产品需要压铸时必须建立独立压铸 Scope，未经工程审批不得复制 ABS
+壁厚阈值或注塑拔模角阈值。
 
 ## 2. 生产链路与人工验收边界
 
 ### 2.1 生产 DFM 链路
 
 ```text
-用户上传 STEP 或 Parasolid x_t
-→ Hermes 项目和确认事实
-→ Rule Set / Plan
+用户上传 STEP/Parasolid 和可选图纸
+→ Hermes 项目与 DiscoveryPlan
+→ 2D Observation 占位提取
+→ 识别前事实门：process/model_units 及已启用 Recognizer 依赖
+→ 3D Feature Recognizer；当前 NX/MTK 占位时使用 ordinary 全模型区域
+→ FeatureSet + FeatureRegion + Fusion/分析前 Clarification
+→ immutable Discovery Snapshot + Confirmed Facts
+→ Rule Set / AnalysisPlan
 → HttpNXBackendClient
 → NX Server / NX C++ Plugin
 → measurements.json + scalar_field + render_scene + topology_map
@@ -37,7 +42,7 @@ M2.6-A 使用注塑正式 Scope 是为了冻结数据流和模块职责，不把
 → evaluations.json
 → Hermes FieldEvidenceEngine
 → evidence_geometry.json + PNG + evidence_records.json
-→ evaluated Finding / Report
+→ feature-aware Finding / Report
 → 只读 Run Bundle
 ```
 
@@ -191,19 +196,20 @@ M2.6 业务 Calculator 开发开始前必须完成黄金产品追溯矩阵和
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 示例：局部薄壁 | `die_casting.min_wall` | `thickness_mm` | `measure_wall_thickness` | NX | `measurement_*` | `evaluation_*` | `finding_*` | region/image |
 
-该矩阵决定 M2.6-B/C 的插件和规则开发范围。M2.6-A 固定只实现当前正式 Scope 所需的
-`load_geometry`、`inspect_topology`、`measure_wall_thickness` 和 `measure_draft`；M2.6-B
-以后每次只选已完成追溯定义的一项或一组紧密关联指标，不以“尽可能多做功能”代替闭环验收。
+该矩阵决定 M2.6-B/C 的插件和规则开发范围。M2.6-A 在当前正式 Scope 之外必须增加
+`recognize_molding_features`，输出 FeatureSet/RegionSet，再执行 `measure_wall_thickness` 和
+`measure_draft`；M2.6-B 增加 `measure_fillet_radius` 及其它指标。以后每次只选已完成追溯
+定义的一项或一组紧密关联指标，不以“尽可能多做功能”代替闭环验收。
 
 ## 6. 生产模块工作包
 
 ### WP0：M2.6 数据契约联合评审
 
-- 冻结 Rule/Metric/Calculator/Operation/Measurement/Region ID 词典；
-- M2.6-A 固定使用 `load_geometry`、`inspect_topology`、`measure_draft` 和
+- 冻结 Observation/Feature/Region/FusionLink、Rule/Metric/Calculator/Operation/Measurement ID 词典；
+- M2.6-A 固定使用 `load_geometry`、`inspect_topology`、`recognize_molding_features`、`measure_draft` 和
   `measure_wall_thickness`；`inspect_undercut` 等 ID 在对应 M2.6-B 增量评审后加入；
-- 评审唯一 Objective Task/Result Schema 2 的 `calculator_id`、`metric_ids`、`required_quantities`、`required_artifacts` 和已解析 `arguments`；
-- 评审 RuleBinding、结构化 Calculator capability、Region、Measurement、ScalarField、RenderScene、TopologyMap 和 EvidenceRecord 回链字段；
+- 评审唯一 Objective Task/Result Schema 4 的 `calculator_id`、`metric_ids`、`required_quantities`、`required_artifacts`、`required_fact_names`、冻结 Region 选择器和已解析 `arguments`；
+- 评审 DiscoveryPlan/AnalysisPlan、Discovery Snapshot、RuleBinding、结构化 Calculator capability、Observation、Feature、Region、FusionLink、Measurement、ScalarField、RenderScene、TopologyMap 和 EvidenceRecord 回链字段；
 - Hermes 与 NX Server/C++ 使用同一组 JSON fixture 做双向契约测试；
 - NX Server 和 Hermes 只实现同一份生产数据契约，不维护 demo 双轨。
 
@@ -212,24 +218,29 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 
 ### WP1：产品事实和初始 Rule Set
 
-- M2.6-A 复用 `injection.wall-draft@2.0.0` 及其 ABS/mm/单开模方向事实，不增加第二份
+- M2.6-A 复用 `injection.wall-draft@3.0.0` 及其 ABS/mm/单开模方向事实，不增加第二份
   Demo Rule Set；
-- M2.6-B 开始前建立独立压铸 Rule Set，不复制注塑阈值；
+- M2.6-B 先增加注塑 Feature/Region 适用条件；需要压铸时建立独立压铸 Rule Set，不复制注塑阈值；
 - 将工程师确认的黄金产品事实写入现有 Fact/Clarification 契约；
 - 保存规则 ID、version、source、operator、unit、priority 和 hash；
 - 对黄金产品形成 Effective Rule Set 快照；
 - 缺失规则返回 `rule_not_found`，不由 LLM 补值。
 
-### WP2：产品 Plan
+### WP2：DiscoveryPlan、融合与 AnalysisPlan
 
-- M2.6-A 使用当前正式 Scope 的壁厚和单方向拔模 Plan，STEP/Parasolid 只改变输入格式和
+- DiscoveryPlan 先运行可选二维 Observation Provider，再确认已启用 Recognizer 的阻塞事实，然后执行三维特征发现；不改变识别路线的工作允许并行；
+- M2.6 的二维 Provider 允许保持 `not_implemented`，但固定 Observation 输出和占位伪代码；
+- 三维 Recognizer 必须真实输出主壁、螺柱、筋、Boss、圆角 Feature/Region；
+- Fusion 将 Observation 与 FeatureRegion 关联，歧义或冲突进入 Clarification；
+- 冻结 Discovery Snapshot 后才允许 RuleSelector 和 AnalysisPlan 编译；
+- M2.6-A 使用当前正式 Scope 的壁厚和单方向拔模 AnalysisPlan，STEP/Parasolid 只改变输入格式和
   Backend loader，不改变 Calculator/Metric ID；
 - M2.6-B 的 required metrics 与 calculator 一一映射；
 - 生成依赖有序 calculator DAG；
 - 六方向任务在对应增量中分别使用唯一 Operation ID，并通过 `arguments` 引用方向和区域；
 - 所需 calculator 必须在 NX capability 中为 `certified`；
 - 每个任务必须通过 Calculator 参数、输出 Quantity/Artifact 和认证范围校验；
-- Plan 使用 RuleBinding 显式连接 Operation/Metric/Quantity 与 Rule，不依赖 NX diagnostics；
+- AnalysisPlan 使用 RuleBinding 显式连接 Operation/Metric/Quantity/Feature/Region 与 Rule，不依赖 NX diagnostics；
 - Plan 保存输入哈希、事实、规则、Backend 和版本快照；
 - 不将黄金产品文件名/哈希写成长期业务分支，Plan 来源必须是规则和事实。
 
@@ -249,8 +260,8 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 - `load_geometry` 对 STEP/Parasolid 建立统一的规范化 B-Rep 输入语义，保留原始输入 SHA256
   和 mm 单位约束；
 - `inspect_topology` 作为基础门；
-- M2.6-A 先实现并认证壁厚和拔模角；M2.6-B 再按追溯矩阵逐项实现后续 calculator；
-- 只输出 Measurement、几何引用、quality、diagnostics，以及中性的 ScalarField、RenderScene 和 TopologyMap；
+- M2.6-A 实现并认证 `recognize_molding_features`、壁厚和拔模角；M2.6-B 增加根部 R 角并按追溯矩阵逐项实现后续 calculator；
+- Recognizer 只输出 FeatureSet/RegionSet；Calculator 只输出 Measurement、Feature/Region/几何引用、quality、diagnostics，以及中性的 ScalarField、RenderScene 和 TopologyMap；
 - 不输出失败区域、pass/fail 或截图；
 - 支持取消安全点和进度；
 - 输出插件/NX/calculator 版本；
@@ -260,12 +271,12 @@ WP0 不依赖真实 P0 数值算法，可以与黄金产品事实冻结、NX Ser
 
 - NX 只返回 `producer_contract=measurement_only`；
 - EvaluationEngine 使用 RuleBinding 和 Effective Rule Set 生成 `evaluations.json`；
-- FieldEvidenceEngine 只对失败 Evaluation 筛选场数据、连接失败 Cell、生成局部 Patch 和截图；
+- FieldEvidenceEngine 只对失败 Evaluation 筛选场数据，与 FeatureRegion 求交、连接失败 Cell、生成局部 Patch 和截图；
 - `materialize_evaluated_findings()` 使用 Evaluation 与 EvidenceRecord 生成精确引用；
 - PythonOCC demo 与 NX production 共用 Hermes 的 Evaluation、Evidence、Finding 和报告链；Backend 只提供客观 Measurement 与中性几何 Artifact；
 - 规则变化只重跑 Evaluation/Evidence/Finding/Report；输入、Backend 版本、Operation 参数和
   依赖指纹一致时允许复用客观 Operation Artifact；
-- 报告展示事实、规则、实际值、期望值、结果、区域和未解决项；
+- 报告展示事实、特征、区域、规则、实际值、期望值、结果和未解决项；
 - 生产链不读取 Ground Truth。
 
 ### WP6：只读 Run Bundle
@@ -276,6 +287,11 @@ Run Bundle 是正式生产 Run 已有数据的不可变导出/集合，不含工
 run-bundle/
 ├── bundle_manifest.json
 ├── input_identity.json             # hash/format，不必复制受限原文件
+├── observations.json
+├── features.json
+├── regions.json
+├── fusion_links.json
+├── discovery_snapshot.json
 ├── confirmed_facts.json
 ├── effective_rule_set.json
 ├── plan.json
@@ -392,21 +408,23 @@ approved Ground Truth version
 
 ### 11.1 M2.6-A 完成定义
 
-1. Production Task Contract Schema 2 通过 Hermes/NX 联合评审；
+1. Observation/Feature/Region/FusionLink、两阶段 Plan 和 Production Task Contract Schema 4 通过 Hermes/NX 联合评审；
 2. NX Server/Worker 真实支持 STEP 和 Parasolid，并按格式声明 capability；
-3. 当前正式 `injection.wall-draft@2.0.0` 不复制、不分叉地生成公共 ObjectiveTask；
-4. NX 真实完成 topology、壁厚和拔模角 Calculator，返回完整 ObjectiveResultManifest、
+3. DiscoveryPlan 实际识别主壁、螺柱、筋、Boss 和圆角，并冻结 FeatureSet/RegionSet；
+4. 当前正式 `injection.wall-draft@3.0.0` 从 Discovery Snapshot 生成 AnalysisPlan；
+5. NX 真实完成 topology、壁厚和拔模角 Calculator，返回完整 ObjectiveResultManifest、
    Measurement、ScalarField、RenderScene 和 TopologyMap；
-5. Hermes 使用现有统一链生成 Evaluation、三视角 Evidence、Finding 和报告；
-6. 同源 STEP/Parasolid 配对样件均完成端到端，错误输入、跨 Run Artifact、取消和哈希负例通过；
-7. production NX 不自动降级到 PythonOCC，demo PythonOCC 回归通过；
-8. 形成可复核 Run Bundle。此时只能声明“当前 Scope 的 NX 最小生产闭环完成”。
+6. Hermes 使用统一链生成带 Feature/Region 回链的 Evaluation、三视角 Evidence、Finding 和报告；
+7. 同源 STEP/Parasolid 配对样件均完成端到端，错误输入、过期快照、跨 Run Artifact、取消和哈希负例通过；
+8. production NX 不自动降级到 PythonOCC，demo PythonOCC 回归通过；
+9. 形成含发现快照的可复核 Run Bundle。此时只能声明“发现驱动的当前 Scope NX 最小生产闭环完成”。
 
 ### 11.2 M2.6-B 单项增量完成定义
 
-每个新增指标都必须拥有批准的 Fact/Rule/Metric/Calculator/Operation/Measurement/
-Evaluation/Finding/Evidence 追溯关系、独立压铸规则来源、真实 NX Calculator 认证、局部
-证据和回归样件。未满足这些条件的候选指标不得进入黄金产品生产 Plan。
+每个新增特征/指标都必须拥有批准的 Observation/Feature/Region/Fact/Rule/Metric/
+Calculator/Operation/Measurement/Evaluation/Finding/Evidence 追溯关系、真实 NX Recognizer/
+Calculator 认证、局部证据和回归样件。压铸指标还必须拥有独立压铸规则来源。未满足这些
+条件的候选指标不得进入黄金产品 AnalysisPlan。
 
 ### 11.3 M2.6-C 最终完成定义
 

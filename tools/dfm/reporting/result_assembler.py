@@ -67,6 +67,22 @@ def materialize_result_reports(
             item["image"] for item in evidence_by_evaluation.get(evaluation_id, [])
         ]
         quality = linked[0].get("quality", {}) if linked else {}
+        feature_refs = sorted(
+            {
+                str(ref)
+                for item in linked
+                for ref in item.get("feature_refs", [])
+            }
+            | {str(ref) for ref in evaluation.get("feature_refs", [])}
+        )
+        region_refs = sorted(
+            {
+                str(ref)
+                for item in linked
+                for ref in item.get("region_refs", [])
+            }
+            | {str(ref) for ref in evaluation.get("region_refs", [])}
+        )
         issues.append(
             {
                 "id": evaluation_id,
@@ -95,6 +111,8 @@ def materialize_result_reports(
                 },
                 "images": images,
                 "image": images[0] if images else None,
+                "feature_refs": feature_refs,
+                "region_refs": region_refs,
                 "recommendation": "Correct the highlighted geometry and rerun the same plan.",
             }
         )

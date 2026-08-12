@@ -22,6 +22,7 @@ from tools.dfm.contracts import (
     PlanRecord,
     ResolvedArgument,
     RuleBinding,
+    RegionRecord,
 )
 from tools.dfm.errors import DFMError
 
@@ -69,7 +70,7 @@ class FakeNXClient:
 
     def result(self, job_id):
         return ObjectiveResultManifest(
-            schema_version=2,
+            schema_version=4,
             producer_version="fake-nx-2",
             run_id="run_1",
             input_sha256="a" * 64,
@@ -138,7 +139,7 @@ class TaskContractNXClient(FakeNXClient):
             for artifact_id, kind, filename in definitions
         ]
         return ObjectiveResultManifest(
-            schema_version=2,
+            schema_version=4,
             producer_version="fake-nx-2",
             run_id="run_1",
             input_sha256="a" * 64,
@@ -192,14 +193,14 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
     jsonschema = pytest.importorskip("jsonschema")
     operation = json.loads((FIXTURE_ROOT / "task_contract_request.json").read_text())
     request = {
-        "schema_version": 2,
+        "schema_version": 4,
         "input": {
             "input_id": "input_1",
             "sha256": "a" * 64,
             "format_id": "parasolid_xt",
         },
         "task": {
-            "schema_version": 2,
+            "schema_version": 4,
             "run_id": "run_1",
             "input_sha256": "a" * 64,
             "input_format": "parasolid_xt",
@@ -207,6 +208,7 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
             "scope_id": "die_casting.golden-product",
             "scope_version": "1.0.0",
             "operations": [operation],
+            "regions": [json.loads((FIXTURE_ROOT / "task_contract_region.json").read_text())],
         },
     }
     capability = json.loads(
@@ -234,7 +236,7 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
             ).to_dict()
         )
     result_manifest = {
-        "schema_version": 2,
+        "schema_version": 4,
         "producer_version": "nx-golden-fixture-2",
         "run_id": "run_1",
         "input_sha256": "a" * 64,
@@ -268,7 +270,7 @@ def test_nx_contract_fixtures_match_formal_json_schemas():
         jsonschema.Draft202012Validator(schema).validate(payload)
 
     region_schema = json.loads((SCHEMA_ROOT / "region.schema.json").read_text())
-    region = operation["arguments"]["region"]["value"]
+    region = json.loads((FIXTURE_ROOT / "task_contract_region.json").read_text())
     jsonschema.Draft202012Validator(region_schema).validate(region)
     binding_schema = json.loads(
         (SCHEMA_ROOT / "rule_binding.schema.json").read_text()
@@ -290,7 +292,7 @@ def test_http_client_wraps_common_task_without_mutating_it(tmp_path, monkeypatch
     input_path.write_bytes(b"parasolid")
     digest = hashlib.sha256(input_path.read_bytes()).hexdigest()
     task = ObjectiveTaskRequest(
-        2,
+        4,
         "run_1",
         digest,
         "parasolid_xt",
@@ -298,6 +300,7 @@ def test_http_client_wraps_common_task_without_mutating_it(tmp_path, monkeypatch
         "injection.wall-draft",
         "2.0.0",
         [PlanOperation("geometry.load", "load_geometry")],
+        [],
     ).to_dict()
     calls = []
     client = HttpNXBackendClient("https://nx.example")
@@ -358,15 +361,21 @@ def test_parasolid_analyzer_uses_production_contract_for_metric_scoped_operation
             metric_ids=["dc.geometry.draft.fixed_half"],
             required_quantities=["draft_angle_deg"],
             required_artifacts=_task_artifacts(),
+            required_fact_names=["pull_dir"],
+            feature_refs=["feature.screw_boss.003"],
+            region_refs=["region.fixed_half"],
             arguments=_task_arguments(),
         )
+    )
+    context.plan.regions.append(
+        _task_region()
     )
 
     analyzer = ParasolidAnalyzer(client, poll_interval_seconds=0)
     artifacts = analyzer.run(context, CancellationToken())
 
     request = client.submitted[0][0]
-    assert request["schema_version"] == 2
+    assert request["schema_version"] == 4
     assert request["operations"][-1] == json.loads(
         (FIXTURE_ROOT / "task_contract_request.json").read_text()
     )
@@ -392,7 +401,10 @@ def test_parasolid_capability_rejects_arguments_outside_certification_scope(
             metric_ids=["dc.geometry.draft.fixed_half"],
             required_quantities=["draft_angle_deg"],
             required_artifacts=_task_artifacts(),
-            arguments={"pull_direction": _task_arguments()["pull_direction"]},
+            required_fact_names=["pull_dir"],
+            feature_refs=["feature.screw_boss.003"],
+            region_refs=["region.fixed_half"],
+            arguments={},
         )
     )
 
@@ -400,7 +412,8 @@ def test_parasolid_capability_rejects_arguments_outside_certification_scope(
 
     assert capability.status.value == "not_implemented"
     assert capability.details["incompatible_operation_contracts"][0]["reasons"] == [
-        "required_arguments"
+        "required_arguments",
+        "region_unresolved",
     ]
 
 
@@ -419,8 +432,14 @@ def test_parasolid_analyzer_rejects_measurement_linked_to_wrong_metric(tmp_path)
             metric_ids=["dc.geometry.draft.fixed_half"],
             required_quantities=["draft_angle_deg"],
             required_artifacts=_task_artifacts(),
+            required_fact_names=["pull_dir"],
+            feature_refs=["feature.screw_boss.003"],
+            region_refs=["region.fixed_half"],
             arguments=_task_arguments(),
         )
+    )
+    context.plan.regions.append(
+        _task_region()
     )
 
     with pytest.raises(DFMError) as exc_info:
@@ -437,6 +456,12 @@ def _task_arguments():
         key: ResolvedArgument.from_dict(value)
         for key, value in operation["arguments"].items()
     }
+
+
+def _task_region():
+    return RegionRecord.from_dict(
+        json.loads((FIXTURE_ROOT / "task_contract_region.json").read_text())
+    )
 
 
 def _task_artifacts():

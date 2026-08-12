@@ -17,7 +17,7 @@ from ..contracts import (
     RuleBinding,
 )
 from ..errors import DFMError
-from .base import ProcessPlan
+from .base import FactRequirement, ProcessPlan
 
 
 _TRUSTED_SOURCES = {"project_fact", "user_confirmed"}
@@ -25,7 +25,7 @@ _TRUSTED_SOURCES = {"project_fact", "user_confirmed"}
 
 class InjectionProcessAdapter:
     key = "injection"
-    version = "injection-wall-draft-v2"
+    version = "injection-wall-draft-v3"
 
     def __init__(self, scope_path: Path | None = None) -> None:
         self.scope_path = scope_path or (
@@ -44,11 +44,19 @@ class InjectionProcessAdapter:
         )
 
     def required_facts(self) -> Mapping[str, str]:
-        return {
-            "material": "What resin/material grade will be used for this part?",
-            "pull_dir": "What is the confirmed mold pull direction as [x, y, z]?",
-            "model_units": "What length unit was used to author the STEP model?",
-        }
+        return {item.name: item.question for item in self.fact_requirements()}
+
+    def fact_requirements(self) -> tuple[FactRequirement, ...]:
+        scope = self._load_scope()
+        return tuple(
+            FactRequirement(
+                name=str(item["name"]),
+                question=str(item["question"]),
+                phase=str(item["phase"]),
+                required_by=tuple(str(value) for value in item["required_by"]),
+            )
+            for item in scope["fact_requirements"]
+        )
 
     def compile(
         self,
@@ -148,6 +156,9 @@ class InjectionProcessAdapter:
                     metric_ids=operation.metric_ids,
                     required_quantities=operation.required_quantities,
                     required_artifacts=operation.required_artifacts,
+                    required_fact_names=operation.required_fact_names,
+                    feature_refs=operation.feature_refs,
+                    region_refs=operation.region_refs,
                     arguments=arguments,
                     algorithm_options=algorithm_options,
                 )
@@ -178,9 +189,11 @@ class InjectionProcessAdapter:
             ) from exc
         if (
             scope.get("scope_id") != "injection.wall-draft"
-            or scope.get("version") != "2.0.0"
+            or scope.get("version") != "3.0.0"
             or scope.get("process") != self.key
+            or not isinstance(scope.get("fact_requirements"), list)
             or not isinstance(scope.get("parameters"), dict)
+            or not isinstance(scope.get("rule_profiles"), dict)
             or not isinstance(scope.get("operations"), list)
             or not isinstance(scope.get("rule_bindings"), list)
         ):

@@ -13,7 +13,7 @@ from .errors import DFMError
 
 MANIFEST_SCHEMA_VERSION = 1
 WORKER_SCHEMA_VERSION = 1
-OBJECTIVE_SCHEMA_VERSION = 2
+OBJECTIVE_SCHEMA_VERSION = 4
 
 STAGE_QUEUED = "queued"
 STAGE_STARTING = "starting"
@@ -182,12 +182,89 @@ class FeatureRecord:
     kind: str
     source_refs: list[str]
     confidence: float
+    input_sha256: str = ""
+    region_refs: list[str] = field(default_factory=list)
+    properties: dict[str, Any] = field(default_factory=dict)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
+    recognizer: str = ""
+    recognizer_version: str = ""
+    status: str = "detected"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "FeatureRecord":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class ObservationRecord:
+    """A traceable document/model observation that is not yet a confirmed fact."""
+
+    observation_id: str
+    input_id: str
+    kind: str
+    value: Any
+    source_refs: list[str]
+    confidence: float
+    status: str = "candidate"
+    unit: str | None = None
+    region_refs: list[str] = field(default_factory=list)
+    feature_refs: list[str] = field(default_factory=list)
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ObservationRecord":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class FusionLinkRecord:
+    """A reviewable link from an observation to 3D features and regions."""
+
+    fusion_link_id: str
+    observation_refs: list[str]
+    feature_refs: list[str]
+    region_refs: list[str]
+    confidence: float
+    status: str
+    method: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "FusionLinkRecord":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class DiscoverySnapshotRecord:
+    """Immutable identity of the observations and geometry used to compile rules."""
+
+    snapshot_id: str
+    created_at: str
+    input_hashes: dict[str, str]
+    observation_refs: list[str]
+    feature_refs: list[str]
+    region_refs: list[str]
+    fusion_link_refs: list[str]
+    provider_versions: dict[str, str]
+    content_sha256: str
+    status: str = "frozen"
+    process: str = ""
+    confirmed_fact_refs: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "DiscoverySnapshotRecord":
         return cls(**payload)
 
 
@@ -210,6 +287,9 @@ class PlanRecord:
     parent_plan_id: str | None = None
     invalidated_by: str | None = None
     affected_operation_ids: list[str] = field(default_factory=list)
+    phase: str = "analysis"
+    discovery_snapshot_refs: list[str] = field(default_factory=list)
+    regions: list["RegionRecord"] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -233,9 +313,18 @@ class PlanRecord:
             "parent_plan_id": self.parent_plan_id,
             "invalidated_by": self.invalidated_by,
             "affected_operation_ids": list(self.affected_operation_ids),
+            "phase": self.phase,
+            "discovery_snapshot_refs": list(self.discovery_snapshot_refs),
+            "regions": [item.to_dict() for item in self.regions],
         }
 
     def validate(self) -> None:
+        if self.phase not in {"discovery", "analysis"}:
+            raise DFMError(
+                "plan_phase_invalid",
+                "DFM plans must be either discovery or analysis plans.",
+                {"plan_id": self.plan_id, "phase": self.phase},
+            )
         binding_ids = [item.binding_id for item in self.rule_bindings]
         if len(binding_ids) != len(set(binding_ids)):
             raise DFMError(
@@ -243,6 +332,17 @@ class PlanRecord:
                 "Plan rule binding IDs must be unique.",
             )
         operations = {item.operation_id: item for item in self.operations}
+        regions = {item.region_id: item for item in self.regions}
+        if len(regions) != len(self.regions):
+            raise DFMError("plan_region_invalid", "Plan region IDs must be unique.")
+        for operation in self.operations:
+            missing = sorted(set(operation.region_refs) - set(regions))
+            if missing:
+                raise DFMError(
+                    "plan_region_invalid",
+                    "A plan operation references an unresolved region.",
+                    {"operation_id": operation.operation_id, "region_refs": missing},
+                )
         for binding in self.rule_bindings:
             binding.validate()
             operation = operations.get(binding.operation_id)
@@ -271,6 +371,9 @@ class PlanRecord:
         ]
         values["operations"] = [
             PlanOperation.from_dict(value) for value in values.get("operations", [])
+        ]
+        values["regions"] = [
+            RegionRecord.from_dict(value) for value in values.get("regions", [])
         ]
         plan = cls(**values)
         plan.validate()
@@ -303,6 +406,9 @@ class RuleBinding:
     rule_id: str
     operator: str
     aggregation: str
+    required_fact_names: list[str] = field(default_factory=list)
+    feature_refs: list[str] = field(default_factory=list)
+    region_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -346,6 +452,26 @@ class RuleBinding:
                 "Rule binding aggregation is unsupported.",
                 {"binding_id": self.binding_id, "aggregation": self.aggregation},
             )
+        if len(self.required_fact_names) != len(set(self.required_fact_names)) or any(
+            not isinstance(name, str) or not name for name in self.required_fact_names
+        ):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule binding required_fact_names must contain unique names.",
+                {"binding_id": self.binding_id},
+            )
+        for name, refs in (
+            ("feature_refs", self.feature_refs),
+            ("region_refs", self.region_refs),
+        ):
+            if len(refs) != len(set(refs)) or any(
+                not isinstance(ref, str) or not ref for ref in refs
+            ):
+                raise DFMError(
+                    "plan_rule_binding_invalid",
+                    f"Rule binding {name} must contain unique stable identities.",
+                    {"binding_id": self.binding_id},
+                )
 
 
 @dataclass(frozen=True)
@@ -358,6 +484,9 @@ class PlanOperation:
     required_artifacts: list[str] = field(default_factory=list)
     arguments: dict[str, "ResolvedArgument"] = field(default_factory=dict)
     algorithm_options: dict[str, "ResolvedArgument"] = field(default_factory=dict)
+    required_fact_names: list[str] = field(default_factory=list)
+    feature_refs: list[str] = field(default_factory=list)
+    region_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -368,6 +497,9 @@ class PlanOperation:
             "metric_ids": list(self.metric_ids),
             "required_quantities": list(self.required_quantities),
             "required_artifacts": list(self.required_artifacts),
+            "required_fact_names": list(self.required_fact_names),
+            "feature_refs": list(self.feature_refs),
+            "region_refs": list(self.region_refs),
             "arguments": {
                 key: value.to_dict() for key, value in self.arguments.items()
             },
@@ -400,6 +532,26 @@ class PlanOperation:
                 "Plan operation required_artifacts must be unique.",
                 {"operation_id": self.operation_id},
             )
+        if len(self.required_fact_names) != len(set(self.required_fact_names)) or any(
+            not isinstance(name, str) or not name for name in self.required_fact_names
+        ):
+            raise DFMError(
+                "plan_operation_invalid",
+                "Plan operation required_fact_names must contain unique names.",
+                {"operation_id": self.operation_id},
+            )
+        for name, refs in (
+            ("feature_refs", self.feature_refs),
+            ("region_refs", self.region_refs),
+        ):
+            if len(refs) != len(set(refs)) or any(
+                not isinstance(ref, str) or not ref for ref in refs
+            ):
+                raise DFMError(
+                    "plan_operation_invalid",
+                    f"Plan operation {name} must contain unique stable identities.",
+                    {"operation_id": self.operation_id},
+                )
         for values in (self.arguments, self.algorithm_options):
             for name, argument in values.items():
                 if not isinstance(name, str) or not name or not isinstance(
@@ -475,12 +627,19 @@ class RegionRecord:
     content_sha256: str
     bbox: BoundingBox | None = None
     geometry_refs: list["GeometryRef"] = field(default_factory=list)
+    excluded_geometry_refs: list["GeometryRef"] = field(default_factory=list)
+    role: str = ""
+    feature_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        self.validate()
         return {
             **asdict(self),
             "bbox": self.bbox.to_dict() if self.bbox else None,
             "geometry_refs": [item.to_dict() for item in self.geometry_refs],
+            "excluded_geometry_refs": [
+                item.to_dict() for item in self.excluded_geometry_refs
+            ],
         }
 
     @classmethod
@@ -491,16 +650,73 @@ class RegionRecord:
         values["geometry_refs"] = [
             GeometryRef.from_dict(item) for item in values.get("geometry_refs", [])
         ]
-        return cls(**values)
+        values["excluded_geometry_refs"] = [
+            GeometryRef.from_dict(item)
+            for item in values.get("excluded_geometry_refs", [])
+        ]
+        region = cls(**values)
+        region.validate()
+        return region
+
+    def validate(self) -> None:
+        if self.mode not in {
+            "bbox",
+            "topology_refs",
+            "topology_complement",
+            "whole_model",
+        }:
+            raise DFMError(
+                "region_invalid", "Region selection mode is unsupported.",
+                {"region_id": self.region_id, "mode": self.mode},
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", self.input_sha256):
+            raise DFMError("region_invalid", "Region input identity is invalid.")
+        if self.mode == "bbox" and self.bbox is None:
+            raise DFMError("region_invalid", "A bbox region requires bounds.")
+        if self.mode == "topology_refs" and not self.geometry_refs:
+            raise DFMError(
+                "region_invalid", "A topology_refs region requires geometry refs."
+            )
+        if self.mode == "topology_complement" and not self.excluded_geometry_refs:
+            raise DFMError(
+                "region_invalid",
+                "A topology_complement region requires excluded geometry refs.",
+            )
+        if self.mode == "whole_model" and (
+            self.geometry_refs or self.excluded_geometry_refs or self.bbox is not None
+        ):
+            raise DFMError(
+                "region_invalid", "A whole-model region cannot carry selectors."
+            )
+        for refs in (self.geometry_refs, self.excluded_geometry_refs):
+            identities = {
+                (item.kind, item.entity_id, item.topology_snapshot_id, item.input_sha256)
+                for item in refs
+            }
+            if len(identities) != len(refs) or any(
+                item.kind != "face"
+                or item.index < 1
+                or item.input_sha256 != self.input_sha256
+                or not item.topology_snapshot_id
+                or not item.entity_id
+                for item in refs
+            ):
+                raise DFMError(
+                    "region_invalid",
+                    "Region topology refs must be unique faces from the same input.",
+                    {"region_id": self.region_id},
+                )
 
 
 @dataclass(frozen=True)
 class GeometryRef:
-    """A topology reference valid for one immutable geometry input/version."""
+    """A topology reference valid only inside one immutable topology snapshot."""
 
     kind: str
     index: int
     input_sha256: str = ""
+    topology_snapshot_id: str = ""
+    entity_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -530,6 +746,7 @@ class MeasurementRecord:
     diagnostics: dict[str, Any] = field(default_factory=dict)
     region_refs: list[str] = field(default_factory=list)
     field_refs: list[str] = field(default_factory=list)
+    feature_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -561,6 +778,8 @@ class EvaluationRecord:
     expected: Any
     actual: Any
     outcome: str
+    feature_refs: list[str] = field(default_factory=list)
+    region_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -585,6 +804,7 @@ class EvidenceRecord:
     region_refs: list[str]
     artifact_ref: str
     render: dict[str, Any]
+    feature_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -613,6 +833,7 @@ class ObjectiveTaskRequest:
     scope_id: str
     scope_version: str
     operations: list[PlanOperation] = field(default_factory=list)
+    regions: list[RegionRecord] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if (
@@ -628,11 +849,20 @@ class ObjectiveTaskRequest:
             raise ValueError("Objective task identity is invalid.")
         for operation in self.operations:
             operation.validate()
+        regions = {item.region_id: item for item in self.regions}
+        if len(regions) != len(self.regions):
+            raise ValueError("Objective task region identities are not unique.")
+        for operation in self.operations:
+            if set(operation.region_refs) - set(regions):
+                raise ValueError("Objective task operation has unresolved region references.")
+        for region in self.regions:
+            region.validate()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             **asdict(self),
             "operations": [operation.to_dict() for operation in self.operations],
+            "regions": [region.to_dict() for region in self.regions],
         }
 
     @classmethod
@@ -640,6 +870,9 @@ class ObjectiveTaskRequest:
         values = dict(payload)
         values["operations"] = [
             PlanOperation.from_dict(value) for value in values.get("operations", [])
+        ]
+        values["regions"] = [
+            RegionRecord.from_dict(value) for value in values.get("regions", [])
         ]
         return cls(**values)
 
@@ -817,6 +1050,7 @@ class FindingRecord:
     evidence_refs: list[str]
     rule_refs: list[str]
     recommendation: str
+    feature_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -962,6 +1196,9 @@ class ProjectManifest:
     regions: list[RegionRecord] = field(default_factory=list)
     clarifications: list[ClarificationRecord] = field(default_factory=list)
     features: list[FeatureRecord] = field(default_factory=list)
+    observations: list[ObservationRecord] = field(default_factory=list)
+    fusion_links: list[FusionLinkRecord] = field(default_factory=list)
+    discovery_snapshots: list[DiscoverySnapshotRecord] = field(default_factory=list)
     plans: list[PlanRecord] = field(default_factory=list)
     runs: list[RunRecord] = field(default_factory=list)
     findings: list[FindingRecord] = field(default_factory=list)
@@ -989,6 +1226,11 @@ class ProjectManifest:
             "regions": [item.to_dict() for item in self.regions],
             "clarifications": [item.to_dict() for item in self.clarifications],
             "features": [item.to_dict() for item in self.features],
+            "observations": [item.to_dict() for item in self.observations],
+            "fusion_links": [item.to_dict() for item in self.fusion_links],
+            "discovery_snapshots": [
+                item.to_dict() for item in self.discovery_snapshots
+            ],
             "plans": [item.to_dict() for item in self.plans],
             "runs": [run.to_dict() for run in self.runs],
             "findings": [item.to_dict() for item in self.findings],
@@ -1014,6 +1256,18 @@ class ProjectManifest:
         ]
         values["features"] = [
             FeatureRecord.from_dict(item) for item in values.get("features", [])
+        ]
+        values["observations"] = [
+            ObservationRecord.from_dict(item)
+            for item in values.get("observations", [])
+        ]
+        values["fusion_links"] = [
+            FusionLinkRecord.from_dict(item)
+            for item in values.get("fusion_links", [])
+        ]
+        values["discovery_snapshots"] = [
+            DiscoverySnapshotRecord.from_dict(item)
+            for item in values.get("discovery_snapshots", [])
         ]
         values["plans"] = [
             PlanRecord.from_dict(item) for item in values.get("plans", [])

@@ -21,6 +21,16 @@ class ProcessPlan:
     rule_bindings: list[RuleBinding] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class FactRequirement:
+    """One explicit engineering prerequisite and the phase it blocks."""
+
+    name: str
+    question: str
+    phase: str
+    required_by: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class ProcessAdapter(Protocol):
     key: str
@@ -29,6 +39,8 @@ class ProcessAdapter(Protocol):
     def capability(self, context: AnalyzerContext) -> Capability: ...
 
     def required_facts(self) -> Mapping[str, str]: ...
+
+    def fact_requirements(self) -> tuple[FactRequirement, ...]: ...
 
     def compile(
         self,

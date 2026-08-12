@@ -33,7 +33,7 @@ def _utc_now() -> str:
 
 class ParasolidAnalyzer:
     key = "parasolid"
-    version = "nx-http-v2"
+    version = "nx-http-v4"
     supported_inputs = ("parasolid", "geometry", "fusion")
 
     def __init__(
@@ -137,15 +137,22 @@ class ParasolidAnalyzer:
                     definition.supported_formats
                 ):
                     reasons.append("format")
-                region = operation.arguments.get("region")
-                if region is not None and definition.supported_region_modes:
-                    region_value = region.value
-                    region_mode = (
-                        str(region_value.get("mode") or "")
-                        if isinstance(region_value, dict)
-                        else ""
-                    )
-                    if region_mode not in definition.supported_region_modes:
+                if operation.region_refs:
+                    region_by_id = {
+                        item.region_id: item for item in context.plan.regions
+                    }
+                    resolved_regions = [
+                        region_by_id.get(ref) for ref in operation.region_refs
+                    ]
+                    if any(item is None for item in resolved_regions):
+                        reasons.append("region_unresolved")
+                    elif not definition.supported_region_modes:
+                        reasons.append("region_mode")
+                    elif any(
+                        item.mode not in definition.supported_region_modes
+                        for item in resolved_regions
+                        if item is not None
+                    ):
                         reasons.append("region_mode")
                 if reasons:
                     incompatible.append({
@@ -217,6 +224,15 @@ class ParasolidAnalyzer:
             scope_id=context.plan.scope_id,
             scope_version=context.plan.scope_version,
             operations=context.plan.operations,
+            regions=[
+                item
+                for item in context.plan.regions
+                if item.input_sha256 == input_record.sha256
+                and any(
+                    item.region_id in operation.region_refs
+                    for operation in context.plan.operations
+                )
+            ],
         )
         job = self.client.submit(request.to_dict(), input_path)
         if not job.job_id:
@@ -326,6 +342,7 @@ class ParasolidAnalyzer:
             input_sha256=input_record.sha256,
             process=context.plan.process,
             scope_id=context.plan.scope_id,
+            regions=context.plan.regions,
             error_code="objective_result_invalid",
         )
         self._emit(context, STAGE_OBJECTIVE_READY, 100, job.job_id)

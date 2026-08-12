@@ -40,7 +40,7 @@ def test_die_casting_scope_is_independent_and_topology_only(context):
         "load_geometry",
         "inspect_topology",
     ]
-    assert tuple(adapter.required_facts()) == ("model_units",)
+    assert tuple(adapter.required_facts()) == ("process", "model_units")
 
 
 def test_injection_default_scope_has_versioned_parameter_provenance(context):
@@ -50,14 +50,14 @@ def test_injection_default_scope_has_versioned_parameter_provenance(context):
 
     assert plan.process == "injection"
     assert plan.scope_id == "injection.wall-draft"
-    assert plan.scope_version == "2.0.0"
-    assert plan.adapter_version == "injection-wall-draft-v2"
+    assert plan.scope_version == "3.0.0"
+    assert plan.adapter_version == "injection-wall-draft-v3"
     assert plan.rules["min_wall_mm"].source == (
-        "scope:injection.wall-draft@2.0.0/materials/ABS/min_wall_mm"
+        "scope:injection.wall-draft@3.0.0/materials/ABS/min_wall_mm"
     )
     assert plan.rules["min_draft_deg"].value == 1.0
     assert plan.rules["min_draft_deg"].source == (
-        "scope:injection.wall-draft@2.0.0/parameters/min_draft_deg"
+        "scope:injection.wall-draft@3.0.0/parameters/min_draft_deg"
     )
     assert plan.rules["min_draft_deg"].unit == "degree"
     assert plan.operations[0].calculator_id == "load_geometry"
@@ -72,6 +72,19 @@ def test_injection_default_scope_has_versioned_parameter_provenance(context):
         "thickness_mm",
         "draft_angle_deg",
     }
+    wall_operation = next(
+        item for item in plan.operations if item.calculator_id == "measure_wall_thickness"
+    )
+    wall_binding = next(
+        item for item in plan.rule_bindings if item.quantity_id == "thickness_mm"
+    )
+    assert wall_operation.required_fact_names == ["model_units"]
+    assert wall_binding.required_fact_names == ["material"]
+    requirements = {item.name: item for item in adapter.fact_requirements()}
+    assert requirements["process"].phase == "discovery"
+    assert requirements["model_units"].phase == "discovery"
+    assert requirements["material"].required_by == ("rule.wall_thickness",)
+    assert requirements["pull_dir"].required_by == ("geometry.draft",)
     measured = plan.operations[2:]
     assert all(
         item.required_artifacts == [

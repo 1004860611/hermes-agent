@@ -6,7 +6,7 @@
   "calculators": {
     "inspect_topology": {
       "status": "certified",
-      "contract_version": 2,
+      "contract_version": 4,
       "implementation_version": "nx-topology-1",
       "required_arguments": [],
       "optional_arguments": [],
@@ -20,9 +20,9 @@
     },
     "measure_draft": {
       "status": "certified",
-      "contract_version": 2,
+      "contract_version": 4,
       "implementation_version": "nx-draft-1",
-      "required_arguments": ["pull_direction", "region"],
+      "required_arguments": ["pull_direction"],
       "optional_arguments": [],
       "supported_algorithm_options": [],
       "output_quantities": ["draft_angle_deg"],

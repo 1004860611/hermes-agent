@@ -47,30 +47,52 @@ class SuccessfulRunner:
         output.mkdir(parents=True, exist_ok=True)
         scene = output / "render_scene.json"
         scene.write_text(json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "scene_id": "scene_geometry",
             "run_id": "run_1",
             "input_sha256": "a" * 64,
             "coordinate_system": "model",
             "unit": "mm",
+            "topology_snapshot_ref": "topology_empty",
+            "render_mesh_snapshot": {
+                "render_mesh_snapshot_id": "mesh_test",
+                "topology_snapshot_id": "topology_empty",
+                "input_sha256": "a" * 64,
+                "producer": "pythonocc",
+                "producer_version": WORKER_VERSION,
+                "tessellation": {},
+                "triangle_count": 1,
+                "render_mesh_sha256": "4aaeb28bc7dcaba88317204d428315223c5bbf06bacbc3a487ce4da1b509058c",
+            },
             "primitives": [{
                 "primitive_id": "face-1",
+                "render_mesh_snapshot_id": "mesh_test",
                 "vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
                 "triangles": [[0, 1, 2]],
             }],
         }), encoding="utf-8")
         topology = output / "topology_map.json"
         topology.write_text(json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "map_id": "topology_geometry",
             "run_id": "run_1",
             "input_sha256": "a" * 64,
             "scene_ref": "scene_geometry",
+            "topology_snapshot": {
+                "topology_snapshot_id": "topology_empty",
+                "input_sha256": "a" * 64,
+                "backend": "pythonocc", "backend_version": WORKER_VERSION,
+                "loader_id": "test-loader", "loader_version": "1",
+                "indexer_id": "test-indexer", "indexer_version": "1",
+                "entity_count": {"body": 1, "face": 0},
+                "topology_content_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            },
+            "render_mesh_snapshot_ref": "mesh_test",
             "faces": [],
         }), encoding="utf-8")
         field = output / "scalar_field_draft.json"
         field.write_text(json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "field_id": "field_draft",
             "run_id": "run_1",
             "input_sha256": "a" * 64,
@@ -80,6 +102,8 @@ class SuccessfulRunner:
             "unit": "degree",
             "scene_ref": "scene_geometry",
             "topology_map_ref": "topology_geometry",
+            "topology_snapshot_ref": "topology_empty",
+            "render_mesh_snapshot_ref": "mesh_test",
             "interpolation": "linear_on_triangle",
             "calculation_context": {"pull_direction": [0, 0, 1]},
             "samples": [],
@@ -125,7 +149,7 @@ class SuccessfulRunner:
             )
 
         result = ObjectiveResultManifest(
-            schema_version=2,
+            schema_version=4,
             producer_version=WORKER_VERSION,
             run_id="run_1",
             input_sha256="a" * 64,

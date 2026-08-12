@@ -2,7 +2,7 @@
 title: "DFM Hermes Agent 产品目标与研发路线图"
 status: active
 date: 2026-07-13
-updated: 2026-08-06
+updated: 2026-08-11
 type: product-development-plan
 target: builtin-hermes-dfm-toolset
 owners: DFM 工程团队
@@ -14,9 +14,12 @@ owners: DFM 工程团队
 按什么阶段交付和验收。具体接口、代码步骤、测试记录和团队分工由专项文档承接，不在
 roadmap 中重复维护。
 
-当前状态：M0–M2.5 已完成，M2.6-A 所需的 Hermes 壁厚/拔模角统一契约和后处理基线
-已经冻结，正在推进 **NX 同时支持 STEP/Parasolid 的第一条真实端到端闭环**；随后按指标
-逐项扩展，最终完成 M2.6 黄金产品范围。M3 图纸文本理解可并行准备。
+当前状态：M0–M2.5 已完成，原 M2.6-A 的壁厚/拔模角客观场和公共后处理基线已经完成。
+2026-08-11 起，M2.6 按完整产品运行时重新收口为 **DiscoveryPlan → 发现快照 →
+AnalysisPlan**：二维信息提取与三维特征发现先于最终规则选择，三维注塑特征识别纳入
+M2.6 正式交付；二维图纸识别在 M2.6 建立契约和占位 Provider，具体 OCR/Vision 实现由
+M3/M4 并行完成。原壁厚/拔模角基线继续复用，但在新发现契约和真实 NX E2E 完成前不再
+视为 M2.6-A 全部完成。
 
 ## 1. 项目目标
 
@@ -26,13 +29,14 @@ roadmap 中重复维护。
 两者组合后，智能体能够：
 
 1. 建立可恢复的 DFM 项目并管理输入版本；
-2. 识别制造工艺、材料、单位、出模方向等项目事实；
-3. 对缺失或冲突的关键事实向用户发起少量、明确的澄清；
-4. 根据项目事实和版本化规则选择当前产品需要计算的指标；
-5. 调用经过认证的几何、OCR 或仿真 Backend 产生客观 Measurement；
-6. 用确定性规则完成 Evaluation 和 Finding；
-7. 输出包含数值、规则、区域、证据、版本和建议的可复核报告；
-8. 支持取消、失败恢复、输入升级和受影响分析项重跑。
+2. 先提取二维工程观察，用已有图纸信息减少重复询问；
+3. 在三维特征识别前确认制造工艺、单位以及识别器声明的其它阻塞事实；
+4. 提取三维产品特征/区域并融合二维观察，对缺失、冲突或低置信度条件发起少量、明确的澄清；
+5. 冻结发现快照，并根据事实、特征、区域和版本化规则选择需要计算的指标；
+6. 调用经过认证的几何或仿真 Backend 产生客观 Measurement；
+7. 用确定性规则完成 Evaluation 和 Finding；
+8. 输出包含数值、规则、特征、区域、证据、版本和建议的可复核报告；
+9. 支持取消、失败恢复、输入升级和受影响分析项重跑。
 
 智能体负责理解、澄清、规划、编排和解释；工程 Backend 负责客观计算；规则引擎负责
 确定性评价。LLM 不直接生成壁厚、拔模角、孔隙率、阈值或风险分数。
@@ -42,10 +46,14 @@ roadmap 中重复维护。
 ```text
 创建/恢复项目
 → 上传产品模型和/或图纸
-→ 识别工艺与输入能力
-→ 提取事实并请求必要澄清
+→ 输入能力预检并执行二维观察提取
+→ 第一道澄清：确认工艺、单位等识别前阻塞事实
+→ 执行三维特征发现；未实现的识别器显式回落 whole-model ordinary 区域
+→ 融合 Observation / Feature / Region
+→ 第二道澄清：确认材料、开模方向、冲突和低置信度候选
+→ 冻结 Confirmed Facts 与发现快照
 → 选择有效规则和所需指标
-→ 生成并确认分析计划
+→ 生成并确认 AnalysisPlan
 → 调用认证 Backend 计算
 → Evaluation / Finding / Evidence
 → 查看报告、补充资料或重跑
@@ -54,7 +62,8 @@ roadmap 中重复维护。
 完成态不是“Agent 给出了一段看起来合理的回答”，而是每个工程结论都能追溯到：
 
 ```text
-Input → Confirmed Fact → Effective Rule → Plan Task
+Input → Observation / Feature / Region → Confirmed Fact → Discovery Snapshot
+→ Effective Rule → AnalysisPlan Task
 → Calculator/Backend → Measurement → Evaluation → Finding → Evidence
 ```
 
@@ -106,43 +115,70 @@ Input → Confirmed Fact → Effective Rule → Plan Task
 ## 3. 总体架构与主流程
 
 ```mermaid
-flowchart LR
+flowchart TD
     UI[Desktop / CLI / Gateway]
-    PRJ[Project Manifest<br/>Inputs / Facts / Clarifications]
+    PRJ[Project Manifest<br/>Inputs / Observations / Facts / Clarifications]
+    DP[DiscoveryPlan]
+    D2[2D Drawing Provider<br/>占位：PDF / OCR / Vision]
+    D3[3D Feature Recognizer<br/>NX production / demo provider]
+    OBS[Observations + DrawingRegions]
+    FTR[FeatureSet + FeatureRegions + FeatureGraph]
+    FUS[Fusion / Conflict / Clarification]
+    SNAP[Immutable Discovery Snapshot]
     RS[Rule Selector]
     ER[Effective Rule Set]
-    PC[Plan Compiler]
+    PC[AnalysisPlan Compiler]
     GS[Geometry Service API]
     NX[NX Backend<br/>STEP / Parasolid<br/>HTTP Server + C++ Plugin + NX Open]
     OCC[OCCT Backend<br/>STEP Worker + OpenCascade]
-    DR[Drawing Backend<br/>PDF/OCR/Vision]
     MEAS[Measurements]
     EE[EvaluationEngine]
     EVAL[Evaluations]
-    FE[FindingEngine]
-    OUT[Evidence / Report / Run Bundle]
+    EV[FieldEvidenceEngine]
+    FE[FindingEngine / Report]
+    OUT[Evidence / Finding / Report / Run Bundle]
 
     UI <--> PRJ
+    PRJ --> DP
+    DP --> D2 --> OBS
+    OBS --> PRJ
+    PRJ --> D3 --> FTR
+    OBS --> FUS
+    FTR --> FUS
+    FUS --> PRJ
+    FUS --> SNAP
+    SNAP --> RS
     PRJ --> RS --> ER --> PC
     PC --> GS
     GS --> NX --> MEAS
     GS --> OCC --> MEAS
-    PRJ --> DR --> MEAS
     MEAS --> EE
-    ER --> EE --> EVAL --> FE --> OUT --> UI
+    ER --> EE --> EVAL --> EV --> FE --> OUT --> UI
+    SNAP --> EV
 ```
 
 ### 3.1 架构职责
 
 ```text
-Project Facts
-→ 决定哪些规则适用
-→ Effective Rule Set 描述当前产品需要哪些指标
-→ Plan Compiler 把指标解析为 Calculator DAG
-→ Geometry/Document Backend 只输出 Measurement
+Inputs
+→ DiscoveryPlan 先调用二维信息 Provider
+→ 汇总图纸事实并确认各 Recognizer 的 required_fact_names
+→ 调用三维 Feature Recognizer；不可用的识别器按普通区域回退且不伪造 Feature
+→ Observation / Feature / Region 经融合、冲突检测和必要人工确认
+→ 冻结 Discovery Snapshot 与 Confirmed Facts
+→ RuleSelector 根据工艺、材料、feature.kind、region.role 选择规则
+→ Effective Rule Set 描述当前产品每个特征区域需要哪些指标
+→ AnalysisPlan Compiler 把指标解析为区域化 Calculator DAG
+→ Geometry Backend 只输出 Feature/Region 或 Measurement 等客观结果
 → EvaluationEngine 用规则参数评价 Measurement
-→ FindingEngine 形成工程问题、区域、证据和建议
+→ Evidence/Finding 形成工程问题、特征、区域、证据和建议
 ```
+
+`DiscoveryPlan` 与 `AnalysisPlan` 是两个持久化阶段，不允许未解析的特征引用进入
+AnalysisPlan。不影响识别路线的二维和三维工作可以并行；工艺、单位或方向会改变识别器
+语义时必须先通过第一道事实门。最终规则选择必须等待所需发现结果和关键事实
+确认完成。模型导入、拓扑索引、网格和特征发现可以缓存复用，修改规则不应重跑这些
+客观发现步骤。
 
 ### 3.2 必须保持的架构原则
 
@@ -159,23 +195,30 @@ Project Facts
    不加入 `_HERMES_CORE_TOOLS`。
 8. **用户事实与规则分离。** 材料、单位、出模方向属于项目事实；阈值、适用条件和严重程度
    属于版本化规则库。
+9. **先发现、后分析。** 二维 Observation 与三维 Feature/Region 先形成不可变发现快照，
+   再选择规则和编译 AnalysisPlan；不得在特征未知时猜测局部规则。
+10. **Observation 不等于 Fact。** OCR/Vision 结果首先是带页码、bbox、原文和置信度的
+    Candidate；只有确认或无歧义解析后才可成为规则输入。
+11. **特征识别与规则判断分离。** Recognizer 只回答“是什么、在哪里、客观参数是什么”，
+    不输出 pass/fail、severity 或 recommendation。
 
 ## 4. 功能模块
 
 | 模块 | 核心职责 | 当前状态 | 下一交付 |
 | --- | --- | --- | --- |
 | Hermes 接入与对话协调 | `dfm_project`/`dfm_analysis` 工具适配；理解新建、继续、确认、运行和取结果 | 已完成基础闭环 | 保持工具 Schema 稳定，优化当前里程碑用户流程 |
-| Project/Manifest | 管理项目、输入版本、Facts、Clarifications、Plans、Runs 和 Artifacts | 已完成 | 支持黄金产品事实和 Run Bundle 完整追溯 |
+| Project/Manifest | 管理输入、Observations、Facts、Features、Regions、FusionLinks、两阶段 Plans、Runs 和 Artifacts | 基础 Manifest 已完成；发现契约已加入 | 持久化不可变 Discovery Snapshot 和受影响重算关系 |
 | Intake/Preflight | 识别 STEP、`.x_t`、图纸输入，完成哈希、安全预检和能力查询 | STEP 可用，`.x_t` 轻量预检完成 | 让 NX capability 同时声明 STEP/Parasolid，并按部署模式选择 production NX 或 demo PythonOCC |
 | ProcessAdapter | 隔离注塑/压铸的 required facts、scope 和 capability | 注塑、压铸已拆分 | 完善压铸黄金产品所需事实和规则范围 |
 | Clarification/Fact | 提出缺失事实问题并将用户确认写回 Manifest | 基础能力已完成 | 冻结合金、单位、六个出模方向、区域和工艺参数 |
-| Rule Repository/Selector | 管理版本化规则，根据工艺、材料、特征和区域形成 Effective Rule Set | 当前有版本化 scope/规则文件，通用管理能力未完成 | M2.6 建立最小压铸规则；M5/M6 完成选择、审核、发布和后台管理边界 |
-| Plan Compiler | 把 required metrics 转换为依赖有序的 Calculator DAG 和 Backend 要求 | 已有 Plan 门控和操作白名单 | 迁移为稳定、格式无关的 Calculator ID，并解析 NX capability |
+| Rule Repository/Selector | 根据工艺、材料、`feature.kind`、`region.role` 形成 Effective Rule Set | 当前有版本化 scope/规则文件；特征条件未完成 | M2.6 先实现壁厚/拔模角/R 角所需最小特征规则选择；M5/M6 通用化 |
+| Discovery/Analysis Plan Compiler | DiscoveryPlan 编排二维/三维发现；AnalysisPlan 编排已解析区域的 Calculator DAG | 单阶段 Plan 基线已完成；新增 phase/snapshot 契约 | M2.6 实现两阶段编译、快照失效和断点复用 |
 | Geometry Service | 统一格式、Calculator、Backend 和 certification resolution | 目标边界已确定，正式服务待收敛 | M2.6 贯通 NX；M5 形成 NX/PythonOCC 统一注册与解析接口 |
 | PythonOCC Backend | STEP B-Rep 读取，输出壁厚/拔模角 Measurement、ScalarField、RenderScene、TopologyMap | demo 适配层已统一 | 用同一契约验证 NX 链路；保持 `certified=false` |
-| NX Backend | STEP/`.x_t` 上传、Job、NX Open、C++ Calculator 和客观 Artifact | HTTP Client/Schema 2 契约完成；Server、STEP loader 和插件未交付 | M2.6-A 用当前正式 Scope 打通两种格式；之后逐项认证黄金产品 Calculator |
-| Drawing/OCR Backend | 页面渲染、原生文本、OCR、字段和区域证据 | 未开始 | M3 提取材料、单位、尺寸、公差和技术说明 |
-| Feature/Fusion | 识别工程特征并关联图纸区域、项目事实和三维区域 | 未开始 | M4 特征识别；M5 完成事实融合与二维/三维关联 |
+| NX Backend | STEP/`.x_t` 上传、Job、NX Open、C++ Calculator 和客观 Artifact | HTTP Client/Schema 4 区域任务契约完成；Server、STEP loader 和插件未交付 | M2.6-A 用当前正式 Scope 打通两种格式；之后逐项认证黄金产品 Calculator |
+| 3D Feature Recognizer | 从 B-Rep 识别主壁、螺柱、筋、Boss、圆角及其 FeatureRegion/关系 | 契约已加入，识别实现未完成 | M2.6 必须实现并以真实 STEP/Parasolid 验收；NX production 遵守统一契约，MTK 可作为独立 Provider |
+| Drawing Observation Provider | 输出带页码、视图、bbox、原文和置信度的二维 Observation，不直接输出 Fact | Analyzer 占位边界存在，具体实现未开始 | M2.6 固定接口和伪代码；M3/M4 实现 PDF/OCR/Vision |
+| Fusion/Clarification | 关联二维 Observation 与三维 FeatureRegion，处理冲突、歧义和人工确认 | Fusion 占位边界存在，契约已加入 | M2.6 实现最小冻结/阻塞逻辑；M5 通用化匹配与置信度模型 |
 | EvaluationEngine | 使用 Effective Rule Set 对 Measurement 做确定性评价 | 已从所有 Geometry Backend 独立；无旧阈值兼容路径 | M2.6 接入经审核的生产规则 |
 | Finding/Reporting | 形成 Finding、Evidence、JSON/Markdown/PPTX 报告和 Artifacts | 已改为后端无关的统一装配 | 支持 NX 黄金产品报告和后续图纸证据 |
 | Runtime/Capability | Job 生命周期、取消、超时、外部 Job ID、Artifact 校验和能力状态 | 公共阶段/错误码、Artifact Run 身份与哈希、Operation 客观结果复用已完成；NX Client 契约完成 | 对接 NX Worker、许可证、远端取消/恢复和幂等 |
@@ -187,11 +230,17 @@ roadmap 只约束以下稳定关系，字段级 Schema 以代码和专项契约�
 | 契约 | 必须包含 |
 | --- | --- |
 | Project Fact | 名称、值、单位、确认状态、来源和证据；假设不能伪装成 confirmed |
+| Observation | 输入、类型、原始/规范化值、单位、页码/bbox/原文等来源、置信度和候选状态 |
+| Feature | 输入哈希、稳定 Feature ID、类型、Region 引用、客观属性、关系、Recognizer/版本和置信度 |
+| Region | 输入哈希、语义角色、bbox/拓扑引用、版本、内容哈希和来源 |
+| FusionLink | Observation、Feature、Region 引用、匹配方法、置信度、歧义/确认状态和诊断 |
+| Discovery Snapshot | 输入哈希、Observation/Feature/Region/FusionLink 版本与 Artifact 哈希；冻结后不可原地改写 |
 | Effective Rule | Rule ID、版本、适用条件、Metric、Operator、阈值参数、单位、来源和哈希 |
-| Plan Task | Metric/Calculator ID、参数来源、依赖、Backend 要求、认证要求和预期制品 |
-| Measurement | Calculator、客观值/区域、单位、质量、诊断、客观场引用和 Backend/版本 provenance |
-| Evaluation | Measurement 引用、Rule 引用、实际值、期望值、Operator、Outcome 和参数来源 |
-| Finding | Evaluation/Measurement/Rule 引用、区域、severity、证据、建议和未解决项 |
+| DiscoveryPlan | `phase=discovery`、输入版本、发现 Calculator/Provider、能力要求和 Feature/Region/Observation 制品 |
+| AnalysisPlan | `phase=analysis`、Discovery Snapshot 引用、Metric/Calculator、Feature/Region、参数来源、认证要求和预期制品 |
+| Measurement | Calculator、客观值、Feature/Region、单位、质量、诊断、客观场引用和 Backend/版本 provenance |
+| Evaluation | Measurement/Feature/Region/Rule 引用、实际值、期望值、Operator、Outcome 和参数来源 |
+| Finding | Evaluation/Measurement/Rule/Feature/Region 引用、severity、证据、建议和未解决项 |
 | Run Bundle | 输入哈希、Facts、Effective Rules、Plan、Backend/Calculator 版本及全部结果制品引用 |
 
 ## 5. 研发计划
@@ -204,10 +253,10 @@ roadmap 只约束以下稳定关系，字段级 Schema 以代码和专项契约�
 | M1/M1.2 STEP 迁移与指标拆解 | 迁移旧 STEP 能力，拆分检查族和 Measurement，固定行为基线 | 已完成 |
 | M2 注塑 STEP 端到端 | 上传、澄清、Plan、运行、Finding、Evidence 和报告完整闭环 | 已完成 |
 | M2.5 多工艺/多格式适配 | 注塑与压铸隔离；STEP 与 `.x_t` 输入分离；NX HTTP Backend 契约 | 已完成 |
-| M2.6 NX 黄金产品闭环 | A：当前正式 Scope 打通 STEP/Parasolid NX；B：指标逐项扩展；C：黄金产品全范围人工验收 | A 的 Hermes 基线完成，NX 实现当前优先 |
+| M2.6 发现驱动的 NX 黄金产品闭环 | A：新运行时架构/契约、三维特征识别与当前 Scope；B：特征区域规则及指标逐项扩展；C：黄金产品全范围验收 | 原客观场基线完成；两阶段 Plan、三维识别与真实 NX 待完成 |
 | M3 图纸文本理解 | 从 PDF/图片提取可追溯字段和指标要求 | 未开始，可并行准备 |
-| M4 图纸工程特征识别 | 识别螺牙、孔、筋、油路、局部视图等特征和区域 | 未开始 |
-| M5 事实融合与计划编排 | RuleSelector、EffectiveRuleSet、通用 PlanCompiler 和 GeometryService | 未开始 |
+| M4 二维工程 Observation 识别 | 识别螺牙、孔、筋、油路、局部视图及图纸区域，输出候选 Observation | M2.6 只做契约/占位，具体实现未开始 |
+| M5 通用融合与计划编排 | 将 M2.6 的最小 Fusion/RuleSelector/两阶段 Plan 通用化到更多输入和工艺 | 未开始 |
 | M6 规则库与确定性评价 | 规则审核/发布/版本管理、完整 Evaluation/Finding 体系 | 未开始 |
 | M7 产品化与发布 | 混合输入、Desktop 辅助视图、全链路验收、部署和维护 | 未开始 |
 
@@ -248,12 +297,38 @@ STEP 或 Parasolid + Confirmed Facts
 → immutable Run Bundle
 ```
 
-#### M2.6-A：当前正式 Scope 的 NX 最小生产闭环
+#### M2.6-A：发现驱动架构、三维特征识别与当前 Scope
 
-第一阶段严格使用当前冻结的 `injection.wall-draft@2.0.0`：ABS、mm、一个确认开模方向、
-壁厚和拔模角两个指标。它的目的不是完成最终压铸业务判断，而是把 Intake、Backend
-resolution、NX Server、NX Worker、Calculator、客观场、规则引擎、三视角证据、Finding、
-报告和断点复用逐个开发并真实串通。
+第一阶段继续使用当前冻结的 `injection.wall-draft@3.0.0`：ABS、mm、一个确认开模方向、
+壁厚和拔模角两个指标，同时把运行时改为 DiscoveryPlan/AnalysisPlan，并实际交付三维
+注塑特征识别。目标不是一次覆盖全部特征规则，而是先冻结可复用的数据流和模块职责：
+
+```text
+Intake
+→ DiscoveryPlan
+→ 2D Observation 占位 + 3D Feature Recognizer 实际执行
+→ FeatureSet / FeatureRegion / FeatureGraph
+→ Fusion / Clarification / Confirmed Facts
+→ immutable Discovery Snapshot
+→ RuleSelector / AnalysisPlan
+→ NX Calculator / Objective Field
+→ Evaluation / Evidence / Finding / Report
+```
+
+- 三维 Recognizer 首批必须识别并返回可定位 Region 的 `main_wall`、`screw_boss`、`rib`、
+  `boss` 和 `fillet`；识别不到或置信度不足时明确返回 `needs_confirmation`，不伪造特征；
+- NX production 必须对 STEP/Parasolid 输出同一 Feature/Region 契约；MTK 可作为独立
+  Provider 或识别算法加速器，但其内部 ID 不能成为 Hermes 稳定 ID；
+- PythonOCC demo 允许只覆盖经声明的特征子集，但必须使用同一正式契约并标记
+  `certified=false`；
+- 二维 Provider 在本阶段只固定 Observation 契约、能力状态和以下占位逻辑，不产生正式
+  OCR/Vision 结论：`render_pages → extract_text/OCR → detect_callouts → emit candidates`；
+- Observation 不能直接成为 Rule 输入；必须经过 Fusion、冲突检测和确认；
+- 当前模型-only Run 在无二维输入时可以由三维发现和用户确认事实继续，不被占位 Provider
+  阻塞。
+
+在此基础上继续完成 Intake、Backend resolution、NX Server/Worker、壁厚/拔模角客观场、
+规则引擎、三视角证据、Finding、报告和断点复用。
 
 - NX 必须同时接受 STEP/STP 和 Parasolid `.x_t`，Capability 分格式声明支持与认证范围；
 - 优先使用同一 CAD 源导出的 STEP/Parasolid 配对样件，验证两种输入经过 NX 后实现同一
@@ -265,16 +340,26 @@ resolution、NX Server、NX Worker、Calculator、客观场、规则引擎、三
 - 本阶段完成标准是两个格式的真实 NX 端到端、壁厚/拔模角 Calculator 认证和可复核
   Run Bundle，不要求黄金产品全部指标完成。
 
-当前状态：Hermes Task/Result Schema 2、PythonOCC 契约验证链和公共后处理已完成；NX
-Server、STEP/Parasolid loader、真实 Calculator 和配对 E2E 待交付。
+当前状态：Task/Result Schema 4、PythonOCC 区域客观场验证链和公共后处理已完成；Feature、
+Observation、FusionLink、Feature/Region 回链和 Plan phase 已加入契约。两阶段编译器、真实
+三维 Recognizer、NX Server、STEP/Parasolid loader、真实 Calculator 和配对 E2E 待交付。
 
 #### M2.6-B：黄金产品指标逐项扩展
 
-第二阶段建立独立、经过工程审批的压铸 Scope 和 RuleBinding，不复制注塑阈值。按照黄金
-产品追溯矩阵逐项增加：先扩展壁厚统计和方向/区域化拔模，再加入倒扣、投影面积等后续
-指标。每增加一项都必须独立完成 Fact → Rule → Plan Operation → NX Measurement/Field →
-Hermes Evaluation/Evidence/Finding/Report，并通过真实样件回归；不先堆完全部 Calculator
-再统一集成。
+第二阶段先完成注塑特征区域规则：主壁、螺柱、筋和 Boss 分别选择壁厚/拔模角规则，根部
+圆角使用 `measure_fillet_radius` / `fillet_radius_mm`，并让 RuleBinding、Measurement、
+Evaluation、Evidence 和 Finding 全部回链 Feature/Region。随后再按黄金产品追溯矩阵增加
+倒扣、投影面积等指标；如黄金产品包含压铸，则另建经工程审批的压铸 Scope/RuleBinding，
+不得复制注塑阈值。
+
+每增加一项都必须独立完成：
+
+```text
+Observation/Feature/Region → Confirmed Fact → Rule → AnalysisPlan Operation
+→ NX Measurement/Field → Hermes Evaluation/Evidence/Finding/Report
+```
+
+并通过真实样件回归；不先堆完全部 Calculator 再统一集成。
 
 #### M2.6-C：黄金产品完整范围与工程验收
 
@@ -290,7 +375,8 @@ Calculator 推导；它们登记为后续 Simulation Result Backend 候选。
 ### 5.4 M3：2D 图纸文本理解
 
 **目标：** 从 PDF、PNG、JPG 中提取材料、单位、尺寸、公差、表面处理和技术说明，并
-保留页码、bbox、原文、规范化值和置信度。
+保留页码、bbox、原文、规范化值和置信度。M3 是运行时 Discovery 的输入理解 Provider，
+不是几何计算之后的报告增强步骤。
 
 主要交付：页面渲染、原生 PDF 文本、OCR Provider、版面/标题栏解析、字段字典、标注
 语料、冲突检测、澄清和确认写回。仅图纸输入不得触发缺少几何条件的精确计算。
@@ -298,17 +384,22 @@ Calculator 推导；它们登记为后续 Simulation Result Backend 候选。
 ### 5.5 M4：2D 工程特征识别
 
 **目标：** 识别影响局部 DFM 规则的螺牙、油路/油管、孔、筋、凸台、密封区、剖视图
-和局部详图，并输出类别、页面、视图、bbox 和置信度。
+和局部详图，并输出 Observation 类别、页面、视图、bbox、原文和置信度。输出首先是
+Candidate，不直接成为 Fact、Feature 或 Rule。
 
 主要交付：标注规范、代表性语料、模型/规则基线、跨视图关联和低置信度人工确认。
+运行时与 M3 一起位于 Fusion/RuleSelector/AnalysisPlan 之前；研发可与 M2.6 NX 主线并行，
+但混合输入的生产 AnalysisPlan 不得绕过所需二维 Observation。
 
 ### 5.6 M5：事实融合、规则选择与计划编排
 
-**目标：** 根据输入资料和已确认事实，选择正确规则并生成最小、可执行的 Calculator DAG。
+**目标：** 将 M2.6 已交付的最小 Fusion/RuleSelector/两阶段 Plan 通用化，根据二维
+Observation、三维 Feature/Region 和已确认事实选择正确规则，生成最小、可执行的
+Calculator DAG。
 
 主要交付：
 
-- 二维字段/特征与三维区域的带置信度关联；
+- 二维 Observation 与三维 Feature/Region 的带置信度关联；
 - `RuleSelector` 和带版本/来源/优先级/哈希的 `EffectiveRuleSet`；
 - 格式无关的稳定 Metric/Calculator ID；
 - `PlanCompiler` 对参数来源、依赖和认证 Backend 的解析；
@@ -379,21 +470,28 @@ Desktop 增强不能重写主聊天或形成第二个会话状态源。
 
 ### M2.6 主线
 
-1. 联合评审 Objective Task/Result Schema 2、公共 Calculator ID、Artifact 和证据回链；
+1. 联合评审 Observation、Feature、Region、FusionLink、Discovery Snapshot 与 Feature-aware
+   Measurement/Evidence/Finding Schema；
 2. 选择同源 STEP/Parasolid 配对样件，冻结 SHA256、mm、ABS 和一个开模方向；
-3. NX 团队让 Server/Worker 同时读取 STEP 与 Parasolid，先认证 topology、壁厚和拔模角；
-4. 以 `injection.wall-draft@2.0.0` 跑通真实 NX → Hermes Evaluation/Evidence/Finding/Report，
+3. 实现 DiscoveryPlan/AnalysisPlan 编译、快照冻结、失效传播与 Operation 断点复用；
+4. NX 团队让 Server/Worker 同时读取 STEP 与 Parasolid，实现并认证三维注塑 Feature
+   Recognizer，以及 topology、壁厚和拔模角；
+5. 以 `injection.wall-draft@3.0.0` 跑通真实 NX → Hermes Evaluation/Evidence/Finding/Report，
    完成 M2.6-A；
-5. 由模具工程师冻结最终黄金产品、报告、合金、六方向、区域和完整指标追溯矩阵；
-6. 建立独立压铸 Scope/RuleBinding，按一个指标一个闭环逐项增加 Calculator，完成 M2.6-B；
-7. 解决锁模力公式、投影面积来源及设备吨位等业务问题，不让未澄清指标进入生产 Plan；
-8. 黄金产品全部批准指标完成后执行只读 Run Bundle 人工核对和签字，完成 M2.6-C；
-9. 每次合入都执行 PythonOCC demo 回归和已认证 NX 格式/Calculator 回归。
+6. 增加主壁/螺柱/筋/Boss 的区域化壁厚与拔模规则，并增加根部 R 角 Calculator；
+7. 由模具工程师冻结最终黄金产品、报告、工艺、材料/合金、方向、FeatureRegion 和完整
+   指标追溯矩阵；
+8. 需要压铸时建立独立压铸 Scope/RuleBinding，按一个指标一个闭环逐项增加 Calculator；
+9. 解决锁模力公式、投影面积来源及设备吨位等业务问题，不让未澄清指标进入 AnalysisPlan；
+10. 黄金产品全部批准指标完成后执行只读 Run Bundle 人工核对和签字，完成 M2.6-C；
+11. 每次合入都执行 PythonOCC demo 回归和已认证 NX 格式/Recognizer/Calculator 回归。
 
-### M3 并行准备
+### M3/M4 二维 Provider 并行准备
 
 OCR 负责人可并行盘点 PDF 页面渲染、原生文本、OCR Provider、字段字典、脱敏图纸和标注
-方案，但 M3 生产实现不阻塞 M2.6 NX 主线。
+方案。M2.6 必须保留正式 Observation/Fusion 接口和明确的 `not_implemented` 能力状态；
+模型-only 的 M2.6 NX 主线不被二维实现阻塞，依赖图纸事实的混合输入 AnalysisPlan 必须
+阻塞到所需 Observation 已提取并确认。
 
 ## 9. 相关文档
 

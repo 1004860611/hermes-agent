@@ -72,7 +72,7 @@ def test_worker_event_rejects_invalid_payload(payload):
 
 def test_objective_task_and_result_round_trip_exclude_rule_and_render_policy():
     task = ObjectiveTaskRequest(
-        schema_version=2,
+        schema_version=4,
         run_id="run_1",
         input_sha256="a" * 64,
         input_format="step",
@@ -97,7 +97,7 @@ def test_objective_task_and_result_round_trip_exclude_rule_and_render_policy():
         task=task,
     )
     result = ObjectiveResultManifest(
-        schema_version=2,
+        schema_version=4,
         producer_version="worker-v1",
         run_id="run_1",
         input_sha256="a" * 64,

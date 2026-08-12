@@ -1,0 +1,71 @@
+{
+  "catalog_id": "injection.wall-draft.features",
+  "version": "1.0.0",
+  "process": "injection",
+  "recognizers": [
+    {
+      "recognizer_id": "ordinary-region-fallback",
+      "feature_kind": "ordinary_part",
+      "region_roles": ["ordinary"],
+      "provider": "hermes",
+      "required_fact_names": ["model_units"],
+      "status": "available"
+    },
+    {
+      "recognizer_id": "injection-screw-boss",
+      "feature_kind": "screw_boss",
+      "region_roles": ["wall", "root", "hole"],
+      "provider": "mtk_or_nx",
+      "required_fact_names": ["process", "model_units"],
+      "status": "placeholder"
+    },
+    {
+      "recognizer_id": "injection-rib",
+      "feature_kind": "rib",
+      "region_roles": ["wall", "root"],
+      "provider": "mtk_or_nx",
+      "required_fact_names": ["process", "model_units"],
+      "status": "placeholder"
+    },
+    {
+      "recognizer_id": "injection-undercut-side-action",
+      "feature_kind": "undercut",
+      "region_roles": ["undercut_surface"],
+      "provider": "nx",
+      "required_fact_names": ["process", "model_units", "pull_dir"],
+      "status": "placeholder"
+    }
+  ],
+  "feature_metric_bindings": [
+    {
+      "feature_kind": "ordinary_part",
+      "region_role": "ordinary",
+      "metrics": ["injection.geometry.wall_thickness", "injection.geometry.draft"],
+      "rule_profile": "ordinary.wall_draft",
+      "status": "available"
+    },
+    {
+      "feature_kind": "screw_boss",
+      "region_role": "wall",
+      "metrics": ["injection.geometry.wall_thickness", "injection.geometry.draft"],
+      "rule_profile": "screw_boss.wall_draft",
+      "fallback_to": "ordinary.wall_draft",
+      "status": "placeholder"
+    },
+    {
+      "feature_kind": "rib",
+      "region_role": "wall",
+      "metrics": ["injection.geometry.wall_thickness", "injection.geometry.draft"],
+      "rule_profile": "rib.wall_draft",
+      "fallback_to": "ordinary.wall_draft",
+      "status": "placeholder"
+    }
+  ],
+  "placeholder_policy": {
+    "behavior": "treat_as_ordinary",
+    "fallback_feature_kind": "ordinary_part",
+    "fallback_region_role": "ordinary",
+    "coverage": "whole_model",
+    "emit_synthetic_process_features": false
+  }
+}

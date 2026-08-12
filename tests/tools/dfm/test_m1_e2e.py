@@ -40,6 +40,7 @@ def test_m1_real_tool_vertical_slice(tmp_path):
             {"action": "add_input", "project_id": project_id, "path": str(FIXTURE)},
         )
         for name, value in {
+            "process": "injection",
             "material": "ABS",
             "pull_dir": [0, 0, 1],
             "model_units": "mm",
@@ -54,6 +55,12 @@ def test_m1_real_tool_vertical_slice(tmp_path):
                     "fact_value": value,
                 },
             )
+        discovery = _dispatch(
+            registry, "dfm_analysis", {"action": "discover", "project_id": project_id}
+        )
+        assert discovery["features"][0]["kind"] == "ordinary_part"
+        discovery_feature_refs = set(discovery["snapshot"]["feature_refs"])
+        discovery_region_refs = set(discovery["snapshot"]["region_refs"])
         plan = _dispatch(
             registry, "dfm_analysis", {"action": "plan", "project_id": project_id}
         )
@@ -118,6 +125,21 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         assert "rules" not in measurement_payload
         assert measurement_payload["measurements"]
         assert all(
+            item["feature_refs"] and item["region_refs"]
+            for item in measurement_payload["measurements"]
+            if item["metric_id"] != "geometry.model"
+        )
+        objective_measurements = [
+            item
+            for item in measurement_payload["measurements"]
+            if item["metric_id"] != "geometry.model"
+        ]
+        assert all(
+            set(item["feature_refs"]) == discovery_feature_refs
+            and set(item["region_refs"]) == discovery_region_refs
+            for item in objective_measurements
+        )
+        assert all(
             item["method"] != "llm" for item in measurement_payload["measurements"]
         )
         measurement_ids = {
@@ -134,6 +156,11 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         assert all(
             set(item["measurement_ids"]) <= measurement_ids
             and item["outcome"] in {"pass", "fail", "indeterminate"}
+            for item in evaluation_payload["evaluations"]
+        )
+        assert all(
+            set(item["feature_refs"]) == discovery_feature_refs
+            and set(item["region_refs"]) == discovery_region_refs
             for item in evaluation_payload["evaluations"]
         )
         project_status = _dispatch(
@@ -154,8 +181,15 @@ def test_m1_real_tool_vertical_slice(tmp_path):
         )
         evidence_ids = {item["evidence_id"] for item in evidence_payload["records"]}
         assert all(
+            set(item["feature_refs"]) == discovery_feature_refs
+            and set(item["region_refs"]) == discovery_region_refs
+            for item in evidence_payload["records"]
+        )
+        assert all(
             item["rule_refs"]
             and set(item["evidence_refs"]) <= evidence_ids
+            and set(item["feature_refs"]) == discovery_feature_refs
+            and set(item["region_refs"]) == discovery_region_refs
             for item in findings
         )
     finally:

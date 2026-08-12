@@ -36,7 +36,10 @@
 ```text
 输入登记
 → 格式和能力预检
-→ 关键事实澄清
+→ 二维图纸 Observation 提取（当前占位）
+→ 识别前澄清：工艺、单位及 Recognizer 阻塞事实
+→ 三维 Feature/Region 发现（当前 ordinary 全模型回退）
+→ 分析前澄清：材料、开模方向、冲突和低置信度候选
 → 按注塑/压铸生成最小分析计划
 → 调用确定性几何计算
 → 根据版本化规则评价
@@ -58,7 +61,7 @@
 | ------------------------ | ------------------------------------------------------------ | ---------------------------------------------------- |
 | 注塑 + STEP            | PythonOCC demo 的壁厚/拔模角完整链可用                    | M2.6-A 增加 NX production STEP 并复用同一正式 Scope |
 | 压铸 + STEP            | M2.5 拓扑有效性门可用                                      | 增加压铸 draft/thickness/undercut 等独立规则和计算 |
-| 注塑/压铸 +`.x_t`      | Hermes HTTP NX Client 和 Schema 2 已完成，真实 Server/插件未完成 | M2.6-A 与 STEP 一起打通 NX；之后逐项增加压铸指标 |
+| 注塑/压铸 +`.x_t`      | Hermes HTTP NX Client 和 Schema 4 区域任务契约已完成，真实 Server/插件未完成 | M2.6-A 与 STEP 一起打通 NX；之后逐项增加压铸指标 |
 | 2D 图纸                | 可登记，真实文本理解尚未完成                               | M3 原生 PDF 文本、OCR、版面、字段和澄清闭环        |
 | STEP/`.x_t` + 图纸融合 | 尚未形成生产闭环                                           | M5 做事实融合和二维区域到三维拓扑关联              |
 
@@ -74,16 +77,22 @@ flowchart TB
         TOOL[dfm_project / dfm_analysis]
         SERVICE[DFM Service]
         MANIFEST[Project Manifest]
-        FACTS[Confirmed Facts / Feature Context]
+        DISCOVERY[DiscoveryPlan]
+        OBS[Observations]
+        FEATURES[3D Features / Regions]
+        FUSION[Fusion / Clarification]
+        SNAPSHOT[Discovery Snapshot]
+        FACTS[Confirmed Facts]
         SELECTOR[Rule Selector]
         EFFECTIVE[Effective Rule Set]
-        PLAN[Plan Compiler]
+        PLAN[AnalysisPlan Compiler]
         EVALUATION[EvaluationEngine]
         FINDING[Finding Engine / Report / Artifact]
     end
 
     subgraph GEOMETRY[Geometry Service API]
         REGISTRY[GeometryBackendRegistry]
+        RECOGNIZER[3D Feature Recognizer]
         OCCT[OCCT Backend<br/>StepAnalyzer / Step Worker / OpenCascade]
         NX[NX Backend<br/>STEP + Parasolid<br/>HTTP Client / NX Server / C++ Plugin]
         MEASUREMENT[Measurement-only Artifact]
@@ -92,13 +101,16 @@ flowchart TB
     subgraph DRAWING[图纸理解]
         PDF[PDF 原生文本 / 页面渲染]
         OCR[OCR Provider]
-        LAYOUT[版面 / 字段 / 证据]
+        LAYOUT[版面 / 字段 / Observation]
     end
 
     U --> UI --> SKILL --> TOOL --> SERVICE
     SERVICE <--> MANIFEST
-    MANIFEST --> FACTS
-    FACTS --> SELECTOR --> EFFECTIVE --> PLAN
+    MANIFEST --> DISCOVERY
+    DISCOVERY --> RECOGNIZER --> FEATURES --> FUSION
+    DISCOVERY --> PDF --> OCR --> LAYOUT --> OBS --> FUSION
+    FUSION --> MANIFEST
+    FUSION --> SNAPSHOT --> FACTS --> SELECTOR --> EFFECTIVE --> PLAN
     PLAN --> REGISTRY
     REGISTRY --> OCCT
     REGISTRY --> NX
@@ -107,14 +119,13 @@ flowchart TB
     MEASUREMENT --> EVALUATION
     EFFECTIVE --> EVALUATION
     EVALUATION --> FINDING
-    SERVICE --> PDF --> OCR --> LAYOUT
-    LAYOUT --> FACTS
     FINDING --> UI
 ```
 
-其中 Rule Selector 在几何执行前决定适用规则和所需指标；Geometry Service 只生成
-Measurement；EvaluationEngine 在几何执行后使用 Effective Rule Set 生成独立
-Evaluation，最后由 Finding Engine 形成风险和报告。
+二维 Observation 先用于补全识别前事实；确认已启用 Recognizer 的阻塞事实后，再完成三维 Feature/Region 发现与融合。冻结 Discovery Snapshot 后，
+Rule Selector 才决定适用规则和所需指标。Geometry Service 只生成 Feature/Region 或
+Measurement；EvaluationEngine 使用 Effective Rule Set 生成独立 Evaluation，最后由
+Evidence/Finding Engine 形成精确区域证据、风险和报告。
 
 ## 5. 主流程讲解
 
@@ -123,10 +134,13 @@ Evaluation，最后由 Finding Engine 形成风险和报告。
 ```text
 上传 STEP
 → STEP Preflight
-→ 确认 process
-→ ProcessAdapter 返回 required_facts
-→ 用户确认材料/单位/拔模方向等事实
-→ 编译版本化 Plan
+→ 可选图纸 Observation 提取
+→ 确认 process、model_units 等识别前事实
+→ 编译 DiscoveryPlan
+→ 三维 Feature Recognizer 输出 FeatureSet/RegionSet；当前不可用时输出 ordinary 全模型区域
+→ 融合并确认 material、pull_dir、冲突或低置信度特征
+→ 冻结 Discovery Snapshot
+→ RuleSelector + AnalysisPlan
 → 根据部署模式选择 Backend
 → demo：StepAnalyzer 启动隔离 PythonOCC Worker
 → production：HttpNXBackendClient 上传 STEP，由 NX Worker 读取
@@ -147,11 +161,13 @@ Plan 必须阻塞，不得自动降级到 PythonOCC。注塑和压铸可以复�
 → 输入预检和 SHA256 登记
 → format_id=step 或 parasolid_xt
 → 查询 NX Server capability
-→ 检查 Plan 所需 calculator 是否 certified
+→ 检查 Recognizer/Calculator 是否 certified
 → HttpNXBackendClient 流式上传文件
 → NX Server 排队和分配许可证/NX Worker
-→ C++ Plugin 通过对应 loader 形成规范化 B-Rep 并计算
-→ Server 发布 ObjectiveResultManifest + Measurement/中性几何 Artifact
+→ C++ Plugin 通过对应 loader 形成规范化 B-Rep
+→ DiscoveryPlan 输出 FeatureSet/RegionSet
+→ Hermes 冻结 Snapshot 并编译 AnalysisPlan
+→ Calculator 输出 Measurement/中性几何 Artifact
 → Hermes 校验 Run/Input/Scope、大小和 SHA-256
 → Evaluation / Evidence / Finding / Report
 ```
@@ -169,11 +185,15 @@ Calculator 未认证时，Plan 必须明确 blocked。
 → 标题栏/技术要求/表格等版面识别
 → 提取材料、单位、标称壁厚、公差、表面要求
 → 保存原文、页码、bbox、置信度
-→ 冲突或低置信度字段通过 clarify 让用户确认
-→ 写入项目 Fact
+→ 写入项目 Observation
+→ 与三维 Feature/Region 融合
+→ 冲突、歧义或低置信度结果通过 clarify 让用户确认
+→ 确认后写入 Fact / FusionLink
+→ RuleSelector / AnalysisPlan
 ```
 
-OCR 结果是候选证据，不是自动确认的工程事实；仅图纸输入不能伪造精确三维测量。
+OCR 结果是候选 Observation，不是自动确认的工程事实；二维流程发生在最终规则选择和
+几何 AnalysisPlan 之前。仅图纸输入不能伪造精确三维测量。
 
 ## 6. 六人团队角色设计
 
@@ -443,7 +463,7 @@ tests/fixtures/dfm/drawings/
 
 Sprint 0 必须以 [DFM/NX Production Task Contract](../dfm-nx-task-contract.md) 为单一事实源，
 完成 Rule/Metric/Calculator/Operation/Measurement/Region ID 词典、任务级参数、结构化
-capability、Region、Measurement 回链、唯一 Objective Task/Result Schema 2 和 Hermes/NX 共用 JSON fixtures。仅开会确认
+capability、Region、Measurement 回链、唯一 Objective Task/Result Schema 4 和 Hermes/NX 共用 JSON fixtures。仅开会确认
 概念或分别维护 Python/C++ 示例不视为完成。
 
 ### Sprint 1：M2.6-A 当前 Scope 与 NX 双格式最小闭环
@@ -455,7 +475,7 @@ STEP/Parasolid 上传 → Mock Job → 真实 NX 分别打开 → topology + wal
 → ObjectiveResultManifest → Hermes Evaluation/Evidence/Finding/Report
 ```
 
-本 Sprint 复用 `injection.wall-draft@2.0.0` 的 ABS/mm/单方向壁厚与拔模角，只验证生产
+本 Sprint 复用 `injection.wall-draft@3.0.0` 的 ABS/mm/单方向壁厚与拔模角，只验证生产
 模块和统一数据流。Topology 是中间冒烟，不是 Sprint 完成标准。与此同时，模具工程师
 和 A/B/E 准备黄金产品完整事实、指标、区域、容差和追溯矩阵。
 

@@ -162,6 +162,15 @@ class StepAnalyzer:
             scope_id=context.plan.scope_id,
             scope_version=context.plan.scope_version,
             operations=context.plan.operations,
+            regions=[
+                item
+                for item in context.plan.regions
+                if item.input_sha256 == input_record.sha256
+                and any(
+                    item.region_id in operation.region_refs
+                    for operation in context.plan.operations
+                )
+            ],
         )
         request = LocalObjectiveWorkerRequest(
             schema_version=WORKER_SCHEMA_VERSION,
@@ -287,6 +296,7 @@ class StepAnalyzer:
             input_sha256=input_record.sha256,
             process=context.plan.process,
             scope_id=context.plan.scope_id,
+            regions=context.plan.regions,
             error_code="objective_result_invalid",
         )
         return artifacts

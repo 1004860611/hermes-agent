@@ -19,11 +19,13 @@ from .config import DFMConfig, load_dfm_config
 from .contracts import (
     ClarificationRecord,
     FactRecord,
+    PlanOperation,
     PlanRecord,
     ProjectManifest,
     RunRecord,
     RunStatus,
 )
+from .discovery import DiscoveryEngine
 from .errors import DFMError
 from .project.inputs import InputRegistrar
 from .project.manifest import ManifestStore
@@ -61,6 +63,8 @@ class DFMService:
         "mold_pull_direction": "pull_dir",
         "pull_dir": "pull_dir",
         "material": "material",
+        "process": "process",
+        "manufacturing_process": "process",
     }
     
     def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, process_registry: ProcessAdapterRegistry | None = None, reconcile_jobs: bool = True) -> None:
@@ -69,6 +73,7 @@ class DFMService:
         self.registry = registry or build_default_registry(self.config)
         self.process_registry = process_registry or build_default_process_registry()
         self.inputs = InputRegistrar(self.workspace, self.config)
+        self.discovery = DiscoveryEngine()
         self.jobs = JobManager(self.workspace, self.registry, self.config, reconcile=reconcile_jobs)
 
     def _store(self, project_id: str) -> ManifestStore:
@@ -146,12 +151,46 @@ class DFMService:
             include(operation_id)
         return [item for item in operations if item.operation_id in required]
 
+    @staticmethod
+    def _affected_operations_for_fact(plan: PlanRecord, fact_name: str) -> list[str]:
+        """Return the directly affected operations plus their downstream consumers."""
+
+        if fact_name == "process":
+            return [item.operation_id for item in plan.operations]
+        affected = {
+            item.operation_id
+            for item in plan.operations
+            if fact_name in item.required_fact_names
+        }
+        affected.update(
+            item.operation_id
+            for item in plan.rule_bindings
+            if fact_name in item.required_fact_names
+        )
+        changed = True
+        while changed:
+            changed = False
+            for operation in plan.operations:
+                if operation.operation_id not in affected and affected.intersection(
+                    operation.depends_on
+                ):
+                    affected.add(operation.operation_id)
+                    changed = True
+        return [
+            item.operation_id
+            for item in plan.operations
+            if item.operation_id in affected
+        ]
+
     def _capabilities(self, manifest: ProjectManifest) -> dict[str, dict[str, Any]]:
         context = self._context(manifest)
         return {key: self.registry.get(key).capability(context).to_dict() for key in self.registry.keys()}
 
     def _open_clarifications(
-        self, manifest: ProjectManifest, process: str | None = None
+        self,
+        manifest: ProjectManifest,
+        process: str | None = None,
+        phase: str = "all",
     ) -> list[ClarificationRecord]:
         # Reserved Parasolid-only projects do not ask engineering questions
         # before an approved reader exists. Mixed/STEP geometry still uses the
@@ -161,15 +200,24 @@ class DFMService:
         ):
             return []
         adapter = self.process_registry.get(process or manifest.process or self.config.default_process)
-        required_facts = adapter.required_facts()
+        requirements = adapter.fact_requirements()
+        available_discovery_facts = self.discovery.required_fact_names()
         confirmed = {
             self._canonical_fact_name(fact.name)
             for fact in manifest.facts
             if fact.status == "confirmed"
         }
+        if manifest.process_source != "default":
+            confirmed.add("process")
         existing = {item.clarification_id: item for item in manifest.clarifications}
         result = []
-        for name, question in required_facts.items():
+        for requirement in requirements:
+            required_in_phase = requirement.phase == phase
+            if phase == "discovery" and requirement.name in available_discovery_facts:
+                required_in_phase = True
+            if phase != "all" and not required_in_phase:
+                continue
+            name, question = requirement.name, requirement.question
             if name in confirmed:
                 continue
             clarification_id = f"clarification_{name}"
@@ -203,11 +251,13 @@ class DFMService:
 
         return store.update(reconcile)
 
-    def _ensure_clarifications(self, project_id: str) -> ProjectManifest:
+    def _ensure_clarifications(
+        self, project_id: str, *, phase: str = "all"
+    ) -> ProjectManifest:
         store = self._store(project_id)
 
         def ensure(current: ProjectManifest) -> ProjectManifest:
-            pending = self._open_clarifications(current)
+            pending = self._open_clarifications(current, phase=phase)
             known = {item.clarification_id for item in current.clarifications}
             additions = [item for item in pending if item.clarification_id not in known]
             if not additions:
@@ -222,8 +272,84 @@ class DFMService:
 
     def _project_payload(self, manifest: ProjectManifest) -> dict[str, Any]:
         payload = manifest.to_dict()
-        payload["open_clarifications"] = [item.to_dict() for item in self._open_clarifications(manifest)]
+        phase = "analysis" if manifest.discovery_snapshots else "discovery"
+        payload["open_clarifications"] = [
+            item.to_dict()
+            for item in self._open_clarifications(manifest, phase=phase)
+        ]
+        payload["discovery_capability"] = self.discovery.capability()
         return payload
+
+    def _latest_discovery_snapshot(self, manifest: ProjectManifest):
+        input_hashes = {
+            item.input_id: item.sha256 for item in self._active_inputs(manifest)
+        }
+        discovery_fact_names = {"process", *self.discovery.required_fact_names()}
+        latest_discovery_facts = {
+            fact.name: fact.fact_id
+            for fact in manifest.facts
+            if fact.status == "confirmed" and fact.name in discovery_fact_names
+        }
+        return next(
+            (
+                item
+                for item in reversed(manifest.discovery_snapshots)
+                if item.input_hashes == input_hashes
+                and item.process == manifest.process
+                and item.status == "frozen"
+                and set(latest_discovery_facts.values()).issubset(
+                    set(item.confirmed_fact_refs)
+                )
+            ),
+            None,
+        )
+
+    def _bind_discovery_scope(self, process_plan, manifest, snapshot):
+        """Expand metric templates into one operation per non-overlapping region."""
+
+        if not process_plan.rule_bindings:
+            return process_plan
+        targets = self.discovery.analysis_targets(manifest, snapshot)
+        templates = {
+            metric_id: operation
+            for operation in process_plan.operations
+            for metric_id in operation.metric_ids
+        }
+        binding_templates = {
+            item.metric_id: item for item in process_plan.rule_bindings
+        }
+        operations = [item for item in process_plan.operations if not item.metric_ids]
+        bindings = []
+        for target in targets:
+            metric_id = target["metric_id"]
+            template = templates.get(metric_id)
+            binding = binding_templates.get(metric_id)
+            if template is None or binding is None:
+                raise DFMError(
+                    "analysis_target_unsupported",
+                    "A discovered region requests a metric without a calculator/rule binding.",
+                    {"metric_id": metric_id, "region_id": target["region"].region_id},
+                )
+            suffix = target["region"].content_sha256[:12]
+            operation_id = f"{template.operation_id}.{suffix}"
+            operations.append(
+                replace(
+                    template,
+                    operation_id=operation_id,
+                    feature_refs=[target["feature"].feature_id],
+                    region_refs=[target["region"].region_id],
+                )
+            )
+            bindings.append(
+                replace(
+                    binding,
+                    binding_id=f"{binding.binding_id}.{suffix}",
+                    operation_id=operation_id,
+                    feature_refs=[target["feature"].feature_id],
+                    region_refs=[target["region"].region_id],
+                )
+            )
+        return replace(process_plan, operations=operations, rule_bindings=bindings)
 
     def _select_process(self, project_id: str, process: str, source: str) -> ProjectManifest:
         self.process_registry.get(process)
@@ -281,6 +407,11 @@ class DFMService:
     def project(self, action: str, **params: Any) -> dict[str, Any]:
         if action == "create":
             manifest = self.workspace.create_project(params.get("name") or "Untitled DFM project", params.get("idempotency_key"))
+            requested_process = str(params.get("process") or "").strip()
+            if requested_process:
+                manifest = self._select_process(
+                    manifest.project_id, requested_process, "user_selected"
+                )
             return {"ok": True, "project_id": manifest.project_id, "project": manifest.to_dict()}
         if action == "list":
             projects = []
@@ -296,12 +427,19 @@ class DFMService:
         if action == "add_input":
             source_path = _resolve_input_path(params.get("path"), params.get("working_dir"))
             record = self.inputs.register(project_id, source_path)
-            manifest = self._ensure_clarifications(project_id)
+            self._store(project_id).update(self.discovery.refresh_candidates)
+            manifest = self._ensure_clarifications(project_id, phase="discovery")
             return {
                 "ok": True,
                 "project_id": project_id,
                 "input": record.to_dict(),
-                "open_clarifications": [item.to_dict() for item in self._open_clarifications(manifest)],
+                "open_clarifications": [
+                    item.to_dict()
+                    for item in self._open_clarifications(
+                        manifest, phase="discovery"
+                    )
+                ],
+                "discovery_capability": self.discovery.capability(),
             }
         if action == "confirm_fact":
             name = self._canonical_fact_name(str(params.get("fact_name") or ""))
@@ -311,34 +449,52 @@ class DFMService:
             # Normalize fact_value: parse JSON strings for known array parameters
             raw_value = params.get("fact_value")
             normalized_value = self._normalize_fact_value(name, raw_value)
+            if name == "process":
+                normalized_value = str(normalized_value or "").strip()
+                if normalized_value == "injection_molding":
+                    normalized_value = "injection"
+                self.process_registry.get(normalized_value)
             
             fact = FactRecord(f"fact_{uuid4().hex[:16]}", name, normalized_value, "user", "confirmed")
-            manifest = self._store(project_id).update(
-                lambda current: replace(
+            def confirm(current: ProjectManifest) -> ProjectManifest:
+                plans = []
+                for plan in current.plans:
+                    affected = self._affected_operations_for_fact(plan, name)
+                    plans.append(
+                        replace(
+                            plan,
+                            status="invalidated",
+                            invalidated_by=f"fact:{name}",
+                            affected_operation_ids=affected,
+                        )
+                        if affected
+                        else plan
+                    )
+                return replace(
                     current,
                     facts=[*current.facts, fact],
+                    process=normalized_value if name == "process" else current.process,
+                    process_source=(
+                        "user_confirmed" if name == "process" else current.process_source
+                    ),
+                    domain=(
+                        "injection_molding"
+                        if name == "process" and normalized_value == "injection"
+                        else "die_casting"
+                        if name == "process" and normalized_value == "die_casting"
+                        else current.domain
+                    ),
                     clarifications=[
                         replace(item, status="answered", answer=fact.value)
                         if item.clarification_id == f"clarification_{name}"
                         else item
                         for item in current.clarifications
                     ],
-                    plans=[
-                        replace(
-                            plan,
-                            status="invalidated",
-                            invalidated_by=f"fact:{name}",
-                            affected_operation_ids=(
-                                ["geometry.draft", "geometry.undercut"]
-                                if name == "pull_dir"
-                                else [item.operation_id for item in plan.operations]
-                            ),
-                        )
-                        for plan in current.plans
-                    ],
+                    plans=plans,
                     updated_at=_utc_now(),
                 )
-            )
+
+            manifest = self._store(project_id).update(confirm)
             return {"ok": True, "project_id": project_id, "fact": fact.to_dict(), "revision": manifest.revision}
         if action == "status":
             manifest = self._reconcile_clarifications(project_id)
@@ -357,6 +513,134 @@ class DFMService:
 
     def analysis(self, action: str, **params: Any) -> dict[str, Any]:
         project_id = params.get("project_id") or ""
+        if action == "discover":
+            store = self._store(project_id)
+            manifest = self._reconcile_clarifications(project_id)
+            requested_process = str(params.get("process") or manifest.process or "")
+            if params.get("process"):
+                manifest = self._select_process(
+                    project_id, requested_process, "user_selected"
+                )
+            manifest = self._ensure_clarifications(
+                project_id, phase="discovery"
+            )
+            open_clarifications = self._open_clarifications(
+                manifest, requested_process, phase="discovery"
+            )
+            if open_clarifications:
+                return {
+                    "ok": False,
+                    "project_id": project_id,
+                    "status": "clarification_required",
+                    "phase": "discovery",
+                    "requires_user_response": True,
+                    "next_action": "clarify",
+                    "do_not_infer": True,
+                    "clarifications": [
+                        item.to_dict() for item in open_clarifications
+                    ],
+                }
+            discovered, snapshot = self.discovery.freeze(manifest)
+            existing_plan = next(
+                (
+                    item
+                    for item in reversed(discovered.plans)
+                    if item.phase == "discovery"
+                    and item.discovery_snapshot_refs == [snapshot.snapshot_id]
+                    and item.status == "completed"
+                ),
+                None,
+            )
+            active_inputs = self._active_inputs(discovered)
+            discovery_plan = existing_plan or PlanRecord(
+                plan_id=f"plan_{uuid4().hex[:16]}",
+                input_mode=discovered.input_mode or "geometry",
+                analyzer_keys=["hermes_discovery"],
+                status="completed",
+                created_at=_utc_now(),
+                process=discovered.process,
+                process_adapter_version=self.discovery.version,
+                scope_id=str(self.discovery.catalog["catalog_id"]),
+                scope_version=str(self.discovery.catalog["version"]),
+                input_ids=[item.input_id for item in active_inputs],
+                input_hashes={item.input_id: item.sha256 for item in active_inputs},
+                operations=[
+                    PlanOperation(
+                        "discovery.drawing_observations",
+                        "extract_drawing_observations_placeholder",
+                    ),
+                    PlanOperation(
+                        "discovery.generic_geometry",
+                        "recognize_ordinary_region",
+                        depends_on=["discovery.drawing_observations"],
+                        required_fact_names=["model_units"],
+                    ),
+                    PlanOperation(
+                        "discovery.process_features",
+                        "recognize_process_features_placeholder",
+                        depends_on=["discovery.generic_geometry"],
+                        required_fact_names=["process", "model_units"],
+                        feature_refs=list(snapshot.feature_refs),
+                        region_refs=list(snapshot.region_refs),
+                    ),
+                    PlanOperation(
+                        "discovery.fusion",
+                        "fuse_observations_placeholder",
+                        depends_on=["discovery.process_features"],
+                        feature_refs=list(snapshot.feature_refs),
+                        region_refs=list(snapshot.region_refs),
+                    ),
+                ],
+                phase="discovery",
+                discovery_snapshot_refs=[snapshot.snapshot_id],
+                regions=[
+                    item
+                    for item in discovered.regions
+                    if item.region_id in snapshot.region_refs
+                ],
+            )
+            plans = (
+                discovered.plans
+                if existing_plan is not None
+                else [*discovered.plans, discovery_plan]
+            )
+            manifest = store.update(
+                lambda current: replace(
+                    current,
+                    features=discovered.features,
+                    regions=discovered.regions,
+                    observations=discovered.observations,
+                    fusion_links=discovered.fusion_links,
+                    discovery_snapshots=discovered.discovery_snapshots,
+                    plans=plans,
+                    updated_at=_utc_now(),
+                )
+            )
+            self._ensure_clarifications(project_id, phase="analysis")
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "phase": "discovery",
+                "plan": discovery_plan.to_dict(),
+                "snapshot": snapshot.to_dict(),
+                "features": [
+                    item.to_dict()
+                    for item in manifest.features
+                    if item.feature_id in snapshot.feature_refs
+                ],
+                "regions": [
+                    item.to_dict()
+                    for item in manifest.regions
+                    if item.region_id in snapshot.region_refs
+                ],
+                "capability": self.discovery.capability(),
+                "open_clarifications": [
+                    item.to_dict()
+                    for item in self._open_clarifications(
+                        manifest, phase="analysis"
+                    )
+                ],
+            }
         if action == "plan":
             store = self._store(project_id)
             manifest = self._reconcile_clarifications(project_id)
@@ -369,8 +653,20 @@ class DFMService:
                 requested_process,
                 "user_selected" if params.get("process") else manifest.process_source,
             )
-            manifest = self._ensure_clarifications(project_id)
-            open_clarifications = self._open_clarifications(manifest, requested_process)
+            manifest = self._ensure_clarifications(project_id, phase="analysis")
+            discovery_snapshot = self._latest_discovery_snapshot(manifest)
+            if discovery_snapshot is None:
+                return {
+                    "ok": False,
+                    "project_id": project_id,
+                    "status": "discovery_required",
+                    "phase": "discovery",
+                    "requires_user_response": False,
+                    "next_action": "discover",
+                }
+            open_clarifications = self._open_clarifications(
+                manifest, requested_process, phase="analysis"
+            )
             if open_clarifications:
                 return {
                     "ok": False,
@@ -400,6 +696,9 @@ class DFMService:
                     and fact.name in defaults.accepted_inputs
                 }
                 process_plan = adapter.compile(context, raw_parameters)
+                process_plan = self._bind_discovery_scope(
+                    process_plan, manifest, discovery_snapshot
+                )
             parent_plan_id = str(params.get("base_plan_id") or "") or None
             parent_plan = next(
                 (item for item in manifest.plans if item.plan_id == parent_plan_id), None
@@ -410,7 +709,15 @@ class DFMService:
                 raise DFMError("plan_not_rebuildable", "Only an invalidated plan can be rebuilt incrementally.", {"plan_id": parent_plan_id, "status": parent_plan.status})
             operations = self._operation_closure(
                 process_plan.operations if process_plan else [],
-                parent_plan.affected_operation_ids if parent_plan else [],
+                (
+                    []
+                    if parent_plan
+                    and parent_plan.invalidated_by
+                    and not parent_plan.invalidated_by.startswith("fact:")
+                    else parent_plan.affected_operation_ids
+                    if parent_plan
+                    else []
+                ),
             )
             operation_ids = {item.operation_id for item in operations}
             rule_bindings = (
@@ -440,6 +747,13 @@ class DFMService:
                 rule_bindings=rule_bindings,
                 operations=operations,
                 parent_plan_id=parent_plan_id,
+                phase="analysis",
+                discovery_snapshot_refs=[discovery_snapshot.snapshot_id],
+                regions=[
+                    item
+                    for item in manifest.regions
+                    if item.region_id in discovery_snapshot.region_refs
+                ],
             )
             capability = analyzer.capability(self._context(manifest, plan))
             plan = replace(
