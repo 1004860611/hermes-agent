@@ -96,23 +96,6 @@ HOTELUX_SUPPORT_PLAYBOOK_SCHEMA = {
 }
 
 
-def _order_fact_schema(name: str, description: str) -> Dict[str, Any]:
-    return {
-        "name": name,
-        "description": description,
-        "parameters": _object_schema(
-            f"{name} input.",
-            {
-                "orderNo": {"type": "string", "description": "Order number, for example O0260404421."},
-                "search": {
-                    "type": "string",
-                    "description": "Order search keyword, such as confirmation number or mixed alphanumeric id.",
-                },
-            },
-        ),
-    }
-
-
 ORDER_POINTS_SCHEMA = {
     "name": "order_points",
     "description": (
@@ -126,36 +109,174 @@ ORDER_POINTS_SCHEMA = {
     ),
 }
 
-ORDER_CONFIRMATION_SCHEMA = _order_fact_schema(
-    "order_confirmation",
-    "Query order confirmation facts, including platform order number, hotel confirmation number, "
-    "and whether the order was found.",
-)
+RESULT_QUERY_SCHEMA = {
+    "type": "object",
+    "description": (
+        "Safe declarative filters generated from the current user question. "
+        "Only the documented fields are accepted; scripts and regular expressions are not supported."
+    ),
+    "properties": {
+        "hotel": {
+            "type": "object",
+            "description": "Filters applied to stored hotel search results.",
+            "properties": {
+                "ids": {"type": "array", "items": {"type": "string"}},
+                "codes": {"type": "array", "items": {"type": "string"}},
+                "keywords": {"type": "array", "items": {"type": "string"}, "description": "Match any term."},
+                "allKeywords": {"type": "array", "items": {"type": "string"}, "description": "Match every term."},
+                "cities": {"type": "array", "items": {"type": "string"}},
+                "brands": {"type": "array", "items": {"type": "string"}},
+                "chains": {"type": "array", "items": {"type": "string"}},
+                "minRating": {"type": "number"},
+                "maxPrice": {"type": "number"},
+            },
+            "additionalProperties": False,
+        },
+        "room": {
+            "type": "object",
+            "description": (
+                "Room filters: keywords, allKeywords, bedTypes, views, minSize, maxSize, minCapacity. "
+                "Use keywords for room categories such as suite, villa, club room, or family room."
+            ),
+            "properties": {
+                "ids": {"type": "array", "items": {"type": "string"}},
+                "codes": {"type": "array", "items": {"type": "string"}},
+                "keywords": {"type": "array", "items": {"type": "string"}, "description": "Match any term."},
+                "allKeywords": {"type": "array", "items": {"type": "string"}, "description": "Match every term."},
+                "bedTypes": {"type": "array", "items": {"type": "string"}},
+                "views": {"type": "array", "items": {"type": "string"}},
+                "minSize": {"type": "number"},
+                "maxSize": {"type": "number"},
+                "minCapacity": {"type": "number"},
+            },
+            "additionalProperties": False,
+        },
+        "rate": {
+            "type": "object",
+            "description": (
+                "Rate filters: keywords, minPrice, maxPrice, currency, breakfastIncluded, "
+                "cancellable, paymentTypes. Prices refer to the returned stay total when available."
+            ),
+            "properties": {
+                "codes": {"type": "array", "items": {"type": "string"}},
+                "benefitCodes": {"type": "array", "items": {"type": "string"}},
+                "keywords": {"type": "array", "items": {"type": "string"}, "description": "Match any term."},
+                "allKeywords": {"type": "array", "items": {"type": "string"}, "description": "Match every term."},
+                "minPrice": {"type": "number"},
+                "maxPrice": {"type": "number"},
+                "currency": {"type": "array", "items": {"type": "string"}},
+                "breakfastIncluded": {"type": "boolean"},
+                "cancellable": {"type": "boolean"},
+                "paymentTypes": {"type": "array", "items": {"type": "string"}},
+            },
+            "additionalProperties": False,
+        },
+        "sort": {
+            "type": "string",
+            "enum": [
+                "recommendation", "price_asc", "price_desc", "name_asc", "name_desc",
+                "rating_desc", "size_desc", "capacity_desc",
+            ],
+        },
+        "detail": {
+            "type": "string",
+            "enum": ["index", "standard"],
+            "description": "index returns the complete lightweight index; standard also returns paged details.",
+        },
+        "page": {
+            "type": "object",
+            "description": "Paging: offset, limit, rateOffset, rateLimitPerRoom.",
+            "properties": {
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                "rateOffset": {"type": "integer", "minimum": 0},
+                "rateLimitPerRoom": {"type": "integer", "minimum": 1, "maximum": 10},
+            },
+            "additionalProperties": False,
+        },
+    },
+    "additionalProperties": False,
+}
 
-POINTS_RECONCILE_SCHEMA = _order_fact_schema(
-    "points_reconcile",
-    "Reconcile platform points for an order, including expected points, actual points, and audit status.",
-)
+HOTEL_RATES_SCHEMA = {
+    "name": "hotel_rates",
+    "description": (
+        "Query live room types and rate plans for a selected hotel when the user "
+        "needs detailed availability and pricing."
+    ),
+    "parameters": _object_schema(
+        "Hotel rates input.",
+        {
+            "mode": {
+                "type": "string",
+                "description": "Query mode: sync, async, or asyncPaging.",
+            },
+            "stay": {
+                "type": "object",
+                "description": "Stay details containing date.checkIn/date.checkOut and optional guest counts.",
+            },
+            "hotel": {
+                "type": "object",
+                "description": "Hotel identity from the selected hotel result.",
+            },
+            "preferred": {
+                "type": "object",
+                "description": "Optional currency and other preference settings.",
+            },
+            "resultQuery": RESULT_QUERY_SCHEMA,
+        },
+        required=["stay", "hotel"],
+    ),
+}
 
-ORDER_BENEFITS_SCHEMA = _order_fact_schema(
-    "order_benefits",
-    "Query known order benefit facts such as breakfast, guest count, property credit, late checkout, and lounge access.",
-)
+ENTERPRISE_RESULT_QUERY_SCHEMA = {
+    "name": "enterprise_result_query",
+    "description": (
+        "Continue filtering a large structured result previously returned with resultRef. "
+        "Generate safe hotel, room, rate, sort, and paging conditions from the current user question. "
+        "Reuse this instead of calling the upstream hotel API again."
+    ),
+    "parameters": _object_schema(
+        "Stored enterprise result query input.",
+        {
+            "resultRef": {
+                "type": "string",
+                "description": "Opaque resultRef returned by hotel_search, hotel_rates, or a prior query.",
+            },
+            "query": RESULT_QUERY_SCHEMA,
+        },
+        required=["resultRef"],
+    ),
+}
 
-CANCELLATION_ELIGIBILITY_SCHEMA = _order_fact_schema(
-    "cancellation_eligibility",
-    "Precheck cancellation and refund facts for an order, including free cancellation, current cancellation status, and suggested path.",
-)
-
-PAYMENT_DIAGNOSIS_SCHEMA = _order_fact_schema(
-    "payment_diagnosis",
-    "Diagnose order payment and guarantee facts, including payment status, deposit status, guarantee card presence, and likely scenarios.",
-)
-
-CHANGE_PRECHECK_SCHEMA = _order_fact_schema(
-    "change_precheck",
-    "Precheck order name/date/guest changes, including dates, contact info, sensitivity, and whether hotel approval may be needed.",
-)
+HOTEL_RATE_RULE_SCHEMA = {
+    "name": "hotel_rate_rule",
+    "description": (
+        "Query the booking and cancellation rules for one selected hotel rate plan."
+    ),
+    "parameters": _object_schema(
+        "Hotel rate-rule input.",
+        {
+            "stay": {
+                "type": "object",
+                "description": "Stay details containing dates and optional guest counts.",
+            },
+            "hotel": {
+                "type": "object",
+                "description": "The hotel associated with the selected rate.",
+            },
+            "rate": {
+                "type": "object",
+                "description": "The selected hotel rate object.",
+            },
+            "preferred": {
+                "type": "object",
+                "description": "Optional currency and other preference settings.",
+            },
+        },
+        required=["stay", "hotel", "rate"],
+    ),
+}
 
 HOTELUX_HOTEL_POLICY_SCHEMA = {
     "name": "hotelux_hotel_policy",
@@ -417,12 +538,21 @@ registry.register(**_registration(
     mcp_tool="hotelux.support_playbook",
 ))
 registry.register(**_registration(ORDER_POINTS_SCHEMA, toolset="order_points", mcp_tool="order.points"))
-registry.register(**_registration(ORDER_CONFIRMATION_SCHEMA, toolset="order_confirmation", mcp_tool="order.confirmation"))
-registry.register(**_registration(POINTS_RECONCILE_SCHEMA, toolset="points_reconcile", mcp_tool="points.reconcile"))
-registry.register(**_registration(ORDER_BENEFITS_SCHEMA, toolset="order_benefits", mcp_tool="order.benefits"))
-registry.register(**_registration(CANCELLATION_ELIGIBILITY_SCHEMA, toolset="cancellation_eligibility", mcp_tool="cancellation.eligibility"))
-registry.register(**_registration(PAYMENT_DIAGNOSIS_SCHEMA, toolset="payment_diagnosis", mcp_tool="payment.diagnosis"))
-registry.register(**_registration(CHANGE_PRECHECK_SCHEMA, toolset="change_precheck", mcp_tool="change.precheck"))
+registry.register(**_registration(HOTEL_RATES_SCHEMA, toolset="hotel_rates", mcp_tool="hotel.rates"))
+registry.register(**_registration(
+    ENTERPRISE_RESULT_QUERY_SCHEMA,
+    toolset="enterprise_result_query",
+    mcp_tool="enterprise.resultQuery",
+    capability_ref="enterprise_resultQuery",
+    aliases={"enterprise_result_query"},
+))
+registry.register(**_registration(
+    HOTEL_RATE_RULE_SCHEMA,
+    toolset="hotel_rate_rule",
+    mcp_tool="hotel.rateRule",
+    capability_ref="hotel_rateRule",
+    aliases={"hotel_rate_rule"},
+))
 registry.register(**_registration(HOTELUX_HOTEL_POLICY_SCHEMA, toolset="hotelux_hotel_policy", mcp_tool="hotelux.hotel_policy"))
 registry.register(**_registration(CHARMDEER_SUPPORT_PLAYBOOK_SCHEMA, toolset="charmdeer_support_playbook", mcp_tool="charmdeer.support_playbook"))
 registry.register(**_registration(CHARMDEER_HOTEL_POLICY_SCHEMA, toolset="charmdeer_hotel_policy", mcp_tool="charmdeer.hotel_policy"))

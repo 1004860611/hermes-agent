@@ -97,7 +97,10 @@ async def test_run_agent_binds_api_session_context_for_tool_env(adapter, monkeyp
             observed["context_session_id"] = get_session_env("HERMES_SESSION_ID")
             observed["context_platform"] = get_session_env("HERMES_SESSION_PLATFORM")
             observed["context_session_key"] = get_session_env("HERMES_SESSION_KEY")
+            observed["context_user_id"] = get_session_env("HERMES_SESSION_USER_ID")
+            observed["context_user_name"] = get_session_env("HERMES_SESSION_USER_NAME")
             observed["child_session_id"] = _make_run_env({}).get("HERMES_SESSION_ID")
+            observed["child_user_id"] = _make_run_env({}).get("HERMES_SESSION_USER_ID")
             return {"final_response": "ok"}
 
     def fake_create_agent(**kwargs):
@@ -110,6 +113,8 @@ async def test_run_agent_binds_api_session_context_for_tool_env(adapter, monkeyp
         conversation_history=[],
         session_id="request-session",
         gateway_session_key="request-key",
+        user_id="enterprise-user-1",
+        user_name="staff",
     )
 
     assert result["session_id"] == "request-session"
@@ -119,7 +124,10 @@ async def test_run_agent_binds_api_session_context_for_tool_env(adapter, monkeyp
         "context_session_id": "request-session",
         "context_platform": "api_server",
         "context_session_key": "request-key",
+        "context_user_id": "enterprise-user-1",
+        "context_user_name": "staff",
         "child_session_id": "request-session",
+        "child_user_id": "enterprise-user-1",
     }
 
 

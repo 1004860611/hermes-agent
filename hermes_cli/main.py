@@ -12432,6 +12432,15 @@ def _prepare_agent_startup(args) -> None:
     ):
         return
 
+    # Platform plugins can import aiohttp, which constructs SSL contexts at
+    # import time.  Prepare gateway TLS before plugin discovery so a malformed
+    # Windows certificate cannot crash both the plugin and the later built-in
+    # API server adapter.
+    if args.command == "gateway":
+        from gateway.ssl_compat import ensure_gateway_ssl_certs
+
+        ensure_gateway_ssl_certs()
+
     _accept_hooks = bool(getattr(args, "accept_hooks", False))
     try:
         from hermes_cli.plugins import discover_plugins

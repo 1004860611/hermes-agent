@@ -2768,6 +2768,66 @@ class TestSendMethod:
         assert "HTTP request/response" in result.error
 
 
+class TestEnterpriseConsumerStream:
+    @pytest.mark.asyncio
+    async def test_enterprise_stream_binds_consumer_user_context(
+        self, auth_adapter, monkeypatch, tmp_path
+    ):
+        import gateway.enterprise_workspace as enterprise_workspace
+
+        monkeypatch.setenv("HERMES_ENTERPRISE_DIRECT_HOTEL_SEARCH", "false")
+        monkeypatch.setattr(enterprise_workspace, "get_hermes_home", lambda: tmp_path)
+        observed = {}
+
+        class FakeAgent:
+            session_prompt_tokens = 0
+            session_completion_tokens = 0
+            session_total_tokens = 0
+
+            def __init__(self, stream_delta_callback):
+                self._stream_delta_callback = stream_delta_callback
+
+            def run_conversation(self, user_message, conversation_history, task_id):
+                from gateway.session_context import get_session_env
+
+                observed["user_id"] = get_session_env("HERMES_SESSION_USER_ID")
+                observed["user_name"] = get_session_env("HERMES_SESSION_USER_NAME")
+                if self._stream_delta_callback:
+                    self._stream_delta_callback("ok")
+                return {"final_response": "ok", "completed": True}
+
+        def fake_create_agent(**kwargs):
+            return FakeAgent(kwargs.get("stream_delta_callback"))
+
+        monkeypatch.setattr(auth_adapter, "_create_agent", fake_create_agent)
+        app = _create_app(auth_adapter)
+        app.router.add_post(
+            "/v1/enterprise/turn/stream",
+            auth_adapter._handle_enterprise_turn_stream,
+        )
+        payload = {
+            "version": "enterprise-hermes-consumer-v1",
+            "requestId": "req-user-context-1",
+            "user": {"id": "staff-1", "type": "user"},
+            "session": {"id": "chat-user-context-1"},
+            "message": {"role": "user", "content": "hello"},
+            "runtimePolicy": {"allowedCapabilityRefs": []},
+        }
+
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/enterprise/turn/stream",
+                json=payload,
+                headers={"Authorization": "Bearer sk-secret"},
+            )
+            text = await resp.text()
+
+        assert resp.status == 200
+        assert "event: error" not in text
+        assert "event: done" in text
+        assert observed == {"user_id": "staff-1", "user_name": "user"}
+
+
 class TestEnterpriseDirectHotelStream:
     @pytest.mark.asyncio
     async def test_direct_hotel_turn_returns_without_agent(self, auth_adapter, monkeypatch, tmp_path):
