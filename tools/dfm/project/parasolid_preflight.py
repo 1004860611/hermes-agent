@@ -38,5 +38,5 @@ def inspect_parasolid_xt(path: Path) -> dict[str, object]:
         "header_preview": header.splitlines()[0][:160],
         "inspection_level": "opaque_text_only",
         "geometry_verified": False,
-        "geometry_verifier": "nx_http_backend",
+        "geometry_verifier": "external_backend_required",
     }

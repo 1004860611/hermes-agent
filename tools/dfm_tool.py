@@ -40,7 +40,7 @@ DFM_PROJECT_SCHEMA = {
 
 DFM_ANALYSIS_SCHEMA = {
     "name": "dfm_analysis",
-    "description": "Plan and manage non-blocking DFM runs. Unavailable analyzers fail explicitly; never infer engineering findings from that status.",
+    "description": "Plan and manage non-blocking DFM runs. The current PythonOCC STEP analyzer is a non-certified reference backend; the production OCCT C++ engine is not connected yet. Unavailable analyzers fail explicitly; never infer engineering findings from that status.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["discover", "plan", "start", "status", "cancel", "result"]},
         "project_id": {"type": "string"}, "plan_id": {"type": "string"}, "run_id": {"type": "string", "description": "Run ID returned by start. Always pass it to status, result, or cancel; if omitted, the service can infer it only when unambiguous."},

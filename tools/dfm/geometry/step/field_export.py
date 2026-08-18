@@ -1,4 +1,4 @@
-"""Export PythonOCC geometry calculations through the neutral NX contract."""
+"""Export PythonOCC reference calculations through the backend-neutral contract."""
 
 from __future__ import annotations
 

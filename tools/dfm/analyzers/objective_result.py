@@ -23,7 +23,7 @@ def validate_objective_result(
     regions: list[RegionRecord] | None = None,
     error_code: str = "objective_result_invalid",
 ) -> None:
-    """Validate the contract shared by PythonOCC and NX geometry backends."""
+    """Validate the contract shared by all objective geometry backends."""
 
     measurements = next(
         (item for item in artifacts if item.kind == "measurements"), None

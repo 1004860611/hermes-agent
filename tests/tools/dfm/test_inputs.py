@@ -157,5 +157,5 @@ def test_parasolid_is_registered_as_a_distinct_brep_format(project):
     assert record.representation == "brep"
     assert record.preflight["inspection_level"] == "opaque_text_only"
     assert record.preflight["geometry_verified"] is False
-    assert record.preflight["geometry_verifier"] == "nx_http_backend"
+    assert record.preflight["geometry_verifier"] == "external_backend_required"
     assert manifest.input_mode == "parasolid"

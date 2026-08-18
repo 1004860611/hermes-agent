@@ -10,6 +10,7 @@ from tools.dfm.analyzers.base import AnalyzerContext
 from tools.dfm.analyzers.registry import build_default_registry
 from tools.dfm.analyzers.step import dependency_statuses
 from tools.dfm.config import load_dfm_config
+from tools.dfm.contracts import DISCOVERY_SCHEMA_VERSION, OBJECTIVE_SCHEMA_VERSION
 from tools.dfm.errors import DFMError
 from tools.dfm.project.workspace import DFMWorkspace
 from tools.dfm.processes.registry import build_default_process_registry
@@ -78,6 +79,14 @@ def collect_diagnostics() -> dict:
             "dependencies": dependencies,
             "step_available": capabilities["step"]["status"] == "available",
         },
+        "production_backend": {
+            "backend_id": "external_occt_cpp",
+            "status": "not_implemented",
+            "connected": False,
+            "discovery_contract_version": DISCOVERY_SCHEMA_VERSION,
+            "objective_contract_version": OBJECTIVE_SCHEMA_VERSION,
+            "note": "PythonOCC is a reference backend; production OCCT C++ is developed separately.",
+        },
         "processes": processes,
         "note": "Diagnostics never install CAD, OCR, or system dependencies.",
     }
@@ -100,6 +109,11 @@ def dfm_command(args) -> int:
         for dependency, available in report["runtime"]["dependencies"].items():
             print(f"{dependency} available: {available}")
         print(f"STEP capability available: {report['runtime']['step_available']}")
+        print(
+            "Production geometry backend: "
+            f"{report['production_backend']['backend_id']} "
+            f"({report['production_backend']['status']})"
+        )
         print(f"Supported processes: {', '.join(report['processes']['supported'])}")
         for key in report["processes"]["supported"]:
             process = report["processes"][key]

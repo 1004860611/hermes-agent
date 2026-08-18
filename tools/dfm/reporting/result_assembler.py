@@ -23,7 +23,7 @@ def materialize_result_reports(
     plan: PlanRecord,
     artifacts: list[ArtifactRecord],
 ) -> list[ArtifactRecord]:
-    """Create one final result shape for both PythonOCC and NX runs."""
+    """Create one final result shape for every compliant objective backend."""
 
     by_kind = {item.kind: item for item in artifacts}
     if "measurements" not in by_kind or "evaluations" not in by_kind:

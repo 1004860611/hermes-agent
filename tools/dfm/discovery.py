@@ -19,8 +19,7 @@ from .contracts import (
 )
 from .errors import DFMError
 from .feature_recognition import (
-    MTKFeatureRecognitionProvider,
-    NXFeatureRecognitionProvider,
+    OCCTCppFeatureRecognitionProvider,
 )
 
 
@@ -40,9 +39,9 @@ def _content_hash(payload: dict[str, Any]) -> str:
 
 
 class DiscoveryEngine:
-    """Own discovery identities while concrete NX/MTK recognizers are pending."""
+    """Own discovery identities while the external OCCT C++ engine is pending."""
 
-    version = "hermes-discovery-v1"
+    version = "hermes-discovery-v2"
 
     def __init__(self, catalog_path: Path | None = None) -> None:
         self.catalog_path = catalog_path or (
@@ -53,8 +52,7 @@ class DiscoveryEngine:
         )
         self.catalog = self._load_catalog()
         self.placeholder_providers = (
-            NXFeatureRecognitionProvider(),
-            MTKFeatureRecognitionProvider(),
+            OCCTCppFeatureRecognitionProvider(),
         )
 
     @staticmethod
@@ -396,10 +394,21 @@ class DiscoveryEngine:
                 "The DFM feature discovery catalog has an invalid contract.",
             )
         for recognizer in payload["recognizers"]:
+            if not isinstance(recognizer, dict):
+                raise DFMError(
+                    "discovery_catalog_invalid",
+                    "A feature recognizer declaration is invalid.",
+                    {"recognizer": recognizer},
+                )
+            observation_kinds = recognizer.get("observation_kinds", [])
             if (
-                not isinstance(recognizer, dict)
-                or not recognizer.get("recognizer_id")
-                or not recognizer.get("feature_kind")
+                not recognizer.get("recognizer_id")
+                or (
+                    not recognizer.get("feature_kind")
+                    and not observation_kinds
+                )
+                or not isinstance(observation_kinds, list)
+                or any(not item for item in observation_kinds)
                 or not isinstance(recognizer.get("region_roles"), list)
                 or not isinstance(recognizer.get("required_fact_names"), list)
                 or recognizer.get("status") not in {"available", "placeholder"}

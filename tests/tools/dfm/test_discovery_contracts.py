@@ -37,7 +37,7 @@ def test_feature_observation_and_fusion_link_match_formal_schemas():
                 "confidence": 0.9,
             }
         ],
-        recognizer="nx_molding_feature_recognizer",
+        recognizer="occt_cpp_molding_feature_recognizer",
         recognizer_version="1.0.0",
     )
     observation = ObservationRecord(
@@ -67,8 +67,16 @@ def test_feature_observation_and_fusion_link_match_formal_schemas():
         feature_refs=[feature.feature_id],
         region_refs=feature.region_refs,
         fusion_link_refs=[link.fusion_link_id],
-        provider_versions={"nx_molding_feature_recognizer": "1.0.0"},
+        provider_versions={"occt_cpp_molding_feature_recognizer": "1.0.0"},
         content_sha256="b" * 64,
+        geometry_snapshot_ref="artifact.geometry_snapshot",
+        topology_snapshot_id="topology.snapshot.1",
+        render_mesh_snapshot_id="render.snapshot.1",
+        artifact_refs=[
+            "artifact.geometry_snapshot",
+            "artifact.topology_map",
+            "artifact.render_scene",
+        ],
     )
 
     _validate("feature.schema.json", feature.to_dict())

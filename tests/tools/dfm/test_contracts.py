@@ -252,7 +252,7 @@ def test_discovery_contract_links_observations_features_regions_and_analysis_pla
         input_sha256="a" * 64,
         region_refs=["region.screw_boss.003.outer_wall"],
         properties={"outer_radius_mm": 4.0, "inner_radius_mm": 2.2},
-        recognizer="nx_molding_feature_recognizer",
+        recognizer="occt_cpp_molding_feature_recognizer",
         recognizer_version="1.0.0",
     )
     observation = ObservationRecord(
@@ -281,7 +281,7 @@ def test_discovery_contract_links_observations_features_regions_and_analysis_pla
         [feature.feature_id],
         feature.region_refs,
         [fusion.fusion_link_id],
-        {"nx_molding_feature_recognizer": "1.0.0"},
+        {"occt_cpp_molding_feature_recognizer": "1.0.0"},
         "b" * 64,
     )
     discovery = PlanRecord(

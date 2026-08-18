@@ -13,6 +13,7 @@ from .errors import DFMError
 
 MANIFEST_SCHEMA_VERSION = 1
 WORKER_SCHEMA_VERSION = 1
+DISCOVERY_SCHEMA_VERSION = 1
 OBJECTIVE_SCHEMA_VERSION = 4
 
 STAGE_QUEUED = "queued"
@@ -259,6 +260,10 @@ class DiscoverySnapshotRecord:
     status: str = "frozen"
     process: str = ""
     confirmed_fact_refs: list[str] = field(default_factory=list)
+    geometry_snapshot_ref: str = ""
+    topology_snapshot_id: str = ""
+    render_mesh_snapshot_id: str = ""
+    artifact_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -986,6 +991,248 @@ class ObjectiveArtifactManifest:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ObjectiveArtifactManifest":
         return cls(**payload)
+
+
+@dataclass(frozen=True)
+class GeometryDiscoveryTaskRequest:
+    """Backend-neutral request for geometry discovery before analysis planning."""
+
+    schema_version: int
+    request_id: str
+    input_id: str
+    input_sha256: str
+    input_format: str
+    process: str
+    recognizer_ids: list[str] = field(default_factory=list)
+    facts: dict[str, ResolvedArgument] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != DISCOVERY_SCHEMA_VERSION
+            or not self.request_id
+            or not self.input_id
+            or not re.fullmatch(r"[0-9a-f]{64}", self.input_sha256)
+            or not self.input_format
+            or not self.process
+            or not self.recognizer_ids
+            or len(self.recognizer_ids) != len(set(self.recognizer_ids))
+        ):
+            raise ValueError("Geometry discovery task identity is invalid.")
+        for name, fact in self.facts.items():
+            if not name or not isinstance(fact, ResolvedArgument) or not fact.source_ref:
+                raise ValueError("Geometry discovery facts require stable provenance.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "request_id": self.request_id,
+            "input_id": self.input_id,
+            "input_sha256": self.input_sha256,
+            "input_format": self.input_format,
+            "process": self.process,
+            "recognizer_ids": list(self.recognizer_ids),
+            "facts": {key: value.to_dict() for key, value in self.facts.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "GeometryDiscoveryTaskRequest":
+        values = dict(payload)
+        values["facts"] = {
+            key: ResolvedArgument.from_dict(value)
+            for key, value in values.get("facts", {}).items()
+        }
+        return cls(**values)
+
+
+@dataclass(frozen=True)
+class RecognizerExecutionResult:
+    """Per-recognizer status so partial discovery never becomes a fake feature."""
+
+    recognizer_id: str
+    status: str
+    implementation_version: str = ""
+    feature_refs: list[str] = field(default_factory=list)
+    region_refs: list[str] = field(default_factory=list)
+    observation_refs: list[str] = field(default_factory=list)
+    missing_fact_names: list[str] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.recognizer_id or self.status not in {
+            "completed",
+            "blocked",
+            "not_implemented",
+            "failed",
+        }:
+            raise ValueError("Geometry recognizer result is invalid.")
+        for refs in (
+            self.feature_refs,
+            self.region_refs,
+            self.observation_refs,
+            self.missing_fact_names,
+        ):
+            if len(refs) != len(set(refs)) or any(not item for item in refs):
+                raise ValueError("Geometry recognizer references must be unique.")
+        if self.status == "blocked" and not self.missing_fact_names:
+            raise ValueError("A blocked geometry recognizer must name missing facts.")
+        if self.status != "blocked" and self.missing_fact_names:
+            raise ValueError("Only a blocked geometry recognizer may name missing facts.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RecognizerExecutionResult":
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class GeometryDiscoveryResultManifest:
+    """Immutable OCCT discovery output consumed before Hermes compiles rules."""
+
+    schema_version: int
+    producer_version: str
+    request_id: str
+    input_id: str
+    input_sha256: str
+    process: str
+    topology_snapshot_id: str
+    render_mesh_snapshot_id: str
+    geometry_snapshot_ref: str
+    observations: list[ObservationRecord] = field(default_factory=list)
+    features: list[FeatureRecord] = field(default_factory=list)
+    regions: list[RegionRecord] = field(default_factory=list)
+    recognizers: list[RecognizerExecutionResult] = field(default_factory=list)
+    artifacts: list[ObjectiveArtifactManifest] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != DISCOVERY_SCHEMA_VERSION
+            or not self.producer_version
+            or not self.request_id
+            or not self.input_id
+            or not re.fullmatch(r"[0-9a-f]{64}", self.input_sha256)
+            or not self.process
+            or not self.topology_snapshot_id
+            or not self.render_mesh_snapshot_id
+            or not self.geometry_snapshot_ref
+            or not self.recognizers
+            or not self.artifacts
+        ):
+            raise ValueError("Geometry discovery result identity is invalid.")
+
+        feature_ids = {item.feature_id for item in self.features}
+        region_ids = {item.region_id for item in self.regions}
+        observation_ids = {item.observation_id for item in self.observations}
+        if (
+            len(feature_ids) != len(self.features)
+            or len(region_ids) != len(self.regions)
+            or len(observation_ids) != len(self.observations)
+        ):
+            raise ValueError("Geometry discovery output identities must be unique.")
+
+        for observation in self.observations:
+            if (
+                observation.input_id != self.input_id
+                or set(observation.feature_refs) - feature_ids
+                or set(observation.region_refs) - region_ids
+            ):
+                raise ValueError("Geometry discovery observation references are invalid.")
+        for feature in self.features:
+            if (
+                feature.input_sha256 != self.input_sha256
+                or not feature.region_refs
+                or set(feature.region_refs) - region_ids
+            ):
+                raise ValueError("Geometry discovery feature references are invalid.")
+        for region in self.regions:
+            if (
+                region.input_sha256 != self.input_sha256
+                or set(region.feature_refs) - feature_ids
+            ):
+                raise ValueError("Geometry discovery region references are invalid.")
+            for geometry_ref in [
+                *region.geometry_refs,
+                *region.excluded_geometry_refs,
+            ]:
+                if (
+                    geometry_ref.input_sha256 != self.input_sha256
+                    or geometry_ref.topology_snapshot_id != self.topology_snapshot_id
+                ):
+                    raise ValueError(
+                        "Geometry discovery topology reference belongs to another snapshot."
+                    )
+
+        recognizer_ids = [item.recognizer_id for item in self.recognizers]
+        if len(recognizer_ids) != len(set(recognizer_ids)):
+            raise ValueError("Geometry discovery recognizer identities must be unique.")
+        for recognizer in self.recognizers:
+            if (
+                set(recognizer.feature_refs) - feature_ids
+                or set(recognizer.region_refs) - region_ids
+                or set(recognizer.observation_refs) - observation_ids
+            ):
+                raise ValueError("Geometry recognizer output references are unresolved.")
+
+        artifact_by_id = {item.artifact_id: item for item in self.artifacts}
+        artifact_ids = set(artifact_by_id)
+        filenames = {item.filename for item in self.artifacts}
+        required_kinds = {"geometry_snapshot", "topology_map", "render_scene"}
+        kind_counts = {
+            kind: sum(item.kind == kind for item in self.artifacts)
+            for kind in required_kinds
+        }
+        if (
+            len(artifact_ids) != len(self.artifacts)
+            or len(filenames) != len(self.artifacts)
+            or self.geometry_snapshot_ref not in artifact_ids
+            or artifact_by_id[self.geometry_snapshot_ref].kind != "geometry_snapshot"
+            or any(count != 1 for count in kind_counts.values())
+        ):
+            raise ValueError("Geometry discovery artifacts are incomplete or ambiguous.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "producer_version": self.producer_version,
+            "request_id": self.request_id,
+            "input_id": self.input_id,
+            "input_sha256": self.input_sha256,
+            "process": self.process,
+            "topology_snapshot_id": self.topology_snapshot_id,
+            "render_mesh_snapshot_id": self.render_mesh_snapshot_id,
+            "geometry_snapshot_ref": self.geometry_snapshot_ref,
+            "observations": [item.to_dict() for item in self.observations],
+            "features": [item.to_dict() for item in self.features],
+            "regions": [item.to_dict() for item in self.regions],
+            "recognizers": [item.to_dict() for item in self.recognizers],
+            "artifacts": [item.to_dict() for item in self.artifacts],
+            "diagnostics": dict(self.diagnostics),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "GeometryDiscoveryResultManifest":
+        values = dict(payload)
+        values["observations"] = [
+            ObservationRecord.from_dict(item)
+            for item in values.get("observations", [])
+        ]
+        values["features"] = [
+            FeatureRecord.from_dict(item) for item in values.get("features", [])
+        ]
+        values["regions"] = [
+            RegionRecord.from_dict(item) for item in values.get("regions", [])
+        ]
+        values["recognizers"] = [
+            RecognizerExecutionResult.from_dict(item)
+            for item in values.get("recognizers", [])
+        ]
+        values["artifacts"] = [
+            ObjectiveArtifactManifest.from_dict(item)
+            for item in values.get("artifacts", [])
+        ]
+        return cls(**values)
 
 
 @dataclass(frozen=True)

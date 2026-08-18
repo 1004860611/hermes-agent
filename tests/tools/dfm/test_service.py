@@ -147,8 +147,8 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
     assert discovery["snapshot"]["feature_refs"]
     assert discovery["features"][0]["kind"] == "ordinary_part"
     assert discovery["regions"][0]["mode"] == "whole_model"
-    assert discovery["capability"]["providers"]["nx_feature_recognition"] == (
-        "placeholder-1:not_implemented"
+    assert discovery["capability"]["providers"]["occt_cpp_feature_recognition"] == (
+        "external-contract-1:not_implemented"
     )
     assert plan["plan"]["analyzer_keys"] == ["step"]
     assert plan["plan"]["discovery_snapshot_refs"] == [

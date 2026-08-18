@@ -1,4 +1,4 @@
-"""Deterministic registry for production and injected DFM analyzers."""
+"""Deterministic registry for current reference, deferred, and injected analyzers."""
 
 from __future__ import annotations
 

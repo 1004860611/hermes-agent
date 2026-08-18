@@ -21,7 +21,7 @@ not bypass that decision or return control to the Agent Loop from inside the
 worker.
 
 1. Call `dfm_project` with `create`, unless continuing a known `project_id`.
-2. Call `dfm_project` with `add_input` for every STEP/STP, Parasolid x_t, or drawing `@file:` reference. An accepted x_t intake does not mean its geometry reader is available; inspect capability before planning.
+2. Call `dfm_project` with `add_input` for every STEP/STP, reserved Parasolid x_t, or drawing `@file:` reference. An accepted x_t intake does not mean its geometry reader is available; inspect capability before planning. NX/Parasolid development is deferred and is not the production path for the current milestone.
 3. Call project `status`. Inspect the input mode and every analyzer `capability`.
 4. Pass `process=injection` or `process=die_casting` when the user has selected it; never infer the process from part shape. Ask only the process adapter's returned missing facts. If `dfm_analysis(plan)` returns `status=clarification_required`, it is a hard stop: do **not** answer the questions yourself and do **not** call `confirm_fact` in the same turn. Call the Hermes `clarify` tool for each open question so Desktop shows its blocking question panel; wait for the user's response, then call `confirm_fact` with exactly that response. Use the canonical fact names returned by the service; keep them `confirmed`, not inferred.
 5. Call `dfm_analysis` with `plan`. Omitted process selection keeps the project's
@@ -42,20 +42,24 @@ worker.
 
 ## Capability handling
 
-- `dependency_missing`: explain the missing backend (PythonOCC/VTK, NX, or optional python-pptx reporting) and suggest `hermes dfm doctor`; never install automatically.
+- `dependency_missing`: explain the missing backend (the current PythonOCC/VTK reference worker, a future external OCCT C++ adapter, or optional python-pptx reporting) and suggest `hermes dfm doctor`; never install automatically.
 - `not_implemented` or `unsupported_capability`: state the limitation and offer supported partial analysis.
 - `disabled`: ask the user to configure and enable the capability in a new session.
 - `unhealthy`: preserve project and Run IDs and report diagnostics.
 
-PythonOCC STEP geometry is a non-certified demo backend for the same objective
-wall-thickness and draft-angle contract used by the production NX path. Both
-backends must return Measurement, ScalarField, RenderScene, and TopologyMap;
-Hermes alone performs Evaluation, evidence rendering, Finding, and reporting.
+PythonOCC STEP geometry is a non-certified reference backend. The approved
+production target is a separately developed OCCT C++ engine that performs
+Geometry Discovery and Objective Calculation through the same versioned
+contracts. The production adapter is not connected yet, so never present the
+reference worker as production-ready. Every objective backend must return
+Measurement, ScalarField, RenderScene, and TopologyMap; Hermes alone performs
+Evaluation, evidence rendering, Finding, and reporting.
 The initial die-casting scope remains a topology gate. Do not run injection
 thresholds under a die-casting label. If the
 user requests machining, sheet metal, or another process, report
 `unsupported_capability` and the supported process list. Parasolid x_t remains
-an explicit reserved capability until an approved licensed reader is installed.
+an explicit reserved capability; the NX path is deferred and must not block the
+OCCT C++ STEP milestone.
 Drawing-only and Fusion execution remain explicit unavailable capabilities.
 
 ## Engineering integrity

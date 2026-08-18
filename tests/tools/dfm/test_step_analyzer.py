@@ -177,8 +177,14 @@ def test_step_capability_probe_is_stable_for_the_analyzer_lifetime(tmp_path):
     analyzer = StepAnalyzer(dependency_probe=lambda: calls.append(True) or True)
     context = AnalyzerContext("dfm_1", tmp_path, "step", [])
 
+    capability = analyzer.capability(context)
+
+    assert capability.status is CapabilityStatus.AVAILABLE
     assert analyzer.capability(context).status is CapabilityStatus.AVAILABLE
-    assert analyzer.capability(context).status is CapabilityStatus.AVAILABLE
+    assert capability.details["backend_id"] == "pythonocc_reference"
+    assert capability.details["role"] == "reference_regression"
+    assert capability.details["production_ready"] is False
+    assert capability.details["production_target"] == "external_occt_cpp"
     assert len(calls) == 1
 
 

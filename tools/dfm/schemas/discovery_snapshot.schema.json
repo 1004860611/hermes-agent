@@ -22,5 +22,9 @@
     "status": {"const": "frozen"}
     ,"process": {"type": "string"}
     ,"confirmed_fact_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+    ,"geometry_snapshot_ref": {"type": "string"}
+    ,"topology_snapshot_id": {"type": "string"}
+    ,"render_mesh_snapshot_id": {"type": "string"}
+    ,"artifact_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
   }
 }

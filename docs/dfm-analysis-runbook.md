@@ -2,7 +2,7 @@
 title: "单次 DFM 分析数据说明"
 status: active
 milestone: M2.5
-last_updated: 2026-08-12
+last_updated: 2026-08-18
 type: living-runbook
 owners: DFM 工程团队
 ---
@@ -13,23 +13,28 @@ owners: DFM 工程团队
 
 本文是随 DFM 里程碑持续更新的活文档。这里描述的是**当前已实现行为**；开发阶段参见
 [DFM 开发路径](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)，架构和契约参见
-[DFM 架构、工作流与 NX 契约](plans/2026-08-12-dfm-architecture-workflow-and-nx-contract.md)。
+[DFM 架构、工作流与 OCCT C++ 契约](plans/2026-08-18-dfm-architecture-workflow-and-occt-contract.md)。
 
-## 1. M1.2 适用范围
+## 1. 当前实现与生产目标
 
-| 能力 | M1 状态 |
+| 能力 | 当前实现 |
 | --- | --- |
 | 制造工艺 | 注塑 `injection` 完整基线；压铸 `die_casting` 首条 STEP 拓扑有效性门 |
-| 三维输入 | 支持 STEP/STP；Parasolid `x_t` 可登记，配置 `dfm.nx.endpoint` 后通过远程 NX HTTP Backend 查询/执行，未配置时返回 `dependency_missing` |
+| 三维输入 | PythonOCC 参考实现支持 STEP/STP；Parasolid `x_t` 仅保留登记和显式不可用边界 |
 | 2D 图纸/OCR | 接口预留，尚未形成生产分析闭环 |
 | 混合输入融合 | 接口预留，尚未形成生产分析闭环 |
-| 几何计算 | OpenCascade / `pythonocc-core` |
-| 工艺规则 | 注塑 `injection.legacy-baseline@1.1.0`；压铸 `die_casting.topology-baseline@1.0.0` |
+| 几何计算 | 当前为 OpenCascade / `pythonocc-core` 参考 Worker；生产目标为独立 OCCT C++ 项目 |
+| 工艺规则 | 注塑 `injection.wall-draft@3.0.0`；压铸 `die_casting.topology-baseline@1.0.0` |
 | 执行方式 | Hermes 主进程管理 Run，STEP worker 隔离子进程执行 |
 | 结果 | Worker `measurements.json`、Hermes `evaluations.json`、兼容报告 JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
 | Desktop | 复用附件上传、聊天进度和 Artifacts 展示 |
 
-M2.5 不分析模具设计模型，也不分析型芯、型腔、滑块、顶针、浇注系统或冷却系统；压铸尚未开放壁厚、拔模和倒扣规则。
+当前代码中的 PythonOCC 结果明确标记为非认证参考结果，不能作为 OCCT C++ 生产能力证明。
+独立 C++ 项目尚未接入，因此真实工艺特征识别和生产级区域化指标计算仍为未交付。NX 与
+Parasolid 路线延期，不作为当前部署成功条件。
+
+当前版本不分析模具设计模型，也不分析型芯、型腔、滑块、顶针、浇注系统或冷却系统；
+压铸尚未开放壁厚、拔模和倒扣规则。
 
 ## 2. 一次分析的调用流程
 
@@ -51,9 +56,9 @@ Hermes Agent
   └─ dfm_analysis(result)
           │
           v
-DFMService → JobManager → ProcessAdapter + Analyzer → geometry worker
+DFMService → JobManager → ProcessAdapter + Analyzer → PythonOCC reference worker
                                       │
-                                      ├─ OpenCascade 几何计算
+                                      ├─ OpenCascade 参考几何计算
                                       ├─ 注塑规则检查
                                       └─ 压铸拓扑门（当前）
                                       ├─ 证据图片渲染
@@ -65,7 +70,8 @@ DFMService → JobManager → ProcessAdapter + Analyzer → geometry worker
 - Hermes Agent 负责理解用户意图、选择工艺、补充或确认工程事实，并决定何时调用 DFM 工具。
 - `DFMService` 不直接执行模型临时生成的几何步骤。它调用 ProcessAdapter，根据已确认事实、工艺默认值和版本化分析范围编译结构化 Plan。
 - Run 启动前会保存 Plan 快照；worker 只执行该快照对应的参数和操作。
-- OpenCascade 测量值和规则判断由确定性代码产生，不由大模型编造。
+- OpenCascade 测量值和规则判断由确定性代码产生，不由大模型编造；生产路径接入后，
+  Geometry Discovery 与 Objective Calculation 将由独立 OCCT C++ 项目执行。
 
 ## 3. 数据根目录与标识
 
@@ -186,7 +192,7 @@ STEP 项目在生成可执行 Plan 前必须确认 `material`、`pull_dir` 和 `
 
 每次写入会增加 `revision`，并通过锁和原子替换降低并发写坏风险。
 
-### M1.2 边界
+### 当前边界
 
 `facts`、`clarifications`、`features` 和 `findings` 契约已经存在。M2.5 在保持注塑结果不变的前提下，将压铸拓扑门的失败 Evaluation 归一化为压铸规则引用的项目级 Finding：
 
@@ -428,4 +434,5 @@ python .\hermes dfm doctor --json
 ## 15. 相关文档
 
 - [DFM Hermes Agent 开发目标与路线图](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)
+- [DFM 架构、工作流与 OCCT C++ 契约](plans/2026-08-18-dfm-architecture-workflow-and-occt-contract.md)
 - [DFM 部署环境定义](dfm-deployment-environment.md)

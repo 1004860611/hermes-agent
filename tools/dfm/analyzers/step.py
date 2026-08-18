@@ -1,4 +1,4 @@
-"""Production STEP analyzer backed by the isolated M1 worker."""
+"""Reference STEP analyzer backed by the isolated PythonOCC worker."""
 
 from __future__ import annotations
 
@@ -105,9 +105,13 @@ class StepAnalyzer:
         return Capability(
             self.key,
             CapabilityStatus.AVAILABLE,
-            "The isolated STEP analyzer is available.",
+            "The isolated PythonOCC STEP reference analyzer is available.",
             details={
                 "worker_version": self.version,
+                "backend_id": "pythonocc_reference",
+                "role": "reference_regression",
+                "production_ready": False,
+                "production_target": "external_occt_cpp",
                 "supported_processes": ["die_casting", "injection"],
                 "format_ids": ["step"],
                 "representation": "brep",

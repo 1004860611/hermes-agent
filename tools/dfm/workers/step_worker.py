@@ -1,4 +1,4 @@
-"""Isolated PythonOCC demo backend for neutral DFM objective fields."""
+"""Isolated PythonOCC reference backend for neutral DFM objective fields."""
 
 from __future__ import annotations
 

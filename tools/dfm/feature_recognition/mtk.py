@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from .base import FeatureRecognitionResult
 from ..contracts import InputRecord
 from ..errors import DFMError
@@ -22,7 +24,11 @@ class MTKFeatureRecognitionProvider:
         }
 
     def recognize(
-        self, input_record: InputRecord, *, process: str
+        self,
+        input_record: InputRecord,
+        *,
+        process: str,
+        facts: Mapping[str, Any] | None = None,
     ) -> FeatureRecognitionResult:
         raise DFMError(
             "unsupported_capability",
