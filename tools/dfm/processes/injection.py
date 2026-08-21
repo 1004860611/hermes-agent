@@ -1,4 +1,4 @@
-"""Backend-neutral injection plan for wall-thickness and draft checks."""
+"""Backend-neutral injection plan for the OCCT geometry-core scope."""
 
 from __future__ import annotations
 
@@ -17,46 +17,59 @@ from ..contracts import (
     RuleBinding,
 )
 from ..errors import DFMError
-from .base import FactRequirement, ProcessPlan
+from .base import ProcessPlan
 
 
 _TRUSTED_SOURCES = {"project_fact", "user_confirmed"}
+_LENGTH_UNIT_ALIASES = {
+    "mm": "mm",
+    "millimeter": "mm",
+    "millimeters": "mm",
+    "millimetre": "mm",
+    "millimetres": "mm",
+    "cm": "cm",
+    "centimeter": "cm",
+    "centimeters": "cm",
+    "centimetre": "cm",
+    "centimetres": "cm",
+    "m": "m",
+    "meter": "m",
+    "meters": "m",
+    "metre": "m",
+    "metres": "m",
+    "in": "inch",
+    "inch": "inch",
+    "inches": "inch",
+    "ft": "foot",
+    "foot": "foot",
+    "feet": "foot",
+}
 
 
 class InjectionProcessAdapter:
     key = "injection"
-    version = "injection-wall-draft-v3"
+    version = "injection-geometry-core-v4"
 
     def __init__(self, scope_path: Path | None = None) -> None:
         self.scope_path = scope_path or (
             Path(__file__).resolve().parents[1]
             / "scopes"
             / "injection"
-            / "wall_draft.json"
+            / "geometry_core_v4.json"
         )
 
     def capability(self, context: AnalyzerContext) -> Capability:
         return Capability(
             self.key,
             CapabilityStatus.AVAILABLE,
-            "The backend-neutral injection wall/draft scope is available.",
+            "The backend-neutral injection geometry-core scope is available.",
             details={"adapter_version": self.version},
         )
 
     def required_facts(self) -> Mapping[str, str]:
-        return {item.name: item.question for item in self.fact_requirements()}
-
-    def fact_requirements(self) -> tuple[FactRequirement, ...]:
-        scope = self._load_scope()
-        return tuple(
-            FactRequirement(
-                name=str(item["name"]),
-                question=str(item["question"]),
-                phase=str(item["phase"]),
-                required_by=tuple(str(value) for value in item["required_by"]),
-            )
-            for item in scope["fact_requirements"]
-        )
+        return {
+            "model_units": "What length unit was used to author the STEP model?",
+        }
 
     def compile(
         self,
@@ -102,27 +115,6 @@ class InjectionProcessAdapter:
                 "kind": str(defaults[key].get("kind") or "rule"),
             }
 
-        material = str(resolved["material"]["value"])
-        material_profile = dict(scope.get("material_profiles", {}).get(material) or {})
-        if not material_profile:
-            self._invalid(
-                "The injection material does not have a frozen wall-thickness profile.",
-                {"material": material},
-            )
-        if "min_wall_mm" not in raw_parameters:
-            resolved["min_wall_mm"] = {
-                "value": self._normalize_value(
-                    "min_wall_mm", material_profile["min_wall_mm"]
-                ),
-                "unit": "mm",
-                "source": "material_profile",
-                "source_ref": (
-                    f"scope:{scope['scope_id']}@{scope['version']}"
-                    f"/materials/{material}/min_wall_mm"
-                ),
-                "kind": "rule",
-            }
-
         rules = {
             key: EffectiveRule(
                 value=item["value"],
@@ -138,12 +130,12 @@ class InjectionProcessAdapter:
         for operation in operations:
             arguments = dict(operation.arguments)
             algorithm_options = dict(operation.algorithm_options)
-            if operation.calculator_id == "load_geometry":
+            if operation.calculator_id == "geometry_preflight":
                 units = resolved["model_units"]
                 arguments["model_unit"] = ResolvedArgument(
                     units["value"], units["source_ref"], None
                 )
-            elif operation.calculator_id == "measure_draft":
+            elif operation.calculator_id in {"measure_draft", "measure_undercut"}:
                 pull = resolved["pull_dir"]
                 arguments["pull_direction"] = ResolvedArgument(
                     pull["value"], pull["source_ref"], pull["unit"]
@@ -156,9 +148,6 @@ class InjectionProcessAdapter:
                     metric_ids=operation.metric_ids,
                     required_quantities=operation.required_quantities,
                     required_artifacts=operation.required_artifacts,
-                    required_fact_names=operation.required_fact_names,
-                    feature_refs=operation.feature_refs,
-                    region_refs=operation.region_refs,
                     arguments=arguments,
                     algorithm_options=algorithm_options,
                 )
@@ -188,12 +177,10 @@ class InjectionProcessAdapter:
                 {"path": str(self.scope_path)},
             ) from exc
         if (
-            scope.get("scope_id") != "injection.wall-draft"
-            or scope.get("version") != "3.0.0"
+            scope.get("scope_id") != "injection.geometry-core"
+            or scope.get("version") != "4.0.0"
             or scope.get("process") != self.key
-            or not isinstance(scope.get("fact_requirements"), list)
             or not isinstance(scope.get("parameters"), dict)
-            or not isinstance(scope.get("rule_profiles"), dict)
             or not isinstance(scope.get("operations"), list)
             or not isinstance(scope.get("rule_bindings"), list)
         ):
@@ -204,19 +191,17 @@ class InjectionProcessAdapter:
         return scope
 
     def _normalize_value(self, key: str, value: Any) -> Any:
-        if key == "material":
-            material = str(value or "").strip().upper()
-            if not material:
-                self._invalid("material must be a non-empty material identifier.")
-            return material
         if key == "model_units":
             unit = str(value or "").strip().lower()
-            if unit not in {"mm", "millimeter", "millimeters"}:
+            if unit not in _LENGTH_UNIT_ALIASES:
                 self._invalid(
-                    "The frozen injection scope currently requires millimeter geometry.",
-                    {"model_units": value, "supported_units": ["mm"]},
+                    "model_units must identify a supported STEP length unit.",
+                    {
+                        "model_units": value,
+                        "supported_units": ["mm", "cm", "m", "inch", "foot"],
+                    },
                 )
-            return "mm"
+            return _LENGTH_UNIT_ALIASES[unit]
         if key == "pull_dir":
             if not isinstance(value, (list, tuple)) or len(value) != 3:
                 self._invalid("pull_dir must contain exactly three numbers.")
@@ -238,7 +223,8 @@ class InjectionProcessAdapter:
                 f"Injection parameter must be numeric: {key}",
                 {"parameter": key},
             ) from exc
-        if not math.isfinite(number) or number <= 0:
+        allow_zero = key == "max_undercut_count"
+        if not math.isfinite(number) or number < 0 or (number == 0 and not allow_zero):
             self._invalid(
                 "Injection parameter must be a positive finite number.",
                 {"parameter": key},

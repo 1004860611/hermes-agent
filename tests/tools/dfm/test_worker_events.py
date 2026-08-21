@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from tools.dfm.contracts import WorkerEvent
+from tools.dfm.contracts import GEOMETRY_EVENT_CONTRACT, WorkerEvent
 from tools.dfm.errors import DFMError
 from tools.dfm.runtime.events import EVENT_PREFIX, encode_worker_event, parse_worker_event
 
@@ -18,6 +18,19 @@ def test_worker_event_round_trip_uses_versioned_prefix():
 
 def test_non_event_output_is_ignored():
     assert parse_worker_event("ordinary diagnostic output") is None
+
+
+def test_raw_geometry_jsonl_event_is_accepted_without_legacy_prefix():
+    event = WorkerEvent(
+        1,
+        "progress",
+        stage="objective_load",
+        percent=5,
+        contract_version=GEOMETRY_EVENT_CONTRACT,
+    )
+
+    assert parse_worker_event(json.dumps(event.to_dict())) == event
+    assert parse_worker_event(json.dumps({"type": "ordinary-json-log"})) is None
 
 
 @pytest.mark.parametrize(

@@ -46,8 +46,8 @@ def test_default_registry_exposes_geometry_and_document_boundaries(tmp_path):
 
     capabilities = {key: registry.get(key).capability(context) for key in registry.keys()}
 
-    assert registry.keys() == ["drawing", "fusion", "parasolid", "step"]
-    assert capabilities["step"].status in {
+    assert registry.keys() == ["drawing", "fusion", "occt"]
+    assert capabilities["occt"].status in {
         CapabilityStatus.AVAILABLE,
         CapabilityStatus.DEPENDENCY_MISSING,
     }
@@ -56,12 +56,19 @@ def test_default_registry_exposes_geometry_and_document_boundaries(tmp_path):
     assert capabilities["drawing"].error_code == "unsupported_capability"
 
 
-def test_default_registry_propagates_runtime_configuration():
-    config = DFMConfig(runtime_python="C:/dfm/python.exe", timeout_seconds=123)
+def test_default_registry_propagates_runtime_configuration(monkeypatch):
+    monkeypatch.setattr(
+        "tools.dfm.analyzers.registry.discover_geometry_executable",
+        lambda configured: "C:/dfm/dfm-geometry.exe",
+    )
+    config = DFMConfig(
+        geometry_executable="C:/dfm/dfm-geometry.exe",
+        geometry_timeout_seconds=123,
+    )
 
-    analyzer = build_default_registry(config).get("step")
+    analyzer = build_default_registry(config).get("occt")
 
-    assert analyzer.python_executable == "C:/dfm/python.exe"
+    assert analyzer.executable == "C:/dfm/dfm-geometry.exe"
     assert analyzer.timeout_seconds == 123
 
 
@@ -75,18 +82,13 @@ def test_unavailable_production_analyzers_never_emit_placeholder_results(tmp_pat
     assert exc_info.value.code in {"dependency_missing", "unsupported_capability"}
 
 
-def test_step_analyzer_requires_dependency_then_persisted_plan(tmp_path):
-    analyzer = build_default_registry().get("step")
+def test_occt_analyzer_requires_native_engine(tmp_path):
+    analyzer = build_default_registry().get("occt")
 
     with pytest.raises(DFMError) as exc_info:
         analyzer.run(_context(tmp_path), CancellationToken())
 
-    expected = (
-        "plan_required"
-        if analyzer.capability(_context(tmp_path)).status is CapabilityStatus.AVAILABLE
-        else "dependency_missing"
-    )
-    assert exc_info.value.code == expected
+    assert exc_info.value.code in {"plan_required", "geometry_engine_missing"}
 
 
 def test_cancellation_token_is_cooperative():

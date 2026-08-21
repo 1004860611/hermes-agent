@@ -13,25 +13,25 @@ from uuid import uuid4
 from agent.context_references import parse_context_references
 from hermes_constants import get_hermes_home
 
-from .analyzers.base import AnalyzerContext
+from .analyzers.base import AnalyzerContext, CancellationToken
 from .analyzers.registry import AnalyzerRegistry, build_default_registry
 from .config import DFMConfig, load_dfm_config
 from .contracts import (
     ClarificationRecord,
     FactRecord,
-    PlanOperation,
+    InputRecord,
     PlanRecord,
     ProjectManifest,
     RunRecord,
     RunStatus,
 )
-from .discovery import DiscoveryEngine
 from .errors import DFMError
 from .project.inputs import InputRegistrar
 from .project.manifest import ManifestStore
 from .project.workspace import DFMWorkspace
 from .processes.registry import ProcessAdapterRegistry, build_default_process_registry
 from .runtime.jobs import JobManager
+from .viewer import materialize_preview_manifest
 
 
 def _utc_now() -> str:
@@ -41,7 +41,11 @@ def _utc_now() -> str:
 def _resolve_input_path(raw_path: object, working_dir: object = None) -> Path:
     value = str(raw_path or "").strip()
     references = parse_context_references(value)
-    if len(references) == 1 and references[0].kind == "file" and references[0].raw == value:
+    if (
+        len(references) == 1
+        and references[0].kind == "file"
+        and references[0].raw == value
+    ):
         value = references[0].target
     elif len(value) >= 2 and value[0] == value[-1] and value[0] in "`\"'":
         value = value[1:-1]
@@ -63,18 +67,25 @@ class DFMService:
         "mold_pull_direction": "pull_dir",
         "pull_dir": "pull_dir",
         "material": "material",
-        "process": "process",
-        "manufacturing_process": "process",
     }
-    
-    def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, process_registry: ProcessAdapterRegistry | None = None, reconcile_jobs: bool = True) -> None:
+
+    def __init__(
+        self,
+        *,
+        config: DFMConfig | None = None,
+        workspace: DFMWorkspace | None = None,
+        registry: AnalyzerRegistry | None = None,
+        process_registry: ProcessAdapterRegistry | None = None,
+        reconcile_jobs: bool = True,
+    ) -> None:
         self.config = config or load_dfm_config()
         self.workspace = workspace or DFMWorkspace()
         self.registry = registry or build_default_registry(self.config)
         self.process_registry = process_registry or build_default_process_registry()
         self.inputs = InputRegistrar(self.workspace, self.config)
-        self.discovery = DiscoveryEngine()
-        self.jobs = JobManager(self.workspace, self.registry, self.config, reconcile=reconcile_jobs)
+        self.jobs = JobManager(
+            self.workspace, self.registry, self.config, reconcile=reconcile_jobs
+        )
 
     def _store(self, project_id: str) -> ManifestStore:
         return ManifestStore(self.workspace.project_dir(project_id))
@@ -90,47 +101,167 @@ class DFMService:
             plan=plan,
         )
 
+    def _materialize_step_preview(
+        self,
+        manifest: ProjectManifest,
+        input_record: InputRecord,
+    ) -> dict[str, Any]:
+        """Run only preflight/topology operations and return an embeddable mesh."""
+
+        if input_record.kind != "step":
+            return {"status": "not_applicable"}
+
+        try:
+            process_plan = self.process_registry.get("injection").compile(
+                self._context(manifest), {}
+            )
+            preview_operation_ids = {
+                "geometry.preflight",
+                "topology.index",
+                "topology.aag",
+            }
+            operations = [
+                replace(operation, arguments={})
+                if operation.operation_id == "geometry.preflight"
+                else operation
+                for operation in process_plan.operations
+                if operation.operation_id in preview_operation_ids
+            ]
+            if {item.operation_id for item in operations} != preview_operation_ids:
+                raise DFMError(
+                    "preview_plan_invalid",
+                    "The injection scope does not provide the required preview operations.",
+                )
+
+            run_id = f"preview_{input_record.sha256[:16]}"
+            plan = PlanRecord(
+                plan_id=run_id,
+                input_mode="step",
+                analyzer_keys=["occt"],
+                status="preview",
+                created_at=_utc_now(),
+                process=process_plan.process,
+                process_adapter_version=process_plan.adapter_version,
+                scope_id=process_plan.scope_id,
+                scope_version=process_plan.scope_version,
+                input_ids=[input_record.input_id],
+                input_hashes={input_record.input_id: input_record.sha256},
+                operations=operations,
+                verification_level="experimental",
+            )
+            context = AnalyzerContext(
+                manifest.project_id,
+                self.workspace.project_dir(manifest.project_id),
+                manifest.input_mode,
+                manifest.inputs,
+                run_id=run_id,
+                plan=plan,
+            )
+            artifacts = self.registry.get("occt").run(context, CancellationToken())
+            viewer = materialize_preview_manifest(
+                context.project_dir,
+                run_id,
+                input_record.sha256,
+                artifacts,
+            )
+            if viewer is None:
+                raise DFMError(
+                    "preview_artifact_missing",
+                    "The OCCT preview did not produce a render mesh and topology map.",
+                )
+            viewer_path = (context.project_dir / viewer.relative_path).resolve()
+            return {
+                "status": "ready",
+                "run_id": run_id,
+                "viewer_manifest": str(viewer_path),
+            }
+        except DFMError as exc:
+            # Input registration remains durable even when the optional visual
+            # preview is unavailable; the same diagnostic is returned to Desktop.
+            return {"status": "unavailable", "error": exc.to_dict()["error"]}
+
     @staticmethod
     def _canonical_fact_name(fact_name: str) -> str:
-        normalized = str(fact_name or "").strip().lower().replace("-", "_").replace(" ", "_")
+        normalized = (
+            str(fact_name or "").strip().lower().replace("-", "_").replace(" ", "_")
+        )
         return DFMService._FACT_ALIASES.get(normalized, normalized)
+
+    @staticmethod
+    def _direction_to_vector(value: str) -> list[float]:
+        """Convert a human-readable pull-direction string to a unit vector."""
+        s = str(value).strip().upper()
+        mapping: dict[str, list[float]] = {
+            "+X": [1, 0, 0],
+            "-X": [-1, 0, 0],
+            "+Y": [0, 1, 0],
+            "-Y": [0, -1, 0],
+            "+Z": [0, 0, 1],
+            "-Z": [0, 0, -1],
+            "X": [1, 0, 0],
+            "Y": [0, 1, 0],
+            "Z": [0, 0, 1],
+        }
+        vec = mapping.get(s)
+        if vec is not None:
+            return vec
+        # Try parsing explicit comma-separated numbers
+        parts = [p.strip() for p in s.replace(";", ",").split(",")]
+        try:
+            nums = [float(p) for p in parts]
+            if len(nums) == 3:
+                return nums
+        except (ValueError, TypeError):
+            pass
+        raise ValueError(f"Cannot interpret pull_dir: {value!r}")
 
     @staticmethod
     def _normalize_fact_value(fact_name: str, raw_value: Any) -> Any:
         """Normalize fact values that may be serialized as JSON strings.
-        
+
         Some facts (like pull_dir) require array values, but tool parameters
         are JSON-serialized. This method parses them back to proper types.
-        
+
         Args:
             fact_name: The name of the fact being confirmed.
             raw_value: The raw value from the tool call (may be a JSON string).
-            
+
         Returns:
             The normalized value (parsed if necessary).
         """
         if fact_name not in DFMService._FACTS_REQUIRING_NORMALIZATION:
             return raw_value
-            
+
         # If already a list/tuple, return as-is
         if isinstance(raw_value, (list, tuple)):
             return raw_value
-            
-        # If a string, try to parse as JSON
+
+        # If a string, try to parse as JSON first
         if isinstance(raw_value, str):
             try:
                 import json
+
                 parsed = json.loads(raw_value)
                 if isinstance(parsed, list):
                     return parsed
             except (json.JSONDecodeError, ValueError):
                 pass
-                
+            # Fall through: try direction-string→vector conversion
+            if fact_name == "pull_dir":
+                try:
+                    return DFMService._direction_to_vector(raw_value)
+                except ValueError:
+                    pass
+
         return raw_value
 
     @staticmethod
     def _active_inputs(manifest: ProjectManifest):
-        superseded = {item.supersedes_input_id for item in manifest.inputs if item.supersedes_input_id}
+        superseded = {
+            item.supersedes_input_id
+            for item in manifest.inputs
+            if item.supersedes_input_id
+        }
         return [item for item in manifest.inputs if item.input_id not in superseded]
 
     @staticmethod
@@ -151,79 +282,38 @@ class DFMService:
             include(operation_id)
         return [item for item in operations if item.operation_id in required]
 
-    @staticmethod
-    def _affected_operations_for_fact(plan: PlanRecord, fact_name: str) -> list[str]:
-        """Return the directly affected operations plus their downstream consumers."""
-
-        if fact_name == "process":
-            return [item.operation_id for item in plan.operations]
-        affected = {
-            item.operation_id
-            for item in plan.operations
-            if fact_name in item.required_fact_names
-        }
-        affected.update(
-            item.operation_id
-            for item in plan.rule_bindings
-            if fact_name in item.required_fact_names
-        )
-        changed = True
-        while changed:
-            changed = False
-            for operation in plan.operations:
-                if operation.operation_id not in affected and affected.intersection(
-                    operation.depends_on
-                ):
-                    affected.add(operation.operation_id)
-                    changed = True
-        return [
-            item.operation_id
-            for item in plan.operations
-            if item.operation_id in affected
-        ]
-
     def _capabilities(self, manifest: ProjectManifest) -> dict[str, dict[str, Any]]:
         context = self._context(manifest)
-        return {key: self.registry.get(key).capability(context).to_dict() for key in self.registry.keys()}
+        return {
+            key: self.registry.get(key).capability(context).to_dict()
+            for key in self.registry.keys()
+        }
 
     def _open_clarifications(
-        self,
-        manifest: ProjectManifest,
-        process: str | None = None,
-        phase: str = "all",
+        self, manifest: ProjectManifest, process: str | None = None
     ) -> list[ClarificationRecord]:
-        # Reserved Parasolid-only projects do not ask engineering questions
-        # before an approved reader exists. Mixed/STEP geometry still uses the
-        # selected process adapter's prerequisites.
-        if manifest.input_mode not in {"step", "geometry", "fusion"} and not (
-            manifest.input_mode == "parasolid" and self.config.nx_endpoint
-        ):
+        if manifest.input_mode not in {"step", "fusion"}:
             return []
-        adapter = self.process_registry.get(process or manifest.process or self.config.default_process)
-        requirements = adapter.fact_requirements()
-        available_discovery_facts = self.discovery.required_fact_names()
+        adapter = self.process_registry.get(
+            process or manifest.process or self.config.default_process
+        )
+        required_facts = adapter.required_facts()
         confirmed = {
             self._canonical_fact_name(fact.name)
             for fact in manifest.facts
             if fact.status == "confirmed"
         }
-        if manifest.process_source != "default":
-            confirmed.add("process")
         existing = {item.clarification_id: item for item in manifest.clarifications}
         result = []
-        for requirement in requirements:
-            required_in_phase = requirement.phase == phase
-            if phase == "discovery" and requirement.name in available_discovery_facts:
-                required_in_phase = True
-            if phase != "all" and not required_in_phase:
-                continue
-            name, question = requirement.name, requirement.question
+        for name, question in required_facts.items():
             if name in confirmed:
                 continue
             clarification_id = f"clarification_{name}"
             item = existing.get(clarification_id)
             if item is None or item.status == "open":
-                result.append(item or ClarificationRecord(clarification_id, question, "open"))
+                result.append(
+                    item or ClarificationRecord(clarification_id, question, "open")
+                )
         return result
 
     def _reconcile_clarifications(self, project_id: str) -> ProjectManifest:
@@ -251,13 +341,11 @@ class DFMService:
 
         return store.update(reconcile)
 
-    def _ensure_clarifications(
-        self, project_id: str, *, phase: str = "all"
-    ) -> ProjectManifest:
+    def _ensure_clarifications(self, project_id: str) -> ProjectManifest:
         store = self._store(project_id)
 
         def ensure(current: ProjectManifest) -> ProjectManifest:
-            pending = self._open_clarifications(current, phase=phase)
+            pending = self._open_clarifications(current)
             known = {item.clarification_id for item in current.clarifications}
             additions = [item for item in pending if item.clarification_id not in known]
             if not additions:
@@ -272,116 +360,50 @@ class DFMService:
 
     def _project_payload(self, manifest: ProjectManifest) -> dict[str, Any]:
         payload = manifest.to_dict()
-        phase = "analysis" if manifest.discovery_snapshots else "discovery"
         payload["open_clarifications"] = [
-            item.to_dict()
-            for item in self._open_clarifications(manifest, phase=phase)
+            item.to_dict() for item in self._open_clarifications(manifest)
         ]
-        payload["discovery_capability"] = self.discovery.capability()
         return payload
 
-    def _latest_discovery_snapshot(self, manifest: ProjectManifest):
-        input_hashes = {
-            item.input_id: item.sha256 for item in self._active_inputs(manifest)
-        }
-        discovery_fact_names = {"process", *self.discovery.required_fact_names()}
-        latest_discovery_facts = {
-            fact.name: fact.fact_id
-            for fact in manifest.facts
-            if fact.status == "confirmed" and fact.name in discovery_fact_names
-        }
-        return next(
-            (
-                item
-                for item in reversed(manifest.discovery_snapshots)
-                if item.input_hashes == input_hashes
-                and item.process == manifest.process
-                and item.status == "frozen"
-                and set(latest_discovery_facts.values()).issubset(
-                    set(item.confirmed_fact_refs)
-                )
-            ),
-            None,
-        )
-
-    def _bind_discovery_scope(self, process_plan, manifest, snapshot):
-        """Expand metric templates into one operation per non-overlapping region."""
-
-        if not process_plan.rule_bindings:
-            return process_plan
-        targets = self.discovery.analysis_targets(manifest, snapshot)
-        templates = {
-            metric_id: operation
-            for operation in process_plan.operations
-            for metric_id in operation.metric_ids
-        }
-        binding_templates = {
-            item.metric_id: item for item in process_plan.rule_bindings
-        }
-        operations = [item for item in process_plan.operations if not item.metric_ids]
-        bindings = []
-        for target in targets:
-            metric_id = target["metric_id"]
-            template = templates.get(metric_id)
-            binding = binding_templates.get(metric_id)
-            if template is None or binding is None:
-                raise DFMError(
-                    "analysis_target_unsupported",
-                    "A discovered region requests a metric without a calculator/rule binding.",
-                    {"metric_id": metric_id, "region_id": target["region"].region_id},
-                )
-            suffix = target["region"].content_sha256[:12]
-            operation_id = f"{template.operation_id}.{suffix}"
-            operations.append(
-                replace(
-                    template,
-                    operation_id=operation_id,
-                    feature_refs=[target["feature"].feature_id],
-                    region_refs=[target["region"].region_id],
-                )
-            )
-            bindings.append(
-                replace(
-                    binding,
-                    binding_id=f"{binding.binding_id}.{suffix}",
-                    operation_id=operation_id,
-                    feature_refs=[target["feature"].feature_id],
-                    region_refs=[target["region"].region_id],
-                )
-            )
-        return replace(process_plan, operations=operations, rule_bindings=bindings)
-
-    def _select_process(self, project_id: str, process: str, source: str) -> ProjectManifest:
+    def _select_process(
+        self, project_id: str, process: str, source: str
+    ) -> ProjectManifest:
         self.process_registry.get(process)
         return self._store(project_id).update(
-            lambda current: current
-            if current.process == process and current.process_source == source
-            else replace(
-                current,
-                process=process,
-                process_source=source,
-                domain=(
-                    "injection_molding"
-                    if process == "injection"
-                    else "die_casting"
-                    if process == "die_casting"
-                    else process
-                ),
-                plans=[
-                    replace(
-                        plan,
-                        status="invalidated",
-                        invalidated_by=f"process:{process}",
-                        affected_operation_ids=[item.operation_id for item in plan.operations],
-                    )
-                    for plan in current.plans
-                ],
-                updated_at=_utc_now(),
+            lambda current: (
+                current
+                if current.process == process and current.process_source == source
+                else replace(
+                    current,
+                    process=process,
+                    process_source=source,
+                    domain=(
+                        "injection_molding"
+                        if process == "injection"
+                        else "die_casting"
+                        if process == "die_casting"
+                        else process
+                    ),
+                    plans=[
+                        replace(
+                            plan,
+                            status="invalidated",
+                            invalidated_by=f"process:{process}",
+                            affected_operation_ids=[
+                                item.operation_id for item in plan.operations
+                            ],
+                        )
+                        for plan in current.plans
+                    ],
+                    updated_at=_utc_now(),
+                )
             )
         )
 
     @staticmethod
-    def _resolve_run_id(manifest: ProjectManifest, requested: object, action: str) -> str:
+    def _resolve_run_id(
+        manifest: ProjectManifest, requested: object, action: str
+    ) -> str:
         """Recover an omitted run id without guessing across concurrent runs."""
         run_id = str(requested or "").strip()
         if run_id:
@@ -406,17 +428,21 @@ class DFMService:
 
     def project(self, action: str, **params: Any) -> dict[str, Any]:
         if action == "create":
-            manifest = self.workspace.create_project(params.get("name") or "Untitled DFM project", params.get("idempotency_key"))
-            requested_process = str(params.get("process") or "").strip()
-            if requested_process:
-                manifest = self._select_process(
-                    manifest.project_id, requested_process, "user_selected"
-                )
-            return {"ok": True, "project_id": manifest.project_id, "project": manifest.to_dict()}
+            manifest = self.workspace.create_project(
+                params.get("name") or "Untitled DFM project",
+                params.get("idempotency_key"),
+            )
+            return {
+                "ok": True,
+                "project_id": manifest.project_id,
+                "project": manifest.to_dict(),
+            }
         if action == "list":
             projects = []
             if self.workspace.projects_dir.exists():
-                for path in sorted(self.workspace.projects_dir.glob("dfm_*/project_manifest.json")):
+                for path in sorted(
+                    self.workspace.projects_dir.glob("dfm_*/project_manifest.json")
+                ):
                     try:
                         projects.append(ManifestStore(path.parent).load().to_dict())
                     except DFMError:
@@ -425,77 +451,70 @@ class DFMService:
 
         project_id = params.get("project_id") or ""
         if action == "add_input":
-            source_path = _resolve_input_path(params.get("path"), params.get("working_dir"))
+            source_path = _resolve_input_path(
+                params.get("path"), params.get("working_dir")
+            )
             record = self.inputs.register(project_id, source_path)
-            self._store(project_id).update(self.discovery.refresh_candidates)
-            manifest = self._ensure_clarifications(project_id, phase="discovery")
+            manifest = self._ensure_clarifications(project_id)
+            preview = self._materialize_step_preview(manifest, record)
             return {
                 "ok": True,
                 "project_id": project_id,
                 "input": record.to_dict(),
                 "open_clarifications": [
-                    item.to_dict()
-                    for item in self._open_clarifications(
-                        manifest, phase="discovery"
-                    )
+                    item.to_dict() for item in self._open_clarifications(manifest)
                 ],
-                "discovery_capability": self.discovery.capability(),
+                "preview": preview,
+                **(
+                    {"viewer_manifest": preview["viewer_manifest"]}
+                    if preview.get("status") == "ready"
+                    else {}
+                ),
             }
         if action == "confirm_fact":
             name = self._canonical_fact_name(str(params.get("fact_name") or ""))
             if not name:
                 raise DFMError("fact_invalid", "fact_name is required.")
-            
+
             # Normalize fact_value: parse JSON strings for known array parameters
             raw_value = params.get("fact_value")
             normalized_value = self._normalize_fact_value(name, raw_value)
-            if name == "process":
-                normalized_value = str(normalized_value or "").strip()
-                if normalized_value == "injection_molding":
-                    normalized_value = "injection"
-                self.process_registry.get(normalized_value)
-            
-            fact = FactRecord(f"fact_{uuid4().hex[:16]}", name, normalized_value, "user", "confirmed")
-            def confirm(current: ProjectManifest) -> ProjectManifest:
-                plans = []
-                for plan in current.plans:
-                    affected = self._affected_operations_for_fact(plan, name)
-                    plans.append(
-                        replace(
-                            plan,
-                            status="invalidated",
-                            invalidated_by=f"fact:{name}",
-                            affected_operation_ids=affected,
-                        )
-                        if affected
-                        else plan
-                    )
-                return replace(
+
+            fact = FactRecord(
+                f"fact_{uuid4().hex[:16]}", name, normalized_value, "user", "confirmed"
+            )
+            manifest = self._store(project_id).update(
+                lambda current: replace(
                     current,
                     facts=[*current.facts, fact],
-                    process=normalized_value if name == "process" else current.process,
-                    process_source=(
-                        "user_confirmed" if name == "process" else current.process_source
-                    ),
-                    domain=(
-                        "injection_molding"
-                        if name == "process" and normalized_value == "injection"
-                        else "die_casting"
-                        if name == "process" and normalized_value == "die_casting"
-                        else current.domain
-                    ),
                     clarifications=[
                         replace(item, status="answered", answer=fact.value)
                         if item.clarification_id == f"clarification_{name}"
                         else item
                         for item in current.clarifications
                     ],
-                    plans=plans,
+                    plans=[
+                        replace(
+                            plan,
+                            status="invalidated",
+                            invalidated_by=f"fact:{name}",
+                            affected_operation_ids=(
+                                ["measure_draft", "measure_undercut"]
+                                if name == "pull_dir"
+                                else [item.operation_id for item in plan.operations]
+                            ),
+                        )
+                        for plan in current.plans
+                    ],
                     updated_at=_utc_now(),
                 )
-
-            manifest = self._store(project_id).update(confirm)
-            return {"ok": True, "project_id": project_id, "fact": fact.to_dict(), "revision": manifest.revision}
+            )
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "fact": fact.to_dict(),
+                "revision": manifest.revision,
+            }
         if action == "status":
             manifest = self._reconcile_clarifications(project_id)
             context = self._context(manifest)
@@ -513,160 +532,37 @@ class DFMService:
 
     def analysis(self, action: str, **params: Any) -> dict[str, Any]:
         project_id = params.get("project_id") or ""
-        if action == "discover":
-            store = self._store(project_id)
-            manifest = self._reconcile_clarifications(project_id)
-            requested_process = str(params.get("process") or manifest.process or "")
-            if params.get("process"):
-                manifest = self._select_process(
-                    project_id, requested_process, "user_selected"
-                )
-            manifest = self._ensure_clarifications(
-                project_id, phase="discovery"
-            )
-            open_clarifications = self._open_clarifications(
-                manifest, requested_process, phase="discovery"
-            )
-            if open_clarifications:
-                return {
-                    "ok": False,
-                    "project_id": project_id,
-                    "status": "clarification_required",
-                    "phase": "discovery",
-                    "requires_user_response": True,
-                    "next_action": "clarify",
-                    "do_not_infer": True,
-                    "clarifications": [
-                        item.to_dict() for item in open_clarifications
-                    ],
-                }
-            discovered, snapshot = self.discovery.freeze(manifest)
-            existing_plan = next(
-                (
-                    item
-                    for item in reversed(discovered.plans)
-                    if item.phase == "discovery"
-                    and item.discovery_snapshot_refs == [snapshot.snapshot_id]
-                    and item.status == "completed"
-                ),
-                None,
-            )
-            active_inputs = self._active_inputs(discovered)
-            discovery_plan = existing_plan or PlanRecord(
-                plan_id=f"plan_{uuid4().hex[:16]}",
-                input_mode=discovered.input_mode or "geometry",
-                analyzer_keys=["hermes_discovery"],
-                status="completed",
-                created_at=_utc_now(),
-                process=discovered.process,
-                process_adapter_version=self.discovery.version,
-                scope_id=str(self.discovery.catalog["catalog_id"]),
-                scope_version=str(self.discovery.catalog["version"]),
-                input_ids=[item.input_id for item in active_inputs],
-                input_hashes={item.input_id: item.sha256 for item in active_inputs},
-                operations=[
-                    PlanOperation(
-                        "discovery.drawing_observations",
-                        "extract_drawing_observations_placeholder",
-                    ),
-                    PlanOperation(
-                        "discovery.generic_geometry",
-                        "recognize_ordinary_region",
-                        depends_on=["discovery.drawing_observations"],
-                        required_fact_names=["model_units"],
-                    ),
-                    PlanOperation(
-                        "discovery.process_features",
-                        "recognize_process_features_placeholder",
-                        depends_on=["discovery.generic_geometry"],
-                        required_fact_names=["process", "model_units"],
-                        feature_refs=list(snapshot.feature_refs),
-                        region_refs=list(snapshot.region_refs),
-                    ),
-                    PlanOperation(
-                        "discovery.fusion",
-                        "fuse_observations_placeholder",
-                        depends_on=["discovery.process_features"],
-                        feature_refs=list(snapshot.feature_refs),
-                        region_refs=list(snapshot.region_refs),
-                    ),
-                ],
-                phase="discovery",
-                discovery_snapshot_refs=[snapshot.snapshot_id],
-                regions=[
-                    item
-                    for item in discovered.regions
-                    if item.region_id in snapshot.region_refs
-                ],
-            )
-            plans = (
-                discovered.plans
-                if existing_plan is not None
-                else [*discovered.plans, discovery_plan]
-            )
-            manifest = store.update(
-                lambda current: replace(
-                    current,
-                    features=discovered.features,
-                    regions=discovered.regions,
-                    observations=discovered.observations,
-                    fusion_links=discovered.fusion_links,
-                    discovery_snapshots=discovered.discovery_snapshots,
-                    plans=plans,
-                    updated_at=_utc_now(),
-                )
-            )
-            self._ensure_clarifications(project_id, phase="analysis")
-            return {
-                "ok": True,
-                "project_id": project_id,
-                "phase": "discovery",
-                "plan": discovery_plan.to_dict(),
-                "snapshot": snapshot.to_dict(),
-                "features": [
-                    item.to_dict()
-                    for item in manifest.features
-                    if item.feature_id in snapshot.feature_refs
-                ],
-                "regions": [
-                    item.to_dict()
-                    for item in manifest.regions
-                    if item.region_id in snapshot.region_refs
-                ],
-                "capability": self.discovery.capability(),
-                "open_clarifications": [
-                    item.to_dict()
-                    for item in self._open_clarifications(
-                        manifest, phase="analysis"
-                    )
-                ],
-            }
         if action == "plan":
             store = self._store(project_id)
             manifest = self._reconcile_clarifications(project_id)
-            analyzer_key = params.get("analyzer_key") or manifest.input_mode
+            requested_analyzer = str(params.get("analyzer_key") or "")
+            if not requested_analyzer:
+                if manifest.input_mode == "step":
+                    analyzer_key = "occt"
+                else:
+                    analyzer_key = manifest.input_mode
+            else:
+                analyzer_key = requested_analyzer
             if not analyzer_key:
-                raise DFMError("input_required", "Register a DFM input before planning analysis.")
-            requested_process = str(params.get("process") or manifest.process or self.config.default_process)
+                raise DFMError(
+                    "input_required", "Register a DFM input before planning analysis."
+                )
+            verification_level = str(params.get("verification_level") or "certified")
+            if verification_level not in {"certified", "experimental"}:
+                raise DFMError(
+                    "verification_level_invalid",
+                    "verification_level must be certified or experimental.",
+                )
+            requested_process = str(
+                params.get("process") or manifest.process or self.config.default_process
+            )
             manifest = self._select_process(
                 project_id,
                 requested_process,
                 "user_selected" if params.get("process") else manifest.process_source,
             )
-            manifest = self._ensure_clarifications(project_id, phase="analysis")
-            discovery_snapshot = self._latest_discovery_snapshot(manifest)
-            if discovery_snapshot is None:
-                return {
-                    "ok": False,
-                    "project_id": project_id,
-                    "status": "discovery_required",
-                    "phase": "discovery",
-                    "requires_user_response": False,
-                    "next_action": "discover",
-                }
-            open_clarifications = self._open_clarifications(
-                manifest, requested_process, phase="analysis"
-            )
+            manifest = self._ensure_clarifications(project_id)
+            open_clarifications = self._open_clarifications(manifest, requested_process)
             if open_clarifications:
                 return {
                     "ok": False,
@@ -682,7 +578,7 @@ class DFMService:
             capability = analyzer.capability(context)
             process = requested_process
             process_plan = None
-            if str(analyzer_key) in {"step", "parasolid"}:
+            if str(analyzer_key) == "occt":
                 adapter = self.process_registry.get(process)
                 defaults = adapter.compile(context, {})
                 raw_parameters = {
@@ -696,28 +592,26 @@ class DFMService:
                     and fact.name in defaults.accepted_inputs
                 }
                 process_plan = adapter.compile(context, raw_parameters)
-                process_plan = self._bind_discovery_scope(
-                    process_plan, manifest, discovery_snapshot
-                )
             parent_plan_id = str(params.get("base_plan_id") or "") or None
             parent_plan = next(
-                (item for item in manifest.plans if item.plan_id == parent_plan_id), None
+                (item for item in manifest.plans if item.plan_id == parent_plan_id),
+                None,
             )
             if parent_plan_id and parent_plan is None:
-                raise DFMError("plan_not_found", "Base DFM analysis plan was not found.", {"plan_id": parent_plan_id})
+                raise DFMError(
+                    "plan_not_found",
+                    "Base DFM analysis plan was not found.",
+                    {"plan_id": parent_plan_id},
+                )
             if parent_plan is not None and parent_plan.status != "invalidated":
-                raise DFMError("plan_not_rebuildable", "Only an invalidated plan can be rebuilt incrementally.", {"plan_id": parent_plan_id, "status": parent_plan.status})
+                raise DFMError(
+                    "plan_not_rebuildable",
+                    "Only an invalidated plan can be rebuilt incrementally.",
+                    {"plan_id": parent_plan_id, "status": parent_plan.status},
+                )
             operations = self._operation_closure(
                 process_plan.operations if process_plan else [],
-                (
-                    []
-                    if parent_plan
-                    and parent_plan.invalidated_by
-                    and not parent_plan.invalidated_by.startswith("fact:")
-                    else parent_plan.affected_operation_ids
-                    if parent_plan
-                    else []
-                ),
+                parent_plan.affected_operation_ids if parent_plan else [],
             )
             operation_ids = {item.operation_id for item in operations}
             rule_bindings = (
@@ -738,7 +632,9 @@ class DFMService:
                 "ready" if capability.status.value == "available" else "blocked",
                 now,
                 process=process_plan.process if process_plan else "",
-                process_adapter_version=process_plan.adapter_version if process_plan else "",
+                process_adapter_version=process_plan.adapter_version
+                if process_plan
+                else "",
                 scope_id=process_plan.scope_id if process_plan else "",
                 scope_version=process_plan.scope_version if process_plan else "",
                 input_ids=[item.input_id for item in active_inputs],
@@ -747,27 +643,40 @@ class DFMService:
                 rule_bindings=rule_bindings,
                 operations=operations,
                 parent_plan_id=parent_plan_id,
-                phase="analysis",
-                discovery_snapshot_refs=[discovery_snapshot.snapshot_id],
-                regions=[
-                    item
-                    for item in manifest.regions
-                    if item.region_id in discovery_snapshot.region_refs
-                ],
+                verification_level=verification_level,
+                assumed_pull_direction=not any(
+                    fact.name == "pull_dir" and fact.status == "confirmed"
+                    for fact in manifest.facts
+                ),
             )
             capability = analyzer.capability(self._context(manifest, plan))
             plan = replace(
                 plan,
                 status="ready" if capability.status.value == "available" else "blocked",
             )
-            store.update(lambda current: replace(current, plans=[*current.plans, plan], updated_at=_utc_now()))
-            return {"ok": True, "project_id": project_id, "plan": plan.to_dict(), "capability": capability.to_dict()}
+            store.update(
+                lambda current: replace(
+                    current, plans=[*current.plans, plan], updated_at=_utc_now()
+                )
+            )
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "plan": plan.to_dict(),
+                "capability": capability.to_dict(),
+            }
         if action == "start":
             manifest = self._store(project_id).load()
             plan_id = params.get("plan_id")
-            plan = next((item for item in manifest.plans if item.plan_id == plan_id), None)
+            plan = next(
+                (item for item in manifest.plans if item.plan_id == plan_id), None
+            )
             if plan is None:
-                raise DFMError("plan_not_found", "DFM analysis plan was not found.", {"plan_id": plan_id})
+                raise DFMError(
+                    "plan_not_found",
+                    "DFM analysis plan was not found.",
+                    {"plan_id": plan_id},
+                )
             # A capability-blocked plan is still useful for surfacing the
             # analyzer's explicit dependency error. Only changed project state
             # makes a saved plan stale and unsafe to execute.
@@ -790,6 +699,14 @@ class DFMService:
                     RunStatus.BLOCKED,
                 }
                 latest = updated.artifacts[-1] if updated.artifacts else None
+                viewer = next(
+                    (
+                        item
+                        for item in reversed(updated.artifacts)
+                        if item.kind == "dfm_viewer"
+                    ),
+                    None,
+                )
                 latest_text = (
                     f", latest {latest.kind}: {latest.relative_path}"
                     if latest is not None
@@ -801,7 +718,9 @@ class DFMService:
                 )
                 try:
                     progress_callback(
-                        "background.tool.complete" if terminal else "background.tool.progress",
+                        "background.tool.complete"
+                        if terminal
+                        else "background.tool.progress",
                         "dfm_analysis",
                         preview,
                         None,
@@ -813,7 +732,19 @@ class DFMService:
                         latest_artifact=(latest.relative_path if latest else None),
                         latest_artifact_kind=(latest.kind if latest else None),
                         run_id=updated.run_id,
-                        is_error=updated.status in {RunStatus.FAILED, RunStatus.BLOCKED},
+                        project_id=project_id,
+                        viewer_manifest=(
+                            str(
+                                (
+                                    self.workspace.project_dir(project_id)
+                                    / viewer.relative_path
+                                ).resolve()
+                            )
+                            if viewer is not None
+                            else None
+                        ),
+                        is_error=updated.status
+                        in {RunStatus.FAILED, RunStatus.BLOCKED},
                     )
                 except Exception:
                     return
@@ -825,24 +756,44 @@ class DFMService:
                 idempotency_key=params.get("idempotency_key"),
                 on_update=on_update,
             )
-            return {"ok": True, "project_id": project_id, "run": self._run_dict(project_id, run)}
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "run": self._run_dict(project_id, run),
+            }
         run_id = self._resolve_run_id(
             self._store(project_id).load(), params.get("run_id"), action
         )
         if action == "status":
             run = self.jobs.status(project_id, run_id)
         elif action == "cancel":
-            run = self.jobs.cancel(project_id, run_id)
+            run = self.jobs.cancel(
+                project_id,
+                run_id,
+                user_confirmed=params.get("confirm_cancel") is True,
+            )
         elif action == "result":
             run = self.jobs.result(project_id, run_id)
         else:
-            raise DFMError("action_invalid", f"Unsupported dfm_analysis action: {action}")
-        return {"ok": True, "project_id": project_id, "run": self._run_dict(project_id, run)}
+            raise DFMError(
+                "action_invalid", f"Unsupported dfm_analysis action: {action}"
+            )
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "run": self._run_dict(project_id, run),
+        }
 
     def _run_dict(self, project_id: str, run: RunRecord) -> dict[str, Any]:
         payload = run.to_dict()
         project_dir = self.workspace.project_dir(project_id)
-        payload["artifacts"] = [{**artifact.to_dict(), "path": str((project_dir / artifact.relative_path).resolve())} for artifact in run.artifacts]
+        payload["artifacts"] = [
+            {
+                **artifact.to_dict(),
+                "path": str((project_dir / artifact.relative_path).resolve()),
+            }
+            for artifact in run.artifacts
+        ]
         payload["diagnostics"] = {
             key: str((project_dir / relative).resolve())
             for key, relative in {

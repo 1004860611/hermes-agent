@@ -4,7 +4,7 @@
   "title": "Hermes DFM Rule Binding",
   "type": "object",
   "additionalProperties": false,
-  "required": ["binding_id", "operation_id", "metric_id", "quantity_id", "rule_id", "operator", "aggregation", "required_fact_names", "feature_refs", "region_refs"],
+  "required": ["binding_id", "operation_id", "metric_id", "quantity_id", "rule_id", "operator", "aggregation"],
   "properties": {
     "binding_id": {"type": "string", "minLength": 1},
     "operation_id": {"type": "string", "minLength": 1},
@@ -12,9 +12,6 @@
     "quantity_id": {"type": "string", "minLength": 1},
     "rule_id": {"type": "string", "minLength": 1},
     "operator": {"enum": [">=", "<=", ">", "<", "==", "!="]},
-    "aggregation": {"enum": ["minimum", "maximum", "mean", "sum", "count", "identity"]},
-    "required_fact_names": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-    "feature_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-    "region_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+    "aggregation": {"enum": ["minimum", "maximum", "mean", "sum", "count", "identity"]}
   }
 }

@@ -8,12 +8,14 @@ import { translateNow } from '@/i18n'
 import { type GatewayEventPayload, textPart } from '@/lib/chat-messages'
 import { coerceGatewayText, coerceThinkingText, normalizePersonalityValue } from '@/lib/chat-runtime'
 import { playCompletionSound } from '@/lib/completion-sound'
+import { dfmViewerTargetFromToolComplete } from '@/lib/dfm-viewer-events'
 import { gatewayEventRequiresSessionId } from '@/lib/gateway-events'
 import { triggerHaptic } from '@/lib/haptics'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { clearClarifyRequest, setClarifyRequest } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
 import { refreshBackgroundProcesses } from '@/store/composer-status'
+import { showDfmViewer } from '@/store/dfm-viewer'
 import { $gateway } from '@/store/gateway'
 import { dispatchNativeNotification } from '@/store/native-notifications'
 import { notify } from '@/store/notifications'
@@ -400,6 +402,12 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // polled: fires exactly when the agent touches the tree.
         if (payload && toolMayMutateFiles(payload)) {
           notifyWorkspaceChanged()
+        }
+
+        const dfmViewerTarget = dfmViewerTargetFromToolComplete(payload)
+
+        if (sessionId && dfmViewerTarget) {
+          showDfmViewer(sessionId, dfmViewerTarget, { activate: isActiveEvent })
         }
       } else if (SUBAGENT_EVENT_TYPES.has(event.type)) {
         if (sessionId && payload && !sessionInterrupted(sessionId)) {

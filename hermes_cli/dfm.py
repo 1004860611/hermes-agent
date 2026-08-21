@@ -8,13 +8,11 @@ from uuid import uuid4
 
 from tools.dfm.analyzers.base import AnalyzerContext
 from tools.dfm.analyzers.registry import build_default_registry
-from tools.dfm.analyzers.step import dependency_statuses
+from tools.dfm.analyzers.occt import ENGINE_VERSION
 from tools.dfm.config import load_dfm_config
-from tools.dfm.contracts import DISCOVERY_SCHEMA_VERSION, OBJECTIVE_SCHEMA_VERSION
 from tools.dfm.errors import DFMError
 from tools.dfm.project.workspace import DFMWorkspace
 from tools.dfm.processes.registry import build_default_process_registry
-from tools.dfm.workers import step_worker
 
 
 def build_parser(subparsers):
@@ -29,7 +27,8 @@ def collect_diagnostics() -> dict:
     try:
         config = load_dfm_config()
         config_report = {"valid": True, "values": {
-            "runtime_python": config.runtime_python,
+            "geometry_executable": config.geometry_executable,
+            "geometry_timeout_seconds": config.geometry_timeout_seconds,
             "max_concurrent_runs": config.max_concurrent_runs,
             "timeout_seconds": config.timeout_seconds,
             "max_file_size_mb": config.max_file_size_mb,
@@ -65,27 +64,17 @@ def collect_diagnostics() -> dict:
             "scope_id": process_plan.scope_id,
             "scope_version": process_plan.scope_version,
         }
-    step = registry.get("step")
-    dependencies = dependency_statuses(step.python_executable)
+    occt = registry.get("occt")
     return {
         "ok": bool(config_report["valid"] and writable),
         "config": config_report,
         "workspace": {"path": str(workspace.root), "writable": writable, "error": write_error},
         "capabilities": capabilities,
         "runtime": {
-            "worker_import_path": step_worker.__name__,
-            "worker_version": step_worker.WORKER_VERSION,
-            "python_executable": step.python_executable,
-            "dependencies": dependencies,
-            "step_available": capabilities["step"]["status"] == "available",
-        },
-        "production_backend": {
-            "backend_id": "external_occt_cpp",
-            "status": "not_implemented",
-            "connected": False,
-            "discovery_contract_version": DISCOVERY_SCHEMA_VERSION,
-            "objective_contract_version": OBJECTIVE_SCHEMA_VERSION,
-            "note": "PythonOCC is a reference backend; production OCCT C++ is developed separately.",
+            "executable": occt.executable,
+            "engine_version": ENGINE_VERSION,
+            "occt_available": capabilities["occt"]["status"] == "available",
+            "maturity": "experimental",
         },
         "processes": processes,
         "note": "Diagnostics never install CAD, OCR, or system dependencies.",
@@ -103,17 +92,10 @@ def dfm_command(args) -> int:
         print(f"Workspace writable: {report['workspace']['writable']}")
         print(f"Config valid: {report['config']['valid']}")
         print(
-            f"STEP worker: {report['runtime']['worker_import_path']} "
-            f"({report['runtime']['worker_version']})"
+            f"OCCT engine: {report['runtime']['executable'] or 'not found'} "
+            f"({report['runtime']['engine_version']}, experimental)"
         )
-        for dependency, available in report["runtime"]["dependencies"].items():
-            print(f"{dependency} available: {available}")
-        print(f"STEP capability available: {report['runtime']['step_available']}")
-        print(
-            "Production geometry backend: "
-            f"{report['production_backend']['backend_id']} "
-            f"({report['production_backend']['status']})"
-        )
+        print(f"OCCT capability available: {report['runtime']['occt_available']}")
         print(f"Supported processes: {', '.join(report['processes']['supported'])}")
         for key in report["processes"]["supported"]:
             process = report["processes"][key]

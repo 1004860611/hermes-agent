@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   getGatewayWsUrl: profile => ipcRenderer.invoke('hermes:gateway:ws-url', profile),
   openSessionWindow: (sessionId, opts) => ipcRenderer.invoke('hermes:window:openSession', sessionId, opts),
   openNewSessionWindow: () => ipcRenderer.invoke('hermes:window:openNewSession'),
+  openDfmViewerWindow: manifestPath => ipcRenderer.invoke('hermes:window:openDfmViewer', manifestPath),
   petOverlay: {
     // Main renderer → main process: window lifecycle + drag. `request` is
     // `{ bounds, screen }`; resolves with the screen bounds it actually used.
@@ -52,6 +53,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   requestMicrophoneAccess: () => ipcRenderer.invoke('hermes:requestMicrophoneAccess'),
   readFileDataUrl: filePath => ipcRenderer.invoke('hermes:readFileDataUrl', filePath),
   readFileText: filePath => ipcRenderer.invoke('hermes:readFileText', filePath),
+  readJsonFile: filePath => ipcRenderer.invoke('hermes:readJsonFile', filePath),
   selectPaths: options => ipcRenderer.invoke('hermes:selectPaths', options),
   writeClipboard: text => ipcRenderer.invoke('hermes:writeClipboard', text),
   saveImageFromUrl: url => ipcRenderer.invoke('hermes:saveImageFromUrl', url),

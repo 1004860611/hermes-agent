@@ -14,7 +14,6 @@ from ..contracts import InputRecord, ProjectManifest
 from ..errors import DFMError
 from .manifest import ManifestStore
 from .step_preflight import inspect_step
-from .parasolid_preflight import inspect_parasolid_xt
 from .workspace import DFMWorkspace
 
 
@@ -25,19 +24,16 @@ _KINDS = {
     ".png": "drawing",
     ".jpg": "drawing",
     ".jpeg": "drawing",
-    ".x_t": "parasolid",
 }
 
 _FORMAT_IDS = {
     "step": "step",
     "drawing": "drawing",
-    "parasolid": "parasolid_xt",
 }
 
 _REPRESENTATIONS = {
     "step": "brep",
     "drawing": "document",
-    "parasolid": "brep",
 }
 
 
@@ -46,16 +42,15 @@ def _utc_now() -> str:
 
 
 def _input_mode(inputs: list[InputRecord]) -> str | None:
-    kinds = {item.kind for item in inputs}
-    geometry = kinds & {"step", "parasolid"}
+    superseded = {
+        item.supersedes_input_id for item in inputs if item.supersedes_input_id
+    }
+    kinds = {item.kind for item in inputs if item.input_id not in superseded}
+    geometry = kinds & {"step"}
     if geometry and "drawing" in kinds:
         return "fusion"
-    if len(geometry) > 1:
-        return "geometry"
     if "step" in geometry:
         return "step"
-    if "parasolid" in geometry:
-        return "parasolid"
     if "drawing" in kinds:
         return "drawing"
     return None
@@ -124,8 +119,6 @@ class InputRegistrar:
         try:
             if kind == "step":
                 preflight = inspect_step(destination)
-            elif kind == "parasolid":
-                preflight = inspect_parasolid_xt(destination)
             else:
                 preflight = {}
         except DFMError:

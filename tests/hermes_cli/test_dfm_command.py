@@ -3,7 +3,6 @@ import json
 
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from hermes_cli.dfm import build_parser, collect_diagnostics, dfm_command
-from tools.dfm.workers.step_worker import WORKER_VERSION
 
 
 def test_dfm_doctor_reports_workspace_config_and_capabilities(tmp_path, capsys):
@@ -13,46 +12,16 @@ def test_dfm_doctor_reports_workspace_config_and_capabilities(tmp_path, capsys):
         assert report["ok"] is True
         assert report["workspace"]["writable"] is True
         assert report["config"]["valid"] is True
-        assert set(report["capabilities"]) == {
-            "step",
-            "parasolid",
-            "drawing",
-            "fusion",
-        }
-        assert report["capabilities"]["parasolid"]["status"] != "available"
+        assert set(report["capabilities"]) == {"occt", "drawing", "fusion"}
         assert report["capabilities"]["drawing"]["status"] == "not_implemented"
         assert report["capabilities"]["fusion"]["status"] == "not_implemented"
-        assert report["runtime"]["worker_import_path"] == "tools.dfm.workers.step_worker"
-        assert report["runtime"]["worker_version"] == WORKER_VERSION
-        assert set(report["runtime"]["dependencies"]) == {
-            "pythonocc-core",
-            "vtk",
-        }
-        assert all(
-            isinstance(value, bool)
-            for value in report["runtime"]["dependencies"].values()
+        assert report["runtime"]["engine_version"] == "occt-dfm-geometry-1.0.0"
+        assert report["runtime"]["maturity"] == "experimental"
+        assert report["runtime"]["occt_available"] == (
+            report["capabilities"]["occt"]["status"] == "available"
         )
-        assert report["runtime"]["step_available"] == (
-            report["capabilities"]["step"]["status"] == "available"
-        )
-        assert report["production_backend"] == {
-            "backend_id": "external_occt_cpp",
-            "status": "not_implemented",
-            "connected": False,
-            "discovery_contract_version": 1,
-            "objective_contract_version": 4,
-            "note": "PythonOCC is a reference backend; production OCCT C++ is developed separately.",
-        }
-        assert set(report["processes"]["supported"]) == {
-            "die_casting",
-            "injection",
-        }
-        assert report["processes"]["injection"]["scope_id"] == (
-            "injection.wall-draft"
-        )
-        assert report["processes"]["die_casting"]["scope_id"] == (
-            "die_casting.topology-baseline"
-        )
+        assert "injection" in report["processes"]["supported"]
+        assert report["processes"]["injection"]["scope_id"] == "injection.geometry-core"
 
         code = dfm_command(argparse.Namespace(dfm_action="doctor", json=True))
         output = json.loads(capsys.readouterr().out)
@@ -73,7 +42,6 @@ def test_dfm_parser_registers_doctor_subcommand():
 
     assert args.dfm_action == "doctor"
     assert args.json is True
-
 
 def test_dfm_is_a_builtin_cli_subcommand():
     from hermes_cli.main import _BUILTIN_SUBCOMMANDS

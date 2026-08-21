@@ -31,16 +31,18 @@ def test_dfm_skill_prescribes_safe_complete_tool_workflow():
         assert token in text
     assert "Never invent" in text
     assert "confirmed" in text
-    assert "dependency_missing" in text
+    assert "geometry_engine_missing" in text
     assert "not_implemented" in text
+    assert "confirm_cancel=true" in text
+    assert "Never cancel" in text
 
 
 def test_dfm_skill_defines_the_m1_injection_plan_boundary():
     text = SKILL.read_text(encoding="utf-8")
 
-    assert "injection.wall-draft" in text
+    assert "injection.geometry-core" in text
     assert "injection" in text
     assert "unsupported_capability" in text
-    assert "Agent -> plan -> Agent -> start" in text
+    assert "verification_level=experimental" in text
     assert "never invent" in text.lower()
     assert "standards" in text.lower()

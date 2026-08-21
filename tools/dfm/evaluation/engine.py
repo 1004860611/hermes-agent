@@ -204,14 +204,6 @@ class EvaluationEngine:
                 expected=expected,
                 actual=measurement.value,
                 outcome="pass" if passed else "fail",
-                feature_refs=sorted(
-                    set(measurement.feature_refs)
-                    | set(binding.feature_refs if binding else [])
-                ),
-                region_refs=sorted(
-                    set(measurement.region_refs)
-                    | set(binding.region_refs if binding else [])
-                ),
             )
             results.append(evaluation)
             provenance[evaluation.evaluation_id] = source

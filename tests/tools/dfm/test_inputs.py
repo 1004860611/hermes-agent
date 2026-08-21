@@ -144,18 +144,16 @@ def test_streaming_copy_enforces_limit_even_if_initial_stat_is_stale(project, mo
     assert exc_info.value.code == "input_too_large"
 
 
-def test_parasolid_is_registered_as_a_distinct_brep_format(project):
+@pytest.mark.parametrize("suffix", [".x_t", ".prt"])
+def test_new_nx_and_parasolid_registration_is_explicitly_unsupported(
+    project, suffix
+):
     workspace, project_id, temp = project
-    source = temp / "part.x_t"
-    source.write_text("Parasolid transmit text file\nbody data\n", encoding="ascii")
+    source = temp / f"part{suffix}"
+    source.write_text("retired native CAD payload\n", encoding="ascii")
 
-    record = InputRegistrar(workspace, DFMConfig()).register(project_id, source)
-    manifest = ManifestStore(workspace.project_dir(project_id)).load()
+    with pytest.raises(DFMError) as exc_info:
+        InputRegistrar(workspace, DFMConfig()).register(project_id, source)
 
-    assert record.kind == "parasolid"
-    assert record.format_id == "parasolid_xt"
-    assert record.representation == "brep"
-    assert record.preflight["inspection_level"] == "opaque_text_only"
-    assert record.preflight["geometry_verified"] is False
-    assert record.preflight["geometry_verifier"] == "external_backend_required"
-    assert manifest.input_mode == "parasolid"
+    assert exc_info.value.code == "input_type_unsupported"
+    assert suffix not in exc_info.value.details["supported"]

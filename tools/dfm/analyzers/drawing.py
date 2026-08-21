@@ -1,4 +1,4 @@
-"""Explicit M2.6 placeholder boundary for drawing observations."""
+"""Explicit unavailable boundary for drawing analysis."""
 
 from ..contracts import Capability, CapabilityStatus
 from ..errors import DFMError
@@ -7,26 +7,16 @@ from .base import AnalyzerContext, CancellationToken
 
 class DrawingAnalyzer:
     key = "drawing"
-    version = "m26-observation-placeholder"
+    version = "m0-unavailable"
     supported_inputs = ("drawing", "fusion")
 
     def capability(self, context: AnalyzerContext) -> Capability:
         return Capability(
             self.key,
             CapabilityStatus.NOT_IMPLEMENTED,
-            "Drawing observation extraction is not implemented yet.",
+            "Drawing analysis is not implemented in M0.",
             "unsupported_capability",
-            {
-                "next_milestone": "M3/M4",
-                "output_contract": "ObservationRecord[]",
-                "placeholder_pipeline": [
-                    "render_pages",
-                    "extract_native_text_or_ocr",
-                    "detect_views_and_callouts",
-                    "normalize_candidates",
-                    "emit_observations",
-                ],
-            },
+            {"next_milestone": "M3"},
         )
 
     def run(self, context: AnalyzerContext, cancellation: CancellationToken):

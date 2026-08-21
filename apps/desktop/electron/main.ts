@@ -1634,6 +1634,19 @@ function findPythonForRoot(root) {
     }
   }
 
+  // A development checkout does not need to duplicate the full Python
+  // environment maintained by the desktop installer. Reuse that interpreter
+  // when it exists; createPythonBackend still puts `root` first on PYTHONPATH,
+  // so source code comes from the selected checkout while dependencies come
+  // from the already-working managed runtime. Without this fallback, Windows
+  // machines with no separately discoverable system Python silently run the
+  // managed checkout instead of the local source tree.
+  const managedPython = getVenvPython(VENV_ROOT)
+
+  if (fileExists(managedPython)) {
+    return managedPython
+  }
+
   return findSystemPython()
 }
 
@@ -6550,6 +6563,7 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
 // close. The primary mainWindow is never tracked here. Pure logic + the URL
 // builder live in session-windows.ts so they stay unit-testable.
 const sessionWindows = createSessionWindowRegistry()
+const dfmViewerWindows = new Map<string, BrowserWindow>()
 
 function focusWindow(win) {
   if (!win || win.isDestroyed()) {
@@ -6633,6 +6647,46 @@ function createSessionWindow(sessionId, { watch = false } = {}) {
 // later converts to a real session must not get refocused as if it were blank.
 function createNewSessionWindow() {
   return spawnSecondaryWindow({ newSession: true })
+}
+
+function dfmViewerUrl(manifestPath: string) {
+  const encoded = encodeURIComponent(manifestPath)
+
+  if (DEV_SERVER) {
+    const root = DEV_SERVER.endsWith('/') ? DEV_SERVER.slice(0, -1) : DEV_SERVER
+
+    return `${root}/?win=dfm-viewer&manifest=${encoded}#/`
+  }
+
+  return `${pathToFileURL(resolveRendererIndex()).toString()}?win=dfm-viewer&manifest=${encoded}#/`
+}
+
+function createDfmViewerWindow(manifestPath: string) {
+  const normalized = path.resolve(String(manifestPath || ''))
+  const existing = dfmViewerWindows.get(normalized)
+
+  if (existing && !existing.isDestroyed()) {
+    focusWindow(existing)
+
+    return existing
+  }
+
+  const win = new BrowserWindow({
+    width: 1180,
+    height: 760,
+    minWidth: 760,
+    minHeight: 520,
+    title: 'Hermes · DFM 三维结果',
+    backgroundColor: getWindowBackgroundColor(),
+    icon: getAppIconPath(),
+    webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
+  })
+  dfmViewerWindows.set(normalized, win)
+  win.on('closed', () => dfmViewerWindows.delete(normalized))
+  wireCommonWindowHandlers(win)
+  win.loadURL(dfmViewerUrl(normalized))
+
+  return win
 }
 
 // The pet overlay: a single transparent, frameless, always-on-top window that
@@ -6983,6 +7037,22 @@ ipcMain.handle('hermes:window:openNewSession', async () => {
   createNewSessionWindow()
 
   return { ok: true }
+})
+ipcMain.handle('hermes:window:openDfmViewer', async (_event, manifestPath) => {
+  try {
+    const { resolvedPath } = await resolveReadableFileForIpc(String(manifestPath || ''), {
+      purpose: 'DFM viewer manifest'
+    })
+
+    if (path.basename(resolvedPath) !== 'dfm_viewer.json') {
+      return { ok: false, error: 'invalid_viewer_manifest' }
+    }
+    createDfmViewerWindow(resolvedPath)
+
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 })
 
 // --- Text size (zoom) -------------------------------------------------------
@@ -7544,6 +7614,18 @@ ipcMain.handle('hermes:readFileText', async (_event, filePath) => {
   } finally {
     await handle.close()
   }
+})
+ipcMain.handle('hermes:readJsonFile', async (_event, filePath) => {
+  const { resolvedPath } = await resolveReadableFileForIpc(filePath, {
+    maxBytes: TEXT_PREVIEW_SOURCE_MAX_BYTES,
+    purpose: 'JSON artifact'
+  })
+
+  if (path.extname(resolvedPath).toLowerCase() !== '.json') {
+    throw new Error('JSON artifact path must end in .json')
+  }
+
+  return JSON.parse(await fs.promises.readFile(resolvedPath, 'utf8'))
 })
 
 ipcMain.handle('hermes:selectPaths', async (_event, options: any = {}) => {

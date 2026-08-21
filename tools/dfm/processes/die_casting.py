@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from ..analyzers.base import AnalyzerContext
 from ..contracts import Capability, CapabilityStatus, PlanOperation, ResolvedArgument
 from ..errors import DFMError
-from .base import FactRequirement, ProcessPlan
+from .base import ProcessPlan
 
 
 class DieCastingProcessAdapter:
@@ -41,23 +41,9 @@ class DieCastingProcessAdapter:
         )
 
     def required_facts(self) -> Mapping[str, str]:
-        return {item.name: item.question for item in self.fact_requirements()}
-
-    def fact_requirements(self) -> tuple[FactRequirement, ...]:
-        return (
-            FactRequirement(
-                "process",
-                "Should this project be analyzed as injection molding or die casting?",
-                "discovery",
-                ("feature.process_semantics",),
-            ),
-            FactRequirement(
-                "model_units",
-                "What length unit was used to author the die-cast part model?",
-                "discovery",
-                ("geometry.load",),
-            ),
-        )
+        return {
+            "model_units": "What length unit was used to author the die-cast part model?",
+        }
 
     def compile(
         self,
@@ -92,9 +78,6 @@ class DieCastingProcessAdapter:
             metric_ids=load.metric_ids,
             required_quantities=load.required_quantities,
             required_artifacts=load.required_artifacts,
-            required_fact_names=load.required_fact_names,
-            feature_refs=load.feature_refs,
-            region_refs=load.region_refs,
             arguments={"model_unit": ResolvedArgument("mm", source_ref)},
             algorithm_options=load.algorithm_options,
         )

@@ -28,11 +28,10 @@ def _call(kind: str, args: dict, **context) -> str:
 
 DFM_PROJECT_SCHEMA = {
     "name": "dfm_project",
-    "description": "Manage durable DFM projects and register STEP, Parasolid x_t, or drawing inputs. Use status before analysis to inspect format and process capabilities. confirm_fact may be called only after the user explicitly answers a clarification; never infer engineering facts from geometry.",
+    "description": "Manage durable DFM projects and register STEP/STP or drawing inputs. Native OCCT injection analysis is experimental and requires explicit verification_level=experimental. Use status before analysis to inspect capabilities. confirm_fact may be called only after the user explicitly answers a clarification; never infer engineering facts from geometry.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["create", "add_input", "status", "confirm_fact", "list"]},
         "project_id": {"type": "string"}, "name": {"type": "string"},
-        "process": {"type": "string", "enum": ["injection", "die_casting"], "description": "Manufacturing intent selected by the user when creating the project."},
         "path": {"type": "string", "description": "Local path or Desktop @file: reference"},
         "fact_name": {"type": "string", "description": "Canonical names: material, model_units, pull_dir. Use only the user's explicit answer."}, "fact_value": {"description": "The user's explicit answer; never a model-inferred value."}, "idempotency_key": {"type": "string"},
     }, "required": ["action"]},
@@ -40,13 +39,15 @@ DFM_PROJECT_SCHEMA = {
 
 DFM_ANALYSIS_SCHEMA = {
     "name": "dfm_analysis",
-    "description": "Plan and manage non-blocking DFM runs. The current PythonOCC STEP analyzer is a non-certified reference backend; the production OCCT C++ engine is not connected yet. Unavailable analyzers fail explicitly; never infer engineering findings from that status.",
+    "description": "Plan and manage non-blocking DFM runs. OCCT work can legitimately spend several minutes in one measurement stage; unchanged progress is not evidence of a disconnect. Before the configured timeout, cancel only after the user explicitly requests it and pass confirm_cancel=true. Unavailable analyzers fail explicitly; never infer engineering findings from that status.",
     "parameters": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["discover", "plan", "start", "status", "cancel", "result"]},
+        "action": {"type": "string", "enum": ["plan", "start", "status", "cancel", "result"]},
         "project_id": {"type": "string"}, "plan_id": {"type": "string"}, "run_id": {"type": "string", "description": "Run ID returned by start. Always pass it to status, result, or cancel; if omitted, the service can infer it only when unambiguous."},
         "base_plan_id": {"type": "string", "description": "Invalidated plan to rebuild with only affected operations."},
-        "process": {"type": "string", "enum": ["injection", "die_casting"], "description": "Manufacturing process selected by the user. Pass it to discover before compiling the analysis plan."},
-        "analyzer_key": {"type": "string", "enum": ["step", "parasolid", "drawing", "fusion"]},
+        "process": {"type": "string", "enum": ["injection", "die_casting"], "description": "Manufacturing process selected by the user. Omit only to keep the project's current/default process."},
+        "analyzer_key": {"type": "string", "enum": ["occt", "drawing", "fusion"]},
+        "verification_level": {"type": "string", "enum": ["certified", "experimental"], "description": "OCCT v0.2.0 requires an explicit experimental selection; certified never silently downgrades."},
+        "confirm_cancel": {"type": "boolean", "description": "Set true only when the user explicitly requested cancellation. Never set merely because progress is unchanged; wait for the configured timeout."},
         "idempotency_key": {"type": "string"},
     }, "required": ["action", "project_id"]},
 }
