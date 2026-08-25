@@ -1,7 +1,7 @@
 ---
 title: "DFM Hermes Agent 开发路径"
 status: active
-updated: 2026-08-24
+updated: 2026-08-25
 type: product-development-plan
 ---
 
@@ -34,7 +34,7 @@ type: product-development-plan
 | 三维输入 | PythonOCC 参考实现支持 STEP；生产目标为外部 OCCT C++ 项目支持 STEP |
 | 二维输入 | 契约和 Provider 占位，尚无生产识别 |
 | 特征识别 | 普通全模型区域可运行；主壁、螺钉柱、凸台、筋、孔、倒扣和外观面候选由 OCCT C++ Provider 显式占位 |
-| 本体/规则 | 已有注塑 Snapshot Schema、本地 SQLite、Check Context 和通用 RuleBinding 编译；中心管理后台尚未交付 |
+| 本体/规则 | Snapshot Schema 2、`injection.default@1.1.0`、本地 SQLite、Check Context 和通用 RuleBinding 编译已实现；中心管理后台与同步尚未交付 |
 | 证据 | Hermes 根据 ScalarField 和同源 RenderScene 生成三视角截图 |
 
 已完成的基础能力包括项目 Manifest、两阶段发现骨架、区域化 AnalysisPlan、PythonOCC
@@ -50,7 +50,7 @@ Schema 2；注塑阈值已从静态 Scope 迁移到已发布本体/规则快照�
 
 - 冻结 Process、Feature Type、Region Type、Metric、Check、Factor 六类稳定 Concept；
 - 使用 Relation 表达 `HAS_CHECK/HAS_REGION/APPLIES_TO_FEATURE/APPLIES_TO_REGION/USES_OPERAND/REQUIRES_FACTOR`；
-- 冻结 `OntologyRuleSnapshot` Schema，发布物包含本体子图、Factor Option 和有效 Rule Version；
+- 冻结 `OntologyRuleSnapshot` Schema 2，发布物包含本体子图、Factor Option 和有效 Rule Version；
 - Agent 将发布包原子安装为 Profile-aware 本地 SQLite，只读执行；
 - 通过本体关系编译 `EffectiveRule/RuleBinding`，继续复用通用多 Measurement Evaluation Engine；
 - `dfm_analysis context` 按 Check 向 Agent/AI提供有限概念、关系、选项和规则；
@@ -58,8 +58,10 @@ Schema 2；注塑阈值已从静态 Scope 迁移到已发布本体/规则快照�
 
 完成证据：修改发布包阈值后 Agent 不改代码即可生成新 EffectiveRule；新增 Feature/Region/Check
 本体记录且 OCCT Capability 已声明 Metric 时，通用编译器不增加专用业务分支即可生成 RuleBinding。
+Schema 2 已删除 `USES_OPERAND` 中重复的 Worker/Feature/Region Selector，改由
+`APPLIES_TO_REGION + HAS_REGION + APPLIES_TO_FEATURE` 唯一解析，并覆盖多 Operand 不同区域测试。
 
-### M2.5-B：Django 本体与规则管理控制面
+### M2.5-B：Django 本体与规则管理控制面（待实施）
 
 - 建立 Concept、Relation、Factor Option、Rule Version、Rule Set、Rule Set Item、Citation、
   Rule Generation 和 Publication 九张核心表；
@@ -71,7 +73,7 @@ Schema 2；注塑阈值已从静态 Scope 迁移到已发布本体/规则快照�
 完成标准：Web、Desktop 和 Agent 读取同一稳定字典；一条审核后的规则可以不发布 Agent 新版本而在
 下一次 AnalysisPlan 生效，已有 Run 仍可按旧 Snapshot 完整复现。
 
-### M2.6-A：冻结外部 OCCT C++ 项目边界与契约
+### M2.6-A：冻结外部 OCCT C++ 项目边界与契约（Hermes 侧基线已完成，跨仓待实施）
 
 目标是先冻结 Hermes 与独立几何项目的边界，避免 C++ 工程复制规则、项目状态或报告逻辑。
 
@@ -87,7 +89,7 @@ Schema 2；注塑阈值已从静态 Scope 迁移到已发布本体/规则快照�
 完成标准：外部项目不依赖 Hermes 内部 Python 类型即可使用正式 Schema 和共享 Fixture 完成
 Discovery 与 Objective 请求/结果的双向契约测试。
 
-### M2.6-B：OCCT C++ 生产闭环
+### M2.6-B：OCCT C++ 生产闭环（待实施）
 
 用 STEP、壁厚和拔模角完成第一条生产链路，同时交付第一批真实 Feature/Region。
 
@@ -104,7 +106,7 @@ Discovery 与 Objective 请求/结果的双向契约测试。
 完成标准：任一 Finding 能从报告反向追溯到图片、高亮三角形、场值、拓扑实体、Feature/
 Region、Operation、规则、输入哈希、Snapshot 和 C++ 实现版本。
 
-### M2.6-C：特征规则与指标逐项扩展
+### M2.6-C：特征规则与指标逐项扩展（待实施）
 
 按工程价值逐项加入，不一次性实现候选清单。推荐顺序：
 
@@ -117,7 +119,7 @@ Region、Operation、规则、输入哈希、Snapshot 和 C++ 实现版本。
 验收，不能只增加字段或报告文案。压铸等其它工艺必须建立独立 Scope 和认证范围，不复制
 注塑阈值冒充支持。
 
-### M2.7：黄金产品完整闭环
+### M2.7：黄金产品完整闭环（待实施）
 
 - 冻结真实或脱敏黄金产品、确认事实和批准规则；
 - 覆盖该产品全部批准指标；
@@ -126,21 +128,21 @@ Region、Operation、规则、输入哈希、Snapshot 和 C++ 实现版本。
 
 Ground Truth 只用于研发验收，不进入生产分析，也不回写运行结果。
 
-### M3：二维图纸信息提取
+### M3：二维图纸信息提取（待实施）
 
 - PDF/图片解析、OCR、版面和表格识别；
 - 输出带页码、bbox、原文、单位和置信度的 Observation；
 - 高置信度且无冲突的信息可转为 Fact，歧义进入 Clarification；
 - 无可靠比例或明确标注时，不从像素推断精确几何尺寸。
 
-### M4：二维工程特征与三维融合
+### M4：二维工程特征与三维融合（待实施）
 
 - 识别公差、材料、表面要求、基准和局部工程标注；
 - 将二维 Observation 与三维 Feature/Region 建立可审核 FusionLink；
 - 冲突和低置信度映射由用户确认；
 - 图纸信息参与规则选择，但不替代三维客观计算。
 
-### M5：平台化与多工艺扩展
+### M5：平台化与多工艺扩展（待实施）
 
 - 通用 Capability/Calculator 注册与认证；
 - 受影响 Operation 重算和断点复用；
@@ -174,13 +176,17 @@ Ground Truth 只用于研发验收，不进入生产分析，也不回写运行�
 
 ## 6. 当前优先级
 
-1. 在独立 Django 工程实现九张中心管理表、审核发布器和 Snapshot API；
-2. Agent 完成后台同步、签名/哈希校验、固定版本、回滚和撤销处理；
-3. 冻结 Geometry Discovery 1、Objective 4、Geometry/Evidence 2 和共享 Fixture；
-4. 建立独立 OCCT C++ 项目及 Capability/Job/Artifact 边界；
-5. 实现 STEP Loader、Snapshot、第一批真实注塑 Feature/Region Recognizer；
-6. 用螺钉柱壁厚比例完成“新增 Capability + 本体 + 规则、不改 Agent 业务代码”的 Golden E2E；
-7. 完成并发稳定性和工程认证后逐项扩展指标。
+后续按两条主线并行推进，几何生产闭环是产品核心路径，规则控制面不能阻塞 OCCT 工程启动：
+
+| 优先级 | 几何生产主线 | 规则与 Agent 主线 |
+| --- | --- | --- |
+| P0 | 建立独立 `dfm-occt-worker` 仓库；冻结 Discovery 1、Objective 4、Geometry/Evidence 2 和共享 Fixture | 固定 Snapshot Schema 2；继续维护本地编译、Evaluation 和契约测试 |
+| P1 | STEP Loader、Snapshot、主壁/螺钉柱等首批 Feature/Region Recognizer、壁厚/拔模 Calculator | 独立 Django 工程实现九张中心表、审核发布器和 Snapshot API |
+| P2 | 用螺钉柱壁厚比例完成“不改 Agent 业务代码”的 Golden E2E | Agent 完成签名同步、版本选择、回滚和撤销处理 |
+| P3 | 并发、资源隔离、数值与工程认证后逐项扩展指标 | 规则生成 AI、知识 Citation、企业规则管理和审计 |
+
+二维图纸识别与 2D/3D Fusion 在三维 Golden E2E 之后进入实现，但其 Observation、FusionLink 和
+Clarification 契约继续保留，避免后续破坏主数据链。
 
 文档只记录已批准方向。字段和状态以 `tools/dfm/schemas/`、`tools/dfm/contracts.py` 和
 `tools/dfm/scopes/` 为当前可执行依据；中心管理后台交付后，以签名发布 Snapshot 和对应 Schema 为

@@ -1,8 +1,8 @@
 ---
 title: "单次 DFM 分析数据说明"
 status: active
-milestone: M2.5
-last_updated: 2026-08-24
+milestone: M2.5-A
+last_updated: 2026-08-25
 type: living-runbook
 owners: DFM 工程团队
 ---
@@ -24,7 +24,7 @@ owners: DFM 工程团队
 | 2D 图纸/OCR | 接口预留，尚未形成生产分析闭环 |
 | 混合输入融合 | 接口预留，尚未形成生产分析闭环 |
 | 几何计算 | 当前为 OpenCascade / `pythonocc-core` 参考 Worker；生产目标为独立 OCCT C++ 项目 |
-| 本体/工艺规则 | 注塑发布快照 `injection.default@1.0.0` 和本地只读 SQLite；压铸 `die_casting.topology-baseline@1.0.0` |
+| 本体/工艺规则 | Ontology Snapshot Schema 2；注塑 `injection.default@1.1.0` 和本地只读 SQLite；压铸 `die_casting.topology-baseline@1.0.0` |
 | 执行方式 | Hermes 主进程管理 Run，STEP worker 隔离子进程执行 |
 | 结果 | Worker `measurements.json`、Hermes `evaluations.json`、兼容报告 JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
 | Desktop | 复用附件上传、聊天进度和 Artifacts 展示 |
@@ -49,21 +49,21 @@ Hermes Agent
   │
   ├─ dfm_project(create)
   ├─ dfm_project(add_input)
-  ├─ dfm_project(confirm_fact)      # 可选
-  ├─ dfm_analysis(context)          # 按需读取单个 Check 的本体上下文
-  ├─ dfm_analysis(plan)
+  ├─ dfm_project(confirm_fact)      # 回答 discovery 阶段澄清
+  ├─ dfm_analysis(discover)         # 必须先冻结 DiscoverySnapshot
+  ├─ dfm_project(confirm_fact)      # 回答 analysis 阶段澄清
+  ├─ dfm_analysis(context)          # 可选；按需读取单个 Check 的本体上下文
+  ├─ dfm_analysis(plan)             # 编译 analysis Plan
   ├─ dfm_analysis(start)
   ├─ dfm_analysis(status)           # 轮询/进度
   └─ dfm_analysis(result)
           │
           v
-DFMService → Local Ontology SQLite + ProcessAdapter → JobManager → PythonOCC reference worker
-                                      │
-                                      ├─ OpenCascade 参考几何计算
-                                      ├─ 注塑规则检查
-                                      └─ 压铸拓扑门（当前）
-                                      ├─ 证据图片渲染
-                                      └─ JSON/MD/PPTX 报告生成
+DFMService
+  ├─ DiscoveryEngine → ordinary whole-model fallback（当前）
+  ├─ Local Ontology SQLite + ProcessAdapter → AnalysisPlan
+  └─ JobManager → PythonOCC reference worker → Measurement/Field/Scene/Map
+                    └─ Hermes Evaluation → Evidence → Finding → JSON/MD/PPTX
 ```
 
 ### 2.1 Agent 与确定性计划的分工
@@ -71,6 +71,8 @@ DFMService → Local Ontology SQLite + ProcessAdapter → JobManager → PythonO
 - Hermes Agent 负责理解用户意图、选择工艺、补充或确认工程事实，并决定何时调用 DFM 工具。
 - `DFMService` 不直接执行模型临时生成的几何步骤。它将本地已发布本体/规则快照与几何 Capability
   组合，根据已确认事实编译结构化 Plan。
+- `discover` 必须先于 analysis `plan`。当前 Discovery 只产生可审计的 ordinary 全模型区域和
+  外部 OCCT Provider 的显式未实现状态，不伪造螺钉柱、筋等工艺特征。
 - `dfm_analysis(context)` 按 Check 返回概念定义、Operand、Factor、选项和候选规则，使 Agent/AI
   实际消费本体；它不把完整数据库放入模型上下文。
 - Run 启动前会保存 Plan 快照；worker 只执行该快照对应的参数和操作。
@@ -111,6 +113,8 @@ Docker 中通常通过 `HERMES_HOME` 指向持久卷，例如：
 
 ```text
 <HERMES_HOME>/workspace/dfm/
+├── ontology/
+│   └── dfm-ontology.sqlite3
 ├── projects/
 │   └── <project_id>/
 │       ├── project_manifest.json
@@ -123,21 +127,27 @@ Docker 中通常通过 `HERMES_HOME` 指向持久卷，例如：
 │       │       ├── worker.stdout.log
 │       │       ├── worker.stderr.log
 │       │       └── artifacts/
+│       │           ├── measurements.json
+│       │           ├── render_scene.json
+│       │           ├── topology_map.json
+│       │           ├── scalar_<field_id>.json
 │       │           ├── worker_result.json
+│       │           ├── evaluations.json
+│       │           ├── evidence_geometry.json
+│       │           ├── evidence_records.json
+│       │           ├── evidence_<序号>.png
 │       │           ├── dfm_report.json
 │       │           ├── dfm_report.md
-│       │           ├── dfm_report.pptx
-│       │           ├── dfm_highlighted.step
-│       │           ├── model.png
-│       │           ├── overview.png
-│       │           └── DFM-<序号>_<问题>_<视角>.png
+│       │           └── dfm_report.pptx       # 安装 python-pptx 时
 │       ├── artifacts/
 │       └── reports/
 ├── tmp/
 └── .locks/
 ```
 
-当前 STEP Analyzer 将本次运行的结果写入 `runs/<run_id>/artifacts/`。项目根目录下的 `artifacts/` 和 `reports/` 是预留目录，不是 M1 STEP 结果的主要读取位置。
+当前 STEP Analyzer 将本次运行的结果写入 `runs/<run_id>/artifacts/`。项目根目录下的 `artifacts/`
+和 `reports/` 是预留目录，不是当前 STEP 结果的主要读取位置。目录中的具体 ScalarField 数量和
+证据图片数量由 Plan、失败 Evaluation 和配置决定，不能依赖固定文件个数。
 
 ## 5. 输入数据
 
@@ -176,7 +186,11 @@ InputRecord 主要字段：
 }
 ```
 
-STEP 项目在生成可执行 Plan 前必须确认 `material`、`pull_dir` 和 `model_units`。未确认项以稳定 clarification ID 写入 Manifest；`confirm_fact` 保存回答并关闭对应问题。新增输入或确认事实会把既有 Plan 标记为 `invalidated`，需要重新规划。
+STEP 项目按阶段确认事实：`model_units` 属于当前 Discovery 前置事实；`material` 和 `pull_dir`
+属于当前注塑 Analysis 前置事实。未确认项以稳定 clarification ID 写入 Manifest；`confirm_fact`
+只保存用户明确回答并关闭对应问题。`plan` 在没有有效 DiscoverySnapshot 时返回
+`discovery_required`，不会跳过发现阶段。新增输入或确认影响既有计划的事实会把相关 Plan 标记为
+`invalidated`，需要重新发现或重新规划。
 
 同名同类型的新输入会以 `supersedes_input_id` 指向旧版本；后续 Plan 仅引用未被替代的活动输入。失效 Plan 会保存 `invalidated_by` 和 `affected_operation_ids`。调用 `dfm_analysis(plan, base_plan_id=...)` 可以从失效 Plan 生成仅包含受影响检查及其依赖的重跑 Plan；例如仅修改拔模方向时，重跑范围为 STEP 加载、拓扑、拔模和倒扣检查，而不是完整检查族。
 
@@ -198,7 +212,8 @@ STEP 项目在生成可执行 Plan 前必须确认 `material`、`pull_dir` 和 `
 
 ### 当前边界
 
-`facts`、`clarifications`、`features` 和 `findings` 契约已经存在。M2.5 在保持注塑结果不变的前提下，将压铸拓扑门的失败 Evaluation 归一化为压铸规则引用的项目级 Finding：
+`facts`、`clarifications`、`observations`、`features`、`regions`、`discovery_snapshots` 和 `findings`
+契约已经存在。当前实现将失败 Evaluation 归一化为带规则引用的项目级 Finding：
 
 - 已确认工艺参数可以写入 `facts` 并参与 Plan 编译；
 - 每次 STEP Run 都生成 `measurements.json`，保存输入哈希、算法版本、实际 operations、客观模型测量、问题测量及规则 Evaluation；
@@ -212,12 +227,15 @@ STEP 项目在生成可执行 Plan 前必须确认 `material`、`pull_dir` 和 `
 
 PlanRecord 保存：
 
+- `phase`：`discovery` 或 `analysis`；只有 analysis Plan 可以启动客观计算 Run；
 - `process`：由 Plan 固定为 `injection` 或 `die_casting`；
 - `process_adapter_version`；
 - `scope_id` 与 `scope_version`；
+- `ontology_snapshot_id` 与 `ontology_snapshot_sha256`；
+- `discovery_snapshot_refs`；
 - 输入 ID 和输入哈希；
-- 参数值、单位和来源；
-- 版本化 operations。
+- 版本化 Operations、Region 和每个参数的值、单位、来源；
+- Effective Rules、RuleBindings 和多 Measurement Operand 表达式。
 
 它回答“准备分析什么、使用哪些输入、参数从哪里来、采用哪版规则范围”。
 
@@ -234,8 +252,9 @@ PlanRecord 保存：
 - 项目输入文件绝对路径；
 - 本次 artifact 输出目录；
 - 工艺、范围和分析器版本；
-- 有效参数；
-- 最大证据问题数量。
+- Discovery 已解析的 Region 和 Objective Operations。
+
+规则条件、阈值和 pass/fail 不发送给几何 worker；它们留在 Hermes 的 Plan/Evaluation 阶段。
 
 `request.json` 是复核“worker 实际收到了什么”的首选文件，但其中的绝对路径属于运行环境路径，迁移到另一台机器后不应直接复用。
 
@@ -269,12 +288,13 @@ RunRecord 同时保存：
 `events.jsonl` 每行是一个 UTF-8 JSON 对象，用于记录 worker 的结构化事件，例如：
 
 - `progress`：阶段与百分比；
-- `heartbeat`：长任务存活信号；
 - `artifact`：新制品名称和类型；
 - `error`：结构化错误码和消息；
 - `completed`：worker 结果文件。
 
-它适合时间线分析和 UI 进度恢复，不应把普通 stdout 文本当作权威状态。
+它适合时间线分析和 UI 进度恢复，不应把普通 stdout 文本当作权威状态。当前 WorkerEvent
+Schema 没有独立 `heartbeat` 事件；运行存活时间记录在 RunRecord 的 `heartbeat_at`，由进度、
+Artifact 和 Hermes 阶段更新推进。
 
 ### 8.3 worker.stdout.log
 
@@ -298,46 +318,51 @@ RunRecord 同时保存：
 
 | 文件 | 类型/用途 | 主要使用者 |
 | --- | --- | --- |
-| `worker_result.json` | worker 原始结果、输入哈希、参数、artifact 元数据 | Analyzer、开发诊断 |
-| `measurements.json` | 几何 Worker 输出的版本化客观 Measurement、实际 operations 和几何引用 | EvaluationEngine 输入、系统集成、开发诊断 |
+| `worker_result.json` | Objective Result Manifest：输入/范围、Producer 版本和 Artifact 元数据 | Analyzer、开发诊断 |
+| `measurements.json` | 几何 Worker 输出的版本化客观 Measurement、Operation 引用和几何引用 | EvaluationEngine 输入、系统集成、开发诊断 |
+| `render_scene.json` | 与测量同源的渲染网格场景 | Hermes 证据渲染 |
+| `topology_map.json` | 几何实体到渲染 primitive/triangle 的映射 | 证据定位、契约校验 |
+| `scalar_*.json` | 壁厚、拔模角等局部客观场 | FailedPatch 与证据生成 |
 | `evaluations.json` | Hermes EvaluationEngine 使用 Plan 参数/版本化规则比较后生成的 Evaluation 和 provenance | Finding 归一化、规则审计 |
-| `dfm_report.json` | 结构化 DFM 分析结果 | 系统集成、后续归一化 |
+| `evidence_geometry.json` | 失败 Evaluation 对应的 FailedPatch 几何 | 证据审计 |
+| `evidence_records.json` | Evaluation、Measurement、Region 与图片的结构化关系 | 报告、Finding |
+| `evidence_*.png` | 当前失败区域证据图 | 问题详情、PPTX |
+| `dfm_report.json` | 汇总 Measurement、Evaluation 和 Evidence 的结构化 DFM 结果 | Desktop、系统集成 |
 | `dfm_report.md` | 可读文本报告和兼容交付 | Agent、开发者 |
-| `dfm_report.pptx` | 当前主要用户交付报告 | Desktop 用户 |
-| `dfm_highlighted.step` | 高亮或标记问题的 STEP | CAD 复核 |
-| `model.png` | 模型整体图 | 报告封面/模型概览 |
-| `overview.png` | 问题总览 | 报告摘要 |
-| `DFM-*.png` | 具体问题证据图 | 问题详情、PPTX |
+| `dfm_report.pptx` | 安装 `python-pptx` 时生成的演示交付报告 | Desktop 用户 |
 
-M1.2 中只有 Plan 包含 `render_evidence` 时才生成证据图片和高亮 STEP。每个进入重点证据范围的问题最多生成：
+当前只有失败 Evaluation 能关联有效 ScalarField 时才生成局部证据图片。每个入选 FailedPatch
+最多生成三个自适应视角：
 
-- 正视图 `front`；
-- 斜视图 `oblique`；
-- 剖视图 `section`。
+- 出模方向视图 `pull`，未提供方向时为 `overview`；
+- 局部表面法向视图 `surface`；
+- 正交侧视图 `side`。
 
-并非所有发现都会生成三张图片。是否生成取决于问题类型、证据渲染是否成功以及 `max_rendered_findings` 配置。
+`dfm.evidence.max_rendered_findings` 当前实际限制一次 Run 最多生成的证据图片总数；并非所有失败
+都会生成三张图片。当前确定性证据管线不生成 `dfm_highlighted.step`、`model.png`、`overview.png`
+或旧式 `DFM-*.png`，这些名称不得作为集成契约。
 
 ## 10. 数据追溯关系
 
 ```text
 项目输入文件
   └─ SHA-256 / InputRecord
-       └─ PlanRecord.input_ids + input_hashes
-            └─ RunRecord.plan_snapshot
-                 └─ request.json
-                      └─ worker_result.json / dfm_report.json
-                           └─ evidence PNG / highlighted STEP / PPTX
-                                └─ ArtifactRecord.relative_path
+       └─ DiscoverySnapshot → Feature / Region
+            └─ Ontology Snapshot + RuleBinding + AnalysisPlan
+                 └─ RunRecord.plan_snapshot
+                      └─ request.json → worker_result.json / measurements.json
+                           └─ evaluations.json → evidence → Finding / Report
+                                └─ ArtifactRecord.relative_path + SHA256
 ```
 
 复核一个问题时，推荐顺序为：
 
-1. 从 PPTX 或 `dfm_report.json` 找到问题编号；
-2. 在同一 Run 的 artifact 目录找到对应证据图片；
-3. 查看 `worker_result.json` 中的原始测量或 issue；
-4. 查看 `request.json` 中的有效参数；
-5. 查看 Manifest 中的 Plan 快照、输入 ID 和哈希；
-6. 必要时使用项目 `inputs/` 中的 STEP 复算。
+1. 从 PPTX、`dfm_report.json` 或 Manifest Finding 找到 Evaluation ID；
+2. 在 `evidence_records.json` 找到证据图片、Measurement 和 Region 引用；
+3. 在 `evaluations.json` 核对规则版本、表达式、Operand 值和结果；
+4. 在 `measurements.json` 与 `scalar_*.json` 核对客观测量和局部场；
+5. 查看 `request.json`、DiscoverySnapshot 与 Plan 固定的本体快照 ID/哈希；
+6. 查看输入哈希和实现版本，必要时使用项目 `inputs/` 中的 STEP 复算。
 
 ## 11. 如何找到最近一次分析
 
@@ -426,6 +451,7 @@ python .\hermes dfm doctor --json
 | 修改状态机、进度或取消语义 | 运行过程、成功失败判断 |
 | 完成 Finding/Measurement 归一化 | Manifest M1 边界、结果读取优先级 |
 | 进入新里程碑 | front matter 的 `milestone`、能力矩阵和文档日期 |
+| 本体发布 Schema 或默认 Snapshot 升级 | 能力矩阵、Plan 字段、追溯关系和相关文档 |
 
 更新时遵守：
 
@@ -439,4 +465,5 @@ python .\hermes dfm doctor --json
 
 - [DFM Hermes Agent 开发目标与路线图](plans/2026-07-13-dfm-hermes-agent-development-roadmap.md)
 - [DFM 架构、工作流与 OCCT C++ 契约](plans/2026-08-18-dfm-architecture-workflow-and-occt-contract.md)
+- [DFM 本体、规则库与 Agent 运行快照设计](dfm-rule-catalog-database-design.md)
 - [DFM 部署环境定义](dfm-deployment-environment.md)

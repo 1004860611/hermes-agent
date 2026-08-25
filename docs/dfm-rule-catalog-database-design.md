@@ -1,7 +1,7 @@
 ---
 title: "DFM 本体、规则库与 Agent 运行快照设计"
 status: active
-updated: 2026-08-24
+updated: 2026-08-25
 type: architecture-database-design
 ---
 
@@ -65,6 +65,10 @@ flowchart LR
 
 管理库和 Agent 本地库不是同一个数据库。管理库支持编辑和继承；本地库是一次发布后展开、校验、
 不可变的运行投影。
+
+当前代码只实现了 Agent 运行层：随仓库提供的 Snapshot Schema 2 发布包会被安装为本地 SQLite。
+Django/PostgreSQL 管理控制层、签名发布 API、企业继承和后台同步仍是待交付目标，不能因为存在
+本地表结构就宣称规则管理平台已经完成。
 
 多端不直接连接 PostgreSQL，通过管理服务共享字典：
 
@@ -292,11 +296,14 @@ Check ──APPLIES_TO_REGION──> Region <──HAS_REGION── Feature
 | --- | --- | --- |
 | `id` | uuid PK | 主键 |
 | `rule_version_id` | uuid FK | 规则版本 |
-| `knowledge_chunk_id` | uuid FK | 引用的知识片段 |
+| `knowledge_chunk_ref` | varchar(220) | 知识模块提供的稳定片段身份；跨服务时是逻辑引用，不建立数据库 FK |
+| `knowledge_revision` | varchar(80) | 被引用片段的不可变修订版本 |
 | `support_type` | varchar(30) | `condition/threshold/explanation/recommendation` |
 | `note` | text nullable | 审核说明 |
 
-`knowledge_document/knowledge_chunk` 属于独立知识模块，不复制进本体库；Citation 只保存稳定片段版本引用。
+`knowledge_document/knowledge_chunk` 属于独立知识模块，不复制进本体库；Citation 必须同时固定片段
+身份和 Revision。第一阶段知识模块可与 Django 管理服务同仓部署，但仍保持独立领域模型；在没有
+实际检索、引用和审核消费者前，不单独拆一个微服务或代码仓库。
 
 ### 4.8 `dfm_rule_generation`
 
@@ -331,7 +338,7 @@ Check ──APPLIES_TO_REGION──> Region <──HAS_REGION── Feature
 | `ontology_version` | varchar(32) | 本体版本 |
 | `rule_set_id` | uuid FK | 已展开的规则集 |
 | `scope_type/scope_key` | varchar | 运行作用域 |
-| `schema_version` | integer | Snapshot Schema 版本 |
+| `schema_version` | integer | Snapshot Schema 版本；当前新发布固定为 `2` |
 | `artifact_uri` | text | JSON/SQLite 发布物位置 |
 | `content_sha256` | char(64) | 发布物哈希 |
 | `status` | varchar(20) | `building/released/revoked` |
@@ -361,6 +368,10 @@ Agent 不复制管理库全部表，只安装一次发布后展开的运行投�
 
 保存 `snapshot_id`、数据库 Schema、Ontology Version、Rule Set Code/Version、Process、企业作用域、
 发布时间和内容哈希。每个分析 Plan 固定记录 `scope_id/scope_version`，历史运行不受后续发布影响。
+
+当前随仓库提供的默认身份是 `ontology.injection.default@1.1.0`。Schema 2 使用
+`APPLIES_TO_REGION` 解析 Operand 目标；运行时仍能读取已经安装的 Schema 1 快照，但新发布物不得
+继续使用 Schema 1 的重复 Selector 格式。
 
 ### 5.2 `ontology_concept`
 
@@ -478,8 +489,8 @@ Calculator 或算法版本变化才使客观 Measurement 缓存失效。
 
 已落地：
 
-- `ontology_snapshot.schema.json`：发布契约；
-- `ontology_snapshot_v2.json`：注塑当前发布快照；
+- `ontology_snapshot.schema.json`：Snapshot Schema 2 发布契约；
+- `ontology_snapshot_v2.json`：注塑 `injection.default@1.1.0` 当前默认发布快照；
 - `LocalOntologyStore`：JSON 发布包校验、SQLite 原子安装、只读查询；
 - Check Context：按 Check 输出概念、关系、选项和规则；
 - Ontology Compiler：把关系和规则编译为现有 `EffectiveRule/RuleBinding`；
@@ -494,6 +505,6 @@ Calculator 或算法版本变化才使客观 Measurement 缓存失效。
 
 1. Django 工程按第 4 节建立管理表、AI生成审计和发布器；
 2. 发布器输出与 `ontology_snapshot.schema.json` 一致的签名 Artifact；
-3. Agent 增加后台同步、版本固定、回滚和撤销列表；
+3. Agent 增加签名后台同步、版本选择、回滚和撤销列表；当前 Plan 固定 ID/哈希已经实现；
 4. OCCT Capability 与本体发布做 CI 交叉校验；
 5. 增加螺钉柱壁厚比例等多 Operand Golden Check 和专用复合证据 Renderer。

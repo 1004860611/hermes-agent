@@ -1,3 +1,10 @@
+---
+title: "DFM 部署环境定义"
+status: active
+updated: 2026-08-25
+type: deployment-guide
+---
+
 # DFM 部署环境定义
 
 本文定义 Hermes DFM 能力的当前参考环境和目标生产环境。当前 PythonOCC Worker 继续用于
@@ -14,7 +21,8 @@
 | STEP | PythonOCC 可运行，非认证 | 独立 OCCT C++ Engine |
 | 特征识别 | ordinary whole-model fallback | OCCT C++ Recognizer + 可选 ML 候选增强 |
 | 指标 | PythonOCC 壁厚/拔模角参考场 | OCCT C++ 区域化 Calculator |
-| 规则/报告 | Hermes | Hermes，保持不变 |
+| 本体/规则 | 随仓库 Snapshot Schema 2、本地 SQLite、Hermes 确定性执行 | Django 发布系统/企业 Snapshot；Hermes 固定版本并执行 |
+| 报告 | Hermes | Hermes，保持不变 |
 | Parasolid/NX | 登记或遗留边界，当前延期 | 未来可选 Backend，不阻塞 STEP |
 | 2D/OCR/Fusion | 占位 | 后续里程碑 |
 
@@ -29,9 +37,12 @@ PythonOCC 的 `available` 只表示参考 Worker 依赖齐全。
 Desktop / CLI / API
         |
         v
-Hermes Agent -> DFM Service -> Job Manager -> PythonOCC reference worker
-                                               |
-                                               +-- measurements / field / scene / map
+Hermes Agent -> DFM Service -> Local Ontology SQLite + AnalysisPlan
+                                |
+                                v
+                           Job Manager -> PythonOCC reference worker
+                                          |
+                                          +-- measurements / field / scene / map
 ```
 
 ### 2.2 目标生产链路
@@ -40,6 +51,8 @@ Hermes Agent -> DFM Service -> Job Manager -> PythonOCC reference worker
 Desktop / CLI / API
         |
         v
+Published Snapshot -> Agent Local SQLite
+                           |
 Hermes Agent -> DFM Service -> Geometry Backend Adapter
                                       |
                                       v
@@ -77,8 +90,21 @@ Geometry Discovery、Objective、Capability、WorkerEvent 和 Artifact 契约。
 | 测试 | CTest + 单元/契约/Golden/E2E；按需使用 sanitizer |
 | 交付 | 版本化可执行文件或容器镜像，不使用漂移的 `latest` |
 
-Hermes 仓库不编译或 vendoring 独立 C++ 项目的源代码。C++ Engine 通过正式发布物和
+`dfm-occt-worker` 是独立代码仓库。Hermes 仓库不编译或 vendoring 其 C++ 源代码。C++ Worker
+通过正式发布物和
 Capability 自我描述，Hermes 只依赖协议版本。
+
+### 3.3 当前协议和发布基线
+
+| 契约 | 当前版本 |
+| --- | --- |
+| Ontology Snapshot | Schema 2；默认 `ontology.injection.default@1.1.0` |
+| Geometry Discovery | Schema 1 |
+| Objective | Schema 4 |
+| ScalarField/RenderScene/TopologyMap/Evidence | Schema 2 |
+| Geometry Backend Capability | Schema 1 |
+
+这些版本表示 Hermes 侧已经存在的契约基线，不表示 `dfm-occt-worker` 或 Django 管理服务已经部署。
 
 ## 4. 当前 Python 依赖
 
@@ -122,7 +148,7 @@ python -m pip install -e ".[dfm]"
 - VS Code C/C++ 与 CMake Tools；
 - 与 MSVC ABI 匹配的 OCCT 构建或二进制发布物。
 
-独立项目典型命令：
+`dfm-occt-worker` 独立项目典型命令：
 
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -194,8 +220,9 @@ python -c "import vtk, pptx; from PIL import Image; print('Reference dependencie
 python .\hermes dfm doctor --json
 ```
 
-`dfm doctor` 当前检查的是 Hermes 配置、工作区和 PythonOCC 参考 Worker，不代表外部 OCCT C++
-生产后端已经安装或认证。
+`dfm doctor` 当前检查 Hermes 配置、工作区、PythonOCC 参考 Worker、ProcessAdapter 和随仓库默认
+Snapshot 能否编译。它不验证 Django 签名同步、撤销列表，也不代表外部 OCCT C++ 生产后端已经
+安装或认证。
 
 ### 8.2 OCCT C++ 生产验收
 
@@ -222,6 +249,9 @@ python .\hermes dfm doctor --json
 ## 10. 发布前检查清单
 
 - Hermes 与 OCCT C++ 项目引用相同 Schema 发布版本；
+- Agent 固定的 Ontology Snapshot Schema 2、ID 和 SHA256 可追溯，企业发布物签名与撤销状态已校验；
+- 每个 Check 的 Operand 能通过 `APPLIES_TO_REGION/HAS_REGION/APPLIES_TO_FEATURE` 唯一解析，并与
+  Worker Capability 中的 Metric/Quantity 对齐；
 - C++ 编译器、OCCT、第三方库和镜像 Digest 已固定；
 - 每个生产 Recognizer/Calculator 均有认证报告哈希；
 - 合成真值、真实脱敏产品和对抗模型均通过；

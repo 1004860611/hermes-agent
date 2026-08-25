@@ -1,7 +1,7 @@
 ---
 title: "DFM 架构、工作流与 OCCT C++ 契约"
 status: active
-updated: 2026-08-24
+updated: 2026-08-25
 type: architecture-contract
 ---
 
@@ -14,7 +14,7 @@ OCCT C++ 交付要求和关键数据契约。完整字段以 `tools/dfm/schemas/
 ## 1. 已批准技术方向
 
 - 生产级三维特征识别和客观指标计算由**独立 OCCT C++ 项目**实现；
-- Django 管理服务负责 DFM 本体、规则生成/审核、默认/企业规则集和发布；
+- 规划中的 Django 管理服务负责 DFM 本体、规则生成/审核、默认/企业规则集和发布；当前尚未交付；
 - Hermes 安装已发布的本体/规则只读快照，负责项目、事实、澄清、通用计划编译、规则执行、
   评价、证据、Finding 和报告；
 - PythonOCC 只保留为参考实现、算法原型和契约回归，不作为生产能力证明；
@@ -27,7 +27,7 @@ OCCT C++ 交付要求和关键数据契约。完整字段以 `tools/dfm/schemas/
 ```mermaid
 flowchart LR
     UI[Desktop / CLI] --> H[Hermes DFM Service]
-    MW[规则管理 Web] --> MS[Django 本体/规则服务]
+    MW[规则管理 Web / planned] --> MS[Django 本体/规则服务 / planned]
     MS --> S[Published OntologyRuleSnapshot]
     S --> DB[Agent Local SQLite]
     DB --> H
@@ -53,14 +53,34 @@ flowchart LR
 | OCCT C++ Engine | STEP Loader、Shape Healing、Topology/Render Snapshot、特征候选、Feature/Region、客观 Calculator、Artifact | 用户事实确认、规则阈值、pass/fail、严重程度、建议和报告 |
 | ML 辅助模块 | 对候选 Feature/Region 分类、排序或给出置信度 | 单独产生最终几何事实或绕过几何验证 |
 | PythonOCC Reference | 合成样件、协议回归、算法对照、快速试验 | 生产认证和静默降级 |
+| 知识模块 | 文档版本、Chunk、检索与 Citation；辅助规则起草和解释 | 几何计算、直接发布阈值、替代规则审核 |
 
 独立 C++ 项目可以部署为本地 Worker 或远程服务，但必须消费和产生同一份契约。Hermes 不应
 链接 C++ 项目的内部库，也不应依赖 OCCT 对象、内存地址或进程内 Shape Handle。
+
+当前 Hermes 实际运行链路是“随仓库 Snapshot Schema 2 → 本地 SQLite → ordinary 全模型
+Discovery fallback → PythonOCC 参考 Objective → Hermes Evaluation/Evidence/Report”。图中的 Django
+发布和外部 OCCT C++ Engine 是目标生产链路。两者必须分开描述，不能把已冻结契约等同于外部
+服务已经接通。
 
 本体只描述稳定业务语义和关系，不保存算法实现。发布器必须验证本体中的 `worker_kind`、
 `worker_role`、`worker_metric_id` 和 `quantity_id` 能在目标 OCCT Capability 中解析；验证失败的
 Check 不得发布为可执行能力。完整库表见
 [DFM 本体、规则库与 Agent 运行快照设计](../dfm-rule-catalog-database-design.md)。
+
+### 2.1 代码仓库归属
+
+| 代码仓库 | 建议技术栈 | 主要职责 | 当前状态 |
+| --- | --- | --- | --- |
+| `hermes-agent` | Python；Desktop 为 Electron/React/TypeScript | Agent、DFM toolset/skill、项目与 Run、本地 Snapshot、通用编译/Evaluation/Evidence/Report、Desktop 交互 | 已有参考闭环 |
+| 后台管理 Web（独立仓库） | 以现有前端栈为准，建议 React/TypeScript | 本体字典、规则编辑/生成、审核、发布、企业覆盖和审计 UI | 待实施 |
+| DFM 管理服务（独立 Django 仓库） | Django/DRF、PostgreSQL；异步任务按实际消费者引入 | 九张中心表、知识 Citation、规则审核、Snapshot Schema 2 发布 API | 待实施 |
+| `dfm-occt-worker` | C++17/20、OCCT、CMake/CTest | STEP、Snapshot、Recognizer、Calculator、几何 Artifact、Capability/Job API | 待实施 |
+| 知识模块 | 首期作为 Django 仓库内独立领域模块；对象存储与向量检索按需要接入 | 原始文档、Revision、Chunk、检索和 Citation | 待实施；暂不拆独立仓库 |
+
+管理 Web 不直接连接 PostgreSQL；Hermes 不直接编辑中心规则；OCCT Worker 不访问规则库。知识模块
+只有在规则起草和解释时通过带版本 Citation 的有限上下文介入，不进入几何 Objective，也不直接
+决定 pass/fail。
 
 ## 3. 运行工作流
 
@@ -115,6 +135,14 @@ confirmed Fact。需要方向的 Recognizer 返回 `blocked + missing_fact_names
 ordinary Region 是所有已经批准、并参与该 Metric 的特征 Face 的补集。任何 Face 不得在同一
 Metric 下漏算或由两个 Region 重复认领。低置信度或未实现 Recognizer 不生成伪 Feature；相应
 区域继续留在 ordinary，或者显式阻塞需要该语义的专用规则。
+
+### 3.4 二维图纸与 2D/3D Fusion 边界
+
+当前 `drawing` 和 `fusion` Analyzer 只是显式占位，不能产生生产结论。后续二维输入先输出带
+页码、bbox、原文、单位、置信度和 Provider 版本的 Observation；材料、公差、皮纹等高置信度信息
+经过冲突检查后成为 Fact，歧义项进入 Clarification。2D Observation 与 3D Feature/Region 之间
+通过可审核 `FusionLink` 关联，不把像素位置直接当成 CAD GeometryRef，也不允许图纸文本替代
+三维客观测量。二维实现可后置，但 Observation/FusionLink 必须沿用现有 Manifest 数据链。
 
 ## 4. 核心数据链
 
@@ -283,7 +311,7 @@ Hermes 只能把 `certified` 能力用于生产 Plan。`experimental` 可用于�
 ## 9. 独立 OCCT C++ 项目建议结构
 
 ```text
-dfm-occt-engine/
+dfm-occt-worker/
 ├── CMakeLists.txt
 ├── include/dfm_contract/
 ├── src/
@@ -352,9 +380,10 @@ Result 原子发布；Artifact 下载后由 Hermes 再次校验大小和 SHA256�
 - Objective 契约：`objective_task.schema.json`、`objective_result_manifest.schema.json`
 - Geometry/Evidence：`scalar_field.schema.json`、`render_scene.schema.json`、
   `topology_map.schema.json`、`evidence_*.schema.json`
-- 本体/规则发布契约：`tools/dfm/schemas/ontology_snapshot.schema.json`
+- 本体/规则发布契约：`tools/dfm/schemas/ontology_snapshot.schema.json`（当前 Schema 2）
 - Agent 本地本体运行时：`tools/dfm/ontology/store.py`
 - 当前注塑发布快照：`tools/dfm/scopes/injection/ontology_snapshot_v2.json`
+  （`ontology.injection.default@1.1.0`）
 - 当前几何能力声明：`tools/dfm/scopes/injection/geometry_capability_v1.json`
 - 特征目录：`tools/dfm/scopes/injection/feature_catalog.json`
 - OCCT C++ Provider 边界：`tools/dfm/feature_recognition/occt_cpp.py`
