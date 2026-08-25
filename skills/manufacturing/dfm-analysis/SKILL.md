@@ -26,8 +26,8 @@ worker.
 4. Pass `process=injection` or `process=die_casting` when the user has selected it; never infer the process from part shape. Ask only the process adapter's returned missing facts. If `dfm_analysis(plan)` returns `status=clarification_required`, it is a hard stop: do **not** answer the questions yourself and do **not** call `confirm_fact` in the same turn. Call the Hermes `clarify` tool for each open question so Desktop shows its blocking question panel; wait for the user's response, then call `confirm_fact` with exactly that response. Use the canonical fact names returned by the service; keep them `confirmed`, not inferred.
 5. Call `dfm_analysis` with `plan`. Omitted process selection keeps the project's
    current process; a new project defaults to the compatible `injection` adapter
-   and `injection.wall-draft` scope. This scope contains only wall thickness and
-   draft angle. Die casting currently exposes only its
+   and published `injection.default` ontology/rule snapshot. The current publication
+   contains only main-wall thickness and draft-angle Checks. Die casting currently exposes only its
    approved topology gate. Inspect the returned process, scope version, input hashes, operations,
    and parameter provenance. Explain blocked checks and assumptions before
    execution.
@@ -39,6 +39,10 @@ worker.
    reconnecting, or after a meaningful external wait. Use `cancel` when
    requested. Call `result` only after `succeeded`.
 8. Summarize Findings with measurement, rule, evidence, confidence, backend quality, and artifact path. State unresolved checks separately. Present `dfm_report.pptx`, when available, as the primary human-readable report for either geometry backend; retain JSON and Markdown as traceable engineering artifacts. Do not ask the model to recreate the deterministic PPTX.
+9. Call `dfm_analysis` with `action=context` and a returned `check_id` only when
+   you need to explain that Check, its Factors, or its candidate rules. Treat this
+   bounded response as the semantic source; do not infer ontology relationships
+   from names and do not request the complete ontology when one Check is enough.
 
 ## Capability handling
 

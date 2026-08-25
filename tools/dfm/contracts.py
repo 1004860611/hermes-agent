@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+import math
 from pathlib import PurePosixPath
 import re
 from typing import Any
@@ -284,6 +285,8 @@ class PlanRecord:
     process_adapter_version: str = ""
     scope_id: str = ""
     scope_version: str = ""
+    ontology_snapshot_id: str = ""
+    ontology_snapshot_sha256: str = ""
     input_ids: list[str] = field(default_factory=list)
     input_hashes: dict[str, str] = field(default_factory=dict)
     rules: dict[str, "EffectiveRule"] = field(default_factory=dict)
@@ -308,6 +311,8 @@ class PlanRecord:
             "process_adapter_version": self.process_adapter_version,
             "scope_id": self.scope_id,
             "scope_version": self.scope_version,
+            "ontology_snapshot_id": self.ontology_snapshot_id,
+            "ontology_snapshot_sha256": self.ontology_snapshot_sha256,
             "input_ids": list(self.input_ids),
             "input_hashes": dict(self.input_hashes),
             "rules": {
@@ -330,6 +335,15 @@ class PlanRecord:
                 "DFM plans must be either discovery or analysis plans.",
                 {"plan_id": self.plan_id, "phase": self.phase},
             )
+        if bool(self.ontology_snapshot_id) != bool(self.ontology_snapshot_sha256) or (
+            self.ontology_snapshot_sha256
+            and not re.fullmatch(r"[0-9a-f]{64}", self.ontology_snapshot_sha256)
+        ):
+            raise DFMError(
+                "plan_ontology_snapshot_invalid",
+                "A DFM plan must pin both ontology snapshot identity and content hash.",
+                {"plan_id": self.plan_id},
+            )
         binding_ids = [item.binding_id for item in self.rule_bindings]
         if len(binding_ids) != len(set(binding_ids)):
             raise DFMError(
@@ -350,18 +364,27 @@ class PlanRecord:
                 )
         for binding in self.rule_bindings:
             binding.validate()
-            operation = operations.get(binding.operation_id)
-            if (
-                operation is None
-                or binding.metric_id not in operation.metric_ids
-                or binding.quantity_id not in operation.required_quantities
-                or binding.rule_id not in self.rules
-            ):
+            if binding.rule_id not in self.rules:
                 raise DFMError(
                     "plan_rule_binding_invalid",
                     "A rule binding does not resolve within its plan.",
                     {"binding_id": binding.binding_id},
                 )
+            for operand in binding.measurement_operands():
+                operation = operations.get(operand.operation_id)
+                if (
+                    operation is None
+                    or operand.metric_id not in operation.metric_ids
+                    or operand.quantity_id not in operation.required_quantities
+                ):
+                    raise DFMError(
+                        "plan_rule_binding_invalid",
+                        "A rule operand does not resolve within its plan.",
+                        {
+                            "binding_id": binding.binding_id,
+                            "operand_alias": operand.alias,
+                        },
+                    )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PlanRecord":
@@ -400,9 +423,143 @@ class EffectiveRule:
         return cls(**payload)
 
 
+_RULE_AGGREGATIONS = {
+    "minimum",
+    "maximum",
+    "mean",
+    "median",
+    "sum",
+    "count",
+    "identity",
+}
+_RULE_OPERATORS = {">=", "<=", ">", "<", "==", "!=", "between"}
+_EXPRESSION_ARITY = {
+    "add": (2, None),
+    "subtract": (2, 2),
+    "multiply": (2, None),
+    "divide": (2, 2),
+    "minimum": (2, None),
+    "maximum": (2, None),
+    "abs": (1, 1),
+    "negate": (1, 1),
+}
+
+
+def _expression_operand_aliases(
+    expression: Any, *, binding_id: str, depth: int = 0
+) -> set[str]:
+    if depth > 32 or not isinstance(expression, dict):
+        raise DFMError(
+            "plan_rule_binding_invalid",
+            "Rule expressions must be bounded JSON expression objects.",
+            {"binding_id": binding_id},
+        )
+    if "operand" in expression:
+        alias = expression.get("operand")
+        if set(expression) != {"operand"} or not isinstance(alias, str) or not alias:
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule expression operand nodes are invalid.",
+                {"binding_id": binding_id},
+            )
+        return {alias}
+    if "constant" in expression:
+        value = expression.get("constant")
+        unit = expression.get("unit")
+        if (
+            not set(expression).issubset({"constant", "unit"})
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or (unit is not None and (not isinstance(unit, str) or not unit))
+        ):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule expression constant nodes are invalid.",
+                {"binding_id": binding_id},
+            )
+        return set()
+    operation = expression.get("op")
+    arguments = expression.get("args")
+    if (
+        set(expression) != {"op", "args"}
+        or operation not in _EXPRESSION_ARITY
+        or not isinstance(arguments, list)
+    ):
+        raise DFMError(
+            "plan_rule_binding_invalid",
+            "Rule expression operation nodes are invalid.",
+            {"binding_id": binding_id, "operation": operation},
+        )
+    minimum, maximum = _EXPRESSION_ARITY[operation]
+    if len(arguments) < minimum or (maximum is not None and len(arguments) > maximum):
+        raise DFMError(
+            "plan_rule_binding_invalid",
+            "Rule expression operation arity is invalid.",
+            {"binding_id": binding_id, "operation": operation},
+        )
+    aliases: set[str] = set()
+    for argument in arguments:
+        aliases.update(
+            _expression_operand_aliases(
+                argument, binding_id=binding_id, depth=depth + 1
+            )
+        )
+    return aliases
+
+
+@dataclass(frozen=True)
+class RuleOperand:
+    """Resolve and aggregate one named Measurement input to a rule expression."""
+
+    alias: str
+    operation_id: str
+    metric_id: str
+    quantity_id: str
+    aggregation: str = "identity"
+    feature_refs: list[str] = field(default_factory=list)
+    region_refs: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RuleOperand":
+        operand = cls(**payload)
+        operand.validate()
+        return operand
+
+    def validate(self) -> None:
+        identities = (self.alias, self.operation_id, self.metric_id, self.quantity_id)
+        if any(not isinstance(value, str) or not value for value in identities):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule operands require non-empty stable identities.",
+            )
+        if self.aggregation not in _RULE_AGGREGATIONS:
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule operand aggregation is unsupported.",
+                {"operand_alias": self.alias, "aggregation": self.aggregation},
+            )
+        for name, refs in (
+            ("feature_refs", self.feature_refs),
+            ("region_refs", self.region_refs),
+        ):
+            if len(refs) != len(set(refs)) or any(
+                not isinstance(ref, str) or not ref for ref in refs
+            ):
+                raise DFMError(
+                    "plan_rule_binding_invalid",
+                    f"Rule operand {name} must contain unique stable identities.",
+                    {"operand_alias": self.alias},
+                )
+
+
 @dataclass(frozen=True)
 class RuleBinding:
-    """Bind one objective quantity to a Hermes-owned engineering rule."""
+    """Bind one or more objective Measurements to one engineering rule."""
 
     binding_id: str
     operation_id: str
@@ -414,16 +571,44 @@ class RuleBinding:
     required_fact_names: list[str] = field(default_factory=list)
     feature_refs: list[str] = field(default_factory=list)
     region_refs: list[str] = field(default_factory=list)
+    check_id: str = ""
+    operand_alias: str = "actual"
+    additional_operands: list[RuleOperand] = field(default_factory=list)
+    expression: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return asdict(self)
+        return {
+            **asdict(self),
+            "additional_operands": [
+                operand.to_dict() for operand in self.additional_operands
+            ],
+        }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "RuleBinding":
-        binding = cls(**payload)
+        values = dict(payload)
+        values["additional_operands"] = [
+            RuleOperand.from_dict(item)
+            for item in values.get("additional_operands", [])
+        ]
+        binding = cls(**values)
         binding.validate()
         return binding
+
+    def measurement_operands(self) -> tuple[RuleOperand, ...]:
+        return (
+            RuleOperand(
+                alias=self.operand_alias,
+                operation_id=self.operation_id,
+                metric_id=self.metric_id,
+                quantity_id=self.quantity_id,
+                aggregation=self.aggregation,
+                feature_refs=self.feature_refs,
+                region_refs=self.region_refs,
+            ),
+            *self.additional_operands,
+        )
 
     def validate(self) -> None:
         identities = (
@@ -432,26 +617,26 @@ class RuleBinding:
             self.metric_id,
             self.quantity_id,
             self.rule_id,
+            self.operand_alias,
         )
         if any(not isinstance(value, str) or not value for value in identities):
             raise DFMError(
                 "plan_rule_binding_invalid",
                 "Rule bindings require non-empty stable identities.",
             )
-        if self.operator not in {">=", "<=", ">", "<", "==", "!="}:
+        if not isinstance(self.check_id, str):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule binding check_id must be a stable string identity.",
+                {"binding_id": self.binding_id},
+            )
+        if self.operator not in _RULE_OPERATORS:
             raise DFMError(
                 "plan_rule_binding_invalid",
                 "Rule binding operator is unsupported.",
                 {"binding_id": self.binding_id, "operator": self.operator},
             )
-        if self.aggregation not in {
-            "minimum",
-            "maximum",
-            "mean",
-            "sum",
-            "count",
-            "identity",
-        }:
+        if self.aggregation not in _RULE_AGGREGATIONS:
             raise DFMError(
                 "plan_rule_binding_invalid",
                 "Rule binding aggregation is unsupported.",
@@ -476,6 +661,36 @@ class RuleBinding:
                     "plan_rule_binding_invalid",
                     f"Rule binding {name} must contain unique stable identities.",
                     {"binding_id": self.binding_id},
+                )
+        operands = self.measurement_operands()
+        for operand in operands:
+            operand.validate()
+        aliases = [operand.alias for operand in operands]
+        if len(aliases) != len(set(aliases)):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Rule operand aliases must be unique within one binding.",
+                {"binding_id": self.binding_id},
+            )
+        if self.additional_operands and (not self.check_id or self.expression is None):
+            raise DFMError(
+                "plan_rule_binding_invalid",
+                "Multi-Measurement bindings require check_id and an explicit expression.",
+                {"binding_id": self.binding_id},
+            )
+        if self.expression is not None:
+            referenced = _expression_operand_aliases(
+                self.expression, binding_id=self.binding_id
+            )
+            if referenced != set(aliases):
+                raise DFMError(
+                    "plan_rule_binding_invalid",
+                    "Rule expressions must reference every declared operand exactly by alias.",
+                    {
+                        "binding_id": self.binding_id,
+                        "declared_aliases": sorted(aliases),
+                        "referenced_aliases": sorted(referenced),
+                    },
                 )
 
 
@@ -785,6 +1000,10 @@ class EvaluationRecord:
     outcome: str
     feature_refs: list[str] = field(default_factory=list)
     region_refs: list[str] = field(default_factory=list)
+    check_id: str = ""
+    actual_unit: str | None = None
+    expression: dict[str, Any] | None = None
+    operand_values: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1298,6 +1517,7 @@ class FindingRecord:
     rule_refs: list[str]
     recommendation: str
     feature_refs: list[str] = field(default_factory=list)
+    check_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

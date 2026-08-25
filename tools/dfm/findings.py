@@ -94,6 +94,11 @@ def materialize_evaluated_findings(
                     }
                     | {str(ref) for ref in evaluation.get("feature_refs", [])}
                 ),
+                check_ids=(
+                    [str(evaluation["check_id"])]
+                    if evaluation.get("check_id")
+                    else []
+                ),
             )
         )
     return results

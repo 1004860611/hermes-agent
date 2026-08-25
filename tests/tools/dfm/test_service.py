@@ -81,6 +81,41 @@ def test_project_actions_create_add_input_status_confirm_and_list(service):
     assert listed["projects"][0]["project_id"] == created["project_id"]
 
 
+def test_analysis_context_exposes_bounded_ontology_to_the_agent(service):
+    dfm, _temp = service
+    project_id = dfm.project("create", name="Ontology context")["project_id"]
+    dfm.project(
+        "confirm_fact",
+        project_id=project_id,
+        fact_name="material",
+        fact_value="ABS",
+    )
+
+    result = dfm.analysis(
+        "context",
+        project_id=project_id,
+        check_id="check.main_wall_minimum_thickness",
+    )
+
+    assert result["confirmed_facts"]["material"]["value"] == "ABS"
+    assert len(result["checks"]) == 1
+    context = result["checks"][0]
+    assert context["check"]["concept_id"] == "check.main_wall_minimum_thickness"
+    assert context["rules"][0]["rule_id"] == "R_INJ_MAIN_WALL_MIN_ABS"
+    assert any(item["predicate"] == "USES_OPERAND" for item in context["relations"])
+
+
+def test_analysis_context_requires_one_check_id(service):
+    dfm, _temp = service
+    project_id = dfm.project("create", name="Bounded ontology context")["project_id"]
+
+    with pytest.raises(DFMError) as exc_info:
+        dfm.analysis("context", project_id=project_id)
+
+    assert exc_info.value.code == "ontology_check_required"
+    assert exc_info.value.details["available_check_ids"]
+
+
 def test_fact_alias_units_closes_model_units_clarification(service):
     dfm, temp = service
     project_id = dfm.project("create", name="Bracket")["project_id"]
@@ -158,16 +193,21 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
     assert all(item["feature_refs"] == discovery["snapshot"]["feature_refs"] for item in measured)
     assert all(item["region_refs"] == discovery["snapshot"]["region_refs"] for item in measured)
     assert plan["plan"]["process"] == "injection"
-    assert plan["plan"]["scope_id"] == "injection.wall-draft"
-    assert plan["plan"]["scope_version"] == "3.0.0"
+    assert plan["plan"]["scope_id"] == "injection.default"
+    assert plan["plan"]["scope_version"] == "1.0.0"
+    assert plan["plan"]["ontology_snapshot_id"] == (
+        "ontology.injection.default@1.0.0"
+    )
+    assert len(plan["plan"]["ontology_snapshot_sha256"]) == 64
     assert plan["plan"]["input_ids"] == [plan["plan"]["input_ids"][0]]
     assert set(plan["plan"]["input_hashes"].values()) == {added["input"]["sha256"]}
-    assert plan["plan"]["rules"]["min_draft_deg"] == {
-        "value": 1.0,
-        "unit": "degree",
-            "source": "scope:injection.wall-draft@3.0.0/parameters/min_draft_deg",
-            "version": "3.0.0",
-    }
+    draft_rule = plan["plan"]["rules"]["R_INJ_MAIN_WALL_DRAFT_DEFAULT"]
+    assert draft_rule["value"] == 1.0
+    assert draft_rule["unit"] == "degree"
+    assert draft_rule["version"] == "1.0.0"
+    assert draft_rule["source"].startswith(
+        "ontology:ontology.injection.default@1.0.0/"
+    )
     assert plan["capability"]["status"] == "dependency_missing"
     with pytest.raises(DFMError) as exc_info:
         dfm.analysis("start", project_id=project_id, plan_id=plan["plan"]["plan_id"])
@@ -306,7 +346,7 @@ def test_analysis_only_fact_change_reuses_discovery_snapshot(service):
     }
 
 
-def test_real_feature_region_expands_plan_and_ordinary_region_is_topology_complement(service):
+def test_unpublished_feature_region_remains_inside_ordinary_analysis_scope(service):
     dfm, temp = service
     project_id = dfm.project("create", name="Feature-aware bracket")["project_id"]
     source = temp / "part.step"
@@ -360,17 +400,15 @@ def test_real_feature_region_expands_plan_and_ordinary_region_is_topology_comple
         item["region_id"] for item in discovery["regions"] if item["role"] == "ordinary"
     )
 
-    assert regions[ordinary_id]["mode"] == "topology_complement"
-    assert regions[ordinary_id]["excluded_geometry_refs"] == [face.to_dict()]
+    assert regions[ordinary_id]["mode"] == "whole_model"
+    assert regions[ordinary_id]["excluded_geometry_refs"] == []
     measured = [item for item in plan["operations"] if item["metric_ids"]]
-    assert len(measured) == 4
+    assert len(measured) == 2
     assert {(item["calculator_id"], item["region_refs"][0]) for item in measured} == {
         ("measure_wall_thickness", ordinary_id),
         ("measure_draft", ordinary_id),
-        ("measure_wall_thickness", region_id),
-        ("measure_draft", region_id),
     }
-    assert len({item["operation_id"] for item in measured}) == 4
+    assert len({item["operation_id"] for item in measured}) == 2
 
 
 def test_desktop_file_reference_prefix_is_accepted(service):

@@ -21,6 +21,7 @@ from .errors import DFMError
 from .feature_recognition import (
     OCCTCppFeatureRecognitionProvider,
 )
+from .ontology import LocalOntologyStore
 
 
 FALLBACK_RECOGNIZER = "ordinary-region-fallback"
@@ -43,7 +44,11 @@ class DiscoveryEngine:
 
     version = "hermes-discovery-v2"
 
-    def __init__(self, catalog_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        catalog_path: Path | None = None,
+        ontology_store: LocalOntologyStore | None = None,
+    ) -> None:
         self.catalog_path = catalog_path or (
             Path(__file__).resolve().parent
             / "scopes"
@@ -51,6 +56,7 @@ class DiscoveryEngine:
             / "feature_catalog.json"
         )
         self.catalog = self._load_catalog()
+        self.ontology_store = ontology_store
         self.placeholder_providers = (
             OCCTCppFeatureRecognitionProvider(),
         )
@@ -143,7 +149,9 @@ class DiscoveryEngine:
                     )
                 )
                 feature_ids.add(feature_id)
-        regions = self._partition_ordinary_regions(features, regions)
+        regions = self._partition_ordinary_regions(
+            features, regions, manifest.process or "injection"
+        )
         return replace(manifest, features=features, regions=regions, updated_at=_utc_now())
 
     @staticmethod
@@ -151,15 +159,18 @@ class DiscoveryEngine:
         return ref.kind, ref.index, ref.input_sha256
 
     def _partition_ordinary_regions(
-        self, features: list[FeatureRecord], regions: list[RegionRecord]
+        self,
+        features: list[FeatureRecord],
+        regions: list[RegionRecord],
+        process: str,
     ) -> list[RegionRecord]:
         """Turn whole-model fallback into the complement of concrete feature faces."""
 
         feature_by_id = {item.feature_id: item for item in features}
         metric_bindings = {
             (item["feature_kind"], item["region_role"])
-            for item in self.catalog["feature_metric_bindings"]
-            if item.get("status") in {"available", "placeholder"}
+            for item in self._metric_bindings(process)
+            if item.get("status") in {"available", "placeholder", "released"}
         }
         claimed_by_input: dict[str, dict[tuple[str, int, str], GeometryRef]] = {}
         for region in regions:
@@ -232,7 +243,7 @@ class DiscoveryEngine:
             for item in manifest.features
             if item.feature_id in snapshot.feature_refs
         }
-        bindings = self.catalog["feature_metric_bindings"]
+        bindings = self._metric_bindings(manifest.process or "injection")
         targets: list[dict[str, Any]] = []
         claims: dict[tuple[str, tuple[str, int, str]], str] = {}
         for region in manifest.regions:
@@ -280,6 +291,13 @@ class DiscoveryEngine:
                     }
                 )
         return targets
+
+    def _metric_bindings(self, process: str) -> list[dict[str, Any]]:
+        if self.ontology_store is not None:
+            published = self.ontology_store.analysis_target_specs(process)
+            if published:
+                return [dict(item) for item in published]
+        return list(self.catalog["feature_metric_bindings"])
 
     def freeze(self, manifest: ProjectManifest) -> tuple[ProjectManifest, DiscoverySnapshotRecord]:
         refreshed = self.refresh_candidates(manifest)

@@ -27,6 +27,7 @@ from .contracts import (
 )
 from .discovery import DiscoveryEngine
 from .errors import DFMError
+from .ontology import LocalOntologyStore
 from .project.inputs import InputRegistrar
 from .project.manifest import ManifestStore
 from .project.workspace import DFMWorkspace
@@ -67,13 +68,24 @@ class DFMService:
         "manufacturing_process": "process",
     }
     
-    def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, process_registry: ProcessAdapterRegistry | None = None, reconcile_jobs: bool = True) -> None:
+    def __init__(self, *, config: DFMConfig | None = None, workspace: DFMWorkspace | None = None, registry: AnalyzerRegistry | None = None, process_registry: ProcessAdapterRegistry | None = None, ontology_store: LocalOntologyStore | None = None, reconcile_jobs: bool = True) -> None:
         self.config = config or load_dfm_config()
         self.workspace = workspace or DFMWorkspace()
         self.registry = registry or build_default_registry(self.config)
-        self.process_registry = process_registry or build_default_process_registry()
+        self.ontology_store = ontology_store or LocalOntologyStore(
+            self.workspace.root / "ontology" / "dfm-ontology.sqlite3"
+        )
+        self.ontology_store.ensure_bootstrap(
+            Path(__file__).resolve().parent
+            / "scopes"
+            / "injection"
+            / "ontology_snapshot_v1.json"
+        )
+        self.process_registry = process_registry or build_default_process_registry(
+            self.ontology_store
+        )
         self.inputs = InputRegistrar(self.workspace, self.config)
-        self.discovery = DiscoveryEngine()
+        self.discovery = DiscoveryEngine(ontology_store=self.ontology_store)
         self.jobs = JobManager(self.workspace, self.registry, self.config, reconcile=reconcile_jobs)
 
     def _store(self, project_id: str) -> ManifestStore:
@@ -163,9 +175,10 @@ class DFMService:
             if fact_name in item.required_fact_names
         }
         affected.update(
-            item.operation_id
+            operand.operation_id
             for item in plan.rule_bindings
             if fact_name in item.required_fact_names
+            for operand in item.measurement_operands()
         )
         changed = True
         while changed:
@@ -315,41 +328,109 @@ class DFMService:
             for operation in process_plan.operations
             for metric_id in operation.metric_ids
         }
-        binding_templates = {
-            item.metric_id: item for item in process_plan.rule_bindings
-        }
         operations = [item for item in process_plan.operations if not item.metric_ids]
-        bindings = []
+        operation_by_target = {}
         for target in targets:
             metric_id = target["metric_id"]
             template = templates.get(metric_id)
-            binding = binding_templates.get(metric_id)
-            if template is None or binding is None:
+            if template is None:
                 raise DFMError(
                     "analysis_target_unsupported",
-                    "A discovered region requests a metric without a calculator/rule binding.",
+                    "A discovered region requests a metric without a declared calculator.",
                     {"metric_id": metric_id, "region_id": target["region"].region_id},
                 )
             suffix = target["region"].content_sha256[:12]
             operation_id = f"{template.operation_id}.{suffix}"
-            operations.append(
-                replace(
-                    template,
-                    operation_id=operation_id,
-                    feature_refs=[target["feature"].feature_id],
-                    region_refs=[target["region"].region_id],
-                )
+            operation = replace(
+                template,
+                operation_id=operation_id,
+                feature_refs=[target["feature"].feature_id],
+                region_refs=[target["region"].region_id],
             )
-            bindings.append(
-                replace(
-                    binding,
-                    binding_id=f"{binding.binding_id}.{suffix}",
-                    operation_id=operation_id,
-                    feature_refs=[target["feature"].feature_id],
-                    region_refs=[target["region"].region_id],
-                )
+            operations.append(operation)
+            operation_by_target[(metric_id, target["region"].region_id)] = operation
+
+        def matches(target, selector):
+            return (
+                not selector.get("feature_kind")
+                or selector["feature_kind"] == target["feature"].kind
+            ) and (
+                not selector.get("region_role")
+                or selector["region_role"] == target["region"].role
             )
-        return replace(process_plan, operations=operations, rule_bindings=bindings)
+
+        bindings = []
+        for binding in process_plan.rule_bindings:
+            selector_map = process_plan.binding_selectors.get(binding.binding_id, {})
+            primary_selector = selector_map.get(binding.operand_alias, {})
+            primary_targets = [
+                target
+                for target in targets
+                if target["metric_id"] == binding.metric_id
+                and matches(target, primary_selector)
+            ]
+            for primary_target in primary_targets:
+                primary_operation = operation_by_target[
+                    (binding.metric_id, primary_target["region"].region_id)
+                ]
+                additional_operands = []
+                for operand in binding.additional_operands:
+                    selector = selector_map.get(operand.alias, {})
+                    candidates = [
+                        target
+                        for target in targets
+                        if target["metric_id"] == operand.metric_id
+                        and matches(target, selector)
+                    ]
+                    same_feature = [
+                        target
+                        for target in candidates
+                        if target["feature"].feature_id
+                        == primary_target["feature"].feature_id
+                    ]
+                    if len(same_feature) == 1:
+                        selected = same_feature[0]
+                    elif len(candidates) == 1:
+                        selected = candidates[0]
+                    else:
+                        raise DFMError(
+                            "analysis_operand_ambiguous",
+                            "A semantic rule operand did not resolve to one discovered region.",
+                            {
+                                "check_id": binding.check_id,
+                                "operand_alias": operand.alias,
+                                "candidate_region_ids": [
+                                    item["region"].region_id for item in candidates
+                                ],
+                            },
+                        )
+                    operation = operation_by_target[
+                        (operand.metric_id, selected["region"].region_id)
+                    ]
+                    additional_operands.append(
+                        replace(
+                            operand,
+                            operation_id=operation.operation_id,
+                            feature_refs=[selected["feature"].feature_id],
+                            region_refs=[selected["region"].region_id],
+                        )
+                    )
+                suffix = primary_target["region"].content_sha256[:12]
+                bindings.append(
+                    replace(
+                        binding,
+                        binding_id=f"{binding.binding_id}.{suffix}",
+                        operation_id=primary_operation.operation_id,
+                        feature_refs=[primary_target["feature"].feature_id],
+                        region_refs=[primary_target["region"].region_id],
+                        additional_operands=additional_operands,
+                    )
+                )
+        return replace(
+            process_plan,
+            operations=operations,
+            rule_bindings=bindings,
+        )
 
     def _select_process(self, project_id: str, process: str, source: str) -> ProjectManifest:
         self.process_registry.get(process)
@@ -513,6 +594,41 @@ class DFMService:
 
     def analysis(self, action: str, **params: Any) -> dict[str, Any]:
         project_id = params.get("project_id") or ""
+        if action == "context":
+            manifest = self._store(project_id).load()
+            process = str(manifest.process or self.config.default_process)
+            check_id = str(params.get("check_id") or "")
+            available_check_ids = self.ontology_store.check_ids(process)
+            if not check_id:
+                raise DFMError(
+                    "ontology_check_required",
+                    "DFM ontology context requires one stable check_id.",
+                    {
+                        "process": process,
+                        "available_check_ids": list(available_check_ids),
+                    },
+                )
+            if check_id and check_id not in available_check_ids:
+                raise DFMError(
+                    "ontology_check_missing",
+                    "The requested DFM Check is not published for this project process.",
+                    {"check_id": check_id, "process": process},
+                )
+            confirmed_facts = {
+                item.name: {
+                    "value": item.value,
+                    "source_ref": f"fact:{item.fact_id}",
+                }
+                for item in manifest.facts
+                if item.status == "confirmed"
+            }
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "process": process,
+                "confirmed_facts": confirmed_facts,
+                "checks": [self.ontology_store.check_context(check_id)],
+            }
         if action == "discover":
             store = self._store(project_id)
             manifest = self._reconcile_clarifications(project_id)
@@ -724,7 +840,10 @@ class DFMService:
                 [
                     item
                     for item in process_plan.rule_bindings
-                    if item.operation_id in operation_ids
+                    if {
+                        operand.operation_id
+                        for operand in item.measurement_operands()
+                    }.issubset(operation_ids)
                 ]
                 if process_plan
                 else []
@@ -741,6 +860,12 @@ class DFMService:
                 process_adapter_version=process_plan.adapter_version if process_plan else "",
                 scope_id=process_plan.scope_id if process_plan else "",
                 scope_version=process_plan.scope_version if process_plan else "",
+                ontology_snapshot_id=(
+                    process_plan.ontology_snapshot_id if process_plan else ""
+                ),
+                ontology_snapshot_sha256=(
+                    process_plan.ontology_snapshot_sha256 if process_plan else ""
+                ),
                 input_ids=[item.input_id for item in active_inputs],
                 input_hashes={item.input_id: item.sha256 for item in active_inputs},
                 rules=process_plan.rules if process_plan else {},
@@ -856,6 +981,7 @@ class DFMService:
 
     def close(self) -> None:
         self.jobs.shutdown()
+        self.ontology_store.close()
 
 
 _SERVICES: dict[Path, DFMService] = {}

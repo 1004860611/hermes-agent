@@ -65,7 +65,7 @@ def test_m1_real_tool_vertical_slice(tmp_path):
             registry, "dfm_analysis", {"action": "plan", "project_id": project_id}
         )
         assert plan["plan"]["process"] == "injection"
-        assert plan["plan"]["scope_id"] == "injection.wall-draft"
+        assert plan["plan"]["scope_id"] == "injection.default"
         assert plan["capability"]["status"] == "available"
 
         started = _dispatch(

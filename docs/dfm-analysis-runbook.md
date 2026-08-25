@@ -2,7 +2,7 @@
 title: "单次 DFM 分析数据说明"
 status: active
 milestone: M2.5
-last_updated: 2026-08-18
+last_updated: 2026-08-24
 type: living-runbook
 owners: DFM 工程团队
 ---
@@ -24,7 +24,7 @@ owners: DFM 工程团队
 | 2D 图纸/OCR | 接口预留，尚未形成生产分析闭环 |
 | 混合输入融合 | 接口预留，尚未形成生产分析闭环 |
 | 几何计算 | 当前为 OpenCascade / `pythonocc-core` 参考 Worker；生产目标为独立 OCCT C++ 项目 |
-| 工艺规则 | 注塑 `injection.wall-draft@3.0.0`；压铸 `die_casting.topology-baseline@1.0.0` |
+| 本体/工艺规则 | 注塑发布快照 `injection.default@1.0.0` 和本地只读 SQLite；压铸 `die_casting.topology-baseline@1.0.0` |
 | 执行方式 | Hermes 主进程管理 Run，STEP worker 隔离子进程执行 |
 | 结果 | Worker `measurements.json`、Hermes `evaluations.json`、兼容报告 JSON、Markdown、PPTX、PNG 证据、高亮 STEP |
 | Desktop | 复用附件上传、聊天进度和 Artifacts 展示 |
@@ -50,13 +50,14 @@ Hermes Agent
   ├─ dfm_project(create)
   ├─ dfm_project(add_input)
   ├─ dfm_project(confirm_fact)      # 可选
+  ├─ dfm_analysis(context)          # 按需读取单个 Check 的本体上下文
   ├─ dfm_analysis(plan)
   ├─ dfm_analysis(start)
   ├─ dfm_analysis(status)           # 轮询/进度
   └─ dfm_analysis(result)
           │
           v
-DFMService → JobManager → ProcessAdapter + Analyzer → PythonOCC reference worker
+DFMService → Local Ontology SQLite + ProcessAdapter → JobManager → PythonOCC reference worker
                                       │
                                       ├─ OpenCascade 参考几何计算
                                       ├─ 注塑规则检查
@@ -68,7 +69,10 @@ DFMService → JobManager → ProcessAdapter + Analyzer → PythonOCC reference 
 ### 2.1 Agent 与确定性计划的分工
 
 - Hermes Agent 负责理解用户意图、选择工艺、补充或确认工程事实，并决定何时调用 DFM 工具。
-- `DFMService` 不直接执行模型临时生成的几何步骤。它调用 ProcessAdapter，根据已确认事实、工艺默认值和版本化分析范围编译结构化 Plan。
+- `DFMService` 不直接执行模型临时生成的几何步骤。它将本地已发布本体/规则快照与几何 Capability
+  组合，根据已确认事实编译结构化 Plan。
+- `dfm_analysis(context)` 按 Check 返回概念定义、Operand、Factor、选项和候选规则，使 Agent/AI
+  实际消费本体；它不把完整数据库放入模型上下文。
 - Run 启动前会保存 Plan 快照；worker 只执行该快照对应的参数和操作。
 - OpenCascade 测量值和规则判断由确定性代码产生，不由大模型编造；生产路径接入后，
   Geometry Discovery 与 Objective Calculation 将由独立 OCCT C++ 项目执行。
