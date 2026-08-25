@@ -136,6 +136,7 @@ Web 使用字典/Context API，Agent 下载签名发布物，OCCT 只交换 Capa
 | `HAS_CHECK` | Process → Check | 是 |
 | `HAS_REGION` | Feature Type → Region Type | 是 |
 | `APPLIES_TO_FEATURE` | Check → Feature Type | 是 |
+| `APPLIES_TO_REGION` | Check → Region Type | 是；可按 Operand alias 指定目标区域 |
 | `USES_OPERAND` | Check → Metric | 是 |
 | `REQUIRES_FACTOR` | Process/Check → Factor | 是 |
 | `AFFECTS` | Factor/Feature → Check | AI解释和检索 |
@@ -146,16 +147,28 @@ Web 使用字典/Context API，Agent 下载签名发布物，OCCT 只交换 Capa
 ```json
 {
   "alias": "boss_wall_thickness",
-  "worker_metric_id": "injection.geometry.wall_thickness",
-  "quantity_id": "thickness_mm",
   "aggregation": "minimum",
-  "feature_type_id": "feature.screw_boss",
-  "region_type_id": "region.screw_boss.wall",
-  "feature_kind": "screw_boss",
-  "region_role": "wall",
   "required": true
 }
 ```
+
+Metric 的 `worker_metric_id/quantity_id` 来自 Metric Concept；Feature 的 `worker_kind` 和 Region 的
+`worker_role` 来自对应 Concept。Operand 的目标区域通过关系解析：
+
+```text
+Check ──APPLIES_TO_REGION──> Region <──HAS_REGION── Feature
+  └─────APPLIES_TO_FEATURE───────────────────────────┘
+```
+
+同一 Check 只有一个区域时，`APPLIES_TO_REGION.qualifiers_json` 为 `{}`。多 Measurement 分别使用
+不同区域时，在该关系中用 `operand_aliases` 明确映射，例如：
+
+```json
+{"operand_aliases": ["boss_wall_thickness"]}
+```
+
+发布器必须保证每个 Operand alias 最终只解析到一个 Region 和一个 Feature，禁止在
+`USES_OPERAND` 中重复保存 `feature_kind/region_role/worker_metric_id/quantity_id`。
 
 `REQUIRES_FACTOR.qualifiers_json`：
 
@@ -449,7 +462,7 @@ OCCT 新增 Recognizer/Region/Metric Capability
 → 根据 Process 查询 HAS_CHECK
 → 根据 REQUIRES_FACTOR 发现缺失 Fact 并澄清
 → OCCT Discovery 返回 Feature/Region
-→ 按 APPLIES_TO_FEATURE + USES_OPERAND 编译 AnalysisPlan
+→ 按 APPLIES_TO_FEATURE + APPLIES_TO_REGION + HAS_REGION + USES_OPERAND 编译 AnalysisPlan
 → OCCT 执行客观 Measurement
 → Agent 根据 conditions_json 选择唯一规则
 → 执行 expression_json + comparator + threshold_json
@@ -466,7 +479,7 @@ Calculator 或算法版本变化才使客观 Measurement 缓存失效。
 已落地：
 
 - `ontology_snapshot.schema.json`：发布契约；
-- `ontology_snapshot_v1.json`：注塑第一版发布快照；
+- `ontology_snapshot_v2.json`：注塑当前发布快照；
 - `LocalOntologyStore`：JSON 发布包校验、SQLite 原子安装、只读查询；
 - Check Context：按 Check 输出概念、关系、选项和规则；
 - Ontology Compiler：把关系和规则编译为现有 `EffectiveRule/RuleBinding`；

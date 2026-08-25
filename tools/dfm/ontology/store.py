@@ -25,7 +25,8 @@ from ..contracts import EffectiveRule, PlanOperation, RuleBinding, RuleOperand
 from ..errors import DFMError
 
 
-ONTOLOGY_SNAPSHOT_SCHEMA_VERSION = 1
+ONTOLOGY_SNAPSHOT_SCHEMA_VERSION = 2
+SUPPORTED_ONTOLOGY_SNAPSHOT_SCHEMA_VERSIONS = {1, 2}
 LOCAL_DATABASE_SCHEMA_VERSION = 1
 _CONCEPT_TYPES = {
     "process",
@@ -39,10 +40,27 @@ _PREDICATES = {
     "HAS_CHECK",
     "HAS_REGION",
     "APPLIES_TO_FEATURE",
+    "APPLIES_TO_REGION",
     "USES_OPERAND",
     "REQUIRES_FACTOR",
     "AFFECTS",
     "RELATED_TO",
+}
+_RELATION_ENDPOINT_TYPES = {
+    "HAS_CHECK": ({"process"}, {"check"}),
+    "HAS_REGION": ({"feature_type"}, {"region_type"}),
+    "APPLIES_TO_FEATURE": ({"check"}, {"feature_type"}),
+    "APPLIES_TO_REGION": ({"check"}, {"region_type"}),
+    "USES_OPERAND": ({"check"}, {"metric"}),
+    "REQUIRES_FACTOR": ({"process", "check"}, {"factor"}),
+}
+_LEGACY_OPERAND_SELECTOR_KEYS = {
+    "worker_metric_id",
+    "quantity_id",
+    "feature_type_id",
+    "region_type_id",
+    "feature_kind",
+    "region_role",
 }
 _CONDITION_OPERATORS = {"EQ", "IN", "GT", "GTE", "LT", "LTE", "BETWEEN", "EXISTS"}
 _COMPARATORS = {
@@ -353,41 +371,40 @@ class LocalOntologyStore:
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT subject_id AS check_id, qualifiers_json
-                FROM ontology_relation
-                WHERE predicate = 'USES_OPERAND'
-                  AND subject_id IN ({placeholders})
-                ORDER BY sort_order, relation_id
+                SELECT relation.*, metric.properties_json AS metric_properties_json
+                FROM ontology_relation AS relation
+                JOIN ontology_concept AS metric
+                  ON metric.concept_id = relation.object_id
+                WHERE relation.predicate = 'USES_OPERAND'
+                  AND relation.subject_id IN ({placeholders})
+                ORDER BY relation.sort_order, relation.relation_id
                 """,
                 check_ids,
             ).fetchall()
-        specs: dict[tuple[str, str, str], dict[str, Any]] = {}
-        for row in rows:
-            qualifiers = _load_json(row["qualifiers_json"], {})
-            feature_kind = str(qualifiers.get("feature_kind") or "")
-            region_role = str(qualifiers.get("region_role") or "")
-            metric_id = str(qualifiers.get("worker_metric_id") or "")
-            if not feature_kind or not region_role or not metric_id:
-                raise DFMError(
-                    "ontology_snapshot_invalid",
-                    "An executable ontology operand lacks its worker target selector.",
-                    {"check_id": row["check_id"]},
+            specs: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for row in rows:
+                target = self._resolve_operand_target(
+                    connection, str(row["subject_id"]), row
                 )
-            key = (feature_kind, region_role, metric_id)
-            item = specs.setdefault(
-                key,
-                {
-                    "feature_kind": feature_kind,
-                    "region_role": region_role,
-                    "metrics": [],
-                    "check_ids": [],
-                    "status": "released",
-                },
-            )
-            if metric_id not in item["metrics"]:
-                item["metrics"].append(metric_id)
-            if row["check_id"] not in item["check_ids"]:
-                item["check_ids"].append(row["check_id"])
+                key = (
+                    target["feature_kind"],
+                    target["region_role"],
+                    target["metric_id"],
+                )
+                item = specs.setdefault(
+                    key,
+                    {
+                        "feature_kind": target["feature_kind"],
+                        "region_role": target["region_role"],
+                        "metrics": [],
+                        "check_ids": [],
+                        "status": "released",
+                    },
+                )
+                if target["metric_id"] not in item["metrics"]:
+                    item["metrics"].append(target["metric_id"])
+                if row["subject_id"] not in item["check_ids"]:
+                    item["check_ids"].append(row["subject_id"])
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
         for item in specs.values():
             key = (item["feature_kind"], item["region_role"])
@@ -486,6 +503,7 @@ class LocalOntologyStore:
                     (check_id,),
                 ).fetchall()
                 binding, binding_selectors = self._compile_binding(
+                    connection,
                     check_id,
                     selected,
                     operand_rows,
@@ -574,7 +592,8 @@ class LocalOntologyStore:
             "content_sha256",
         )
         if (
-            payload.get("schema_version") != ONTOLOGY_SNAPSHOT_SCHEMA_VERSION
+            payload.get("schema_version")
+            not in SUPPORTED_ONTOLOGY_SNAPSHOT_SCHEMA_VERSIONS
             or any(
                 not isinstance(payload.get(key), str) or not payload[key]
                 for key in required_strings
@@ -623,6 +642,7 @@ class LocalOntologyStore:
             cls._invalid("The publication does not declare its process concept.")
 
         relations: set[str] = set()
+        relation_items: list[Mapping[str, Any]] = []
         check_ids = {
             concept_id
             for concept_id, item in concepts.items()
@@ -650,6 +670,13 @@ class LocalOntologyStore:
                     {"relation_id": relation_id},
                 )
             relations.add(relation_id)
+            relation_items.append(item)
+
+        cls._validate_relation_graph(
+            concepts,
+            relation_items,
+            schema_version=int(payload["schema_version"]),
+        )
 
         for item in payload["factor_options"]:
             if (
@@ -690,6 +717,163 @@ class LocalOntologyStore:
                         {"rule_version_id": version_id},
                     )
             versions.add(version_id)
+
+    @classmethod
+    def _validate_relation_graph(
+        cls,
+        concepts: Mapping[str, Mapping[str, Any]],
+        relations: Sequence[Mapping[str, Any]],
+        *,
+        schema_version: int,
+    ) -> None:
+        """Validate executable relation semantics before installing a snapshot."""
+
+        for relation in relations:
+            predicate = str(relation["predicate"])
+            endpoint_types = _RELATION_ENDPOINT_TYPES.get(predicate)
+            if endpoint_types is not None:
+                subject_type = str(
+                    concepts[str(relation["subject_id"])]["concept_type"]
+                )
+                object_type = str(concepts[str(relation["object_id"])]["concept_type"])
+                if (
+                    subject_type not in endpoint_types[0]
+                    or object_type not in endpoint_types[1]
+                ):
+                    cls._invalid(
+                        "An ontology relation connects incompatible concept types.",
+                        {
+                            "relation_id": relation["relation_id"],
+                            "predicate": predicate,
+                            "subject_type": subject_type,
+                            "object_type": object_type,
+                        },
+                    )
+
+            qualifiers = relation.get("qualifiers", {})
+            if predicate == "USES_OPERAND":
+                alias = str(qualifiers.get("alias") or "")
+                if not alias or not str(qualifiers.get("aggregation") or ""):
+                    cls._invalid(
+                        "A USES_OPERAND relation requires alias and aggregation.",
+                        {"relation_id": relation["relation_id"]},
+                    )
+                if schema_version >= 2 and _LEGACY_OPERAND_SELECTOR_KEYS.intersection(
+                    qualifiers
+                ):
+                    cls._invalid(
+                        "Schema 2 operands must resolve Metric, Feature, and Region from concepts and relations.",
+                        {"relation_id": relation["relation_id"]},
+                    )
+            elif predicate == "APPLIES_TO_REGION":
+                aliases = qualifiers.get("operand_aliases")
+                if aliases is not None and (
+                    not isinstance(aliases, list)
+                    or not aliases
+                    or len({str(item) for item in aliases}) != len(aliases)
+                    or any(not isinstance(item, str) or not item for item in aliases)
+                ):
+                    cls._invalid(
+                        "APPLIES_TO_REGION.operand_aliases must contain unique non-empty aliases.",
+                        {"relation_id": relation["relation_id"]},
+                    )
+
+        if schema_version < 2:
+            return
+
+        operands_by_check: dict[str, list[Mapping[str, Any]]] = {}
+        regions_by_check: dict[str, list[Mapping[str, Any]]] = {}
+        features_by_check: dict[str, set[str]] = {}
+        parent_features_by_region: dict[str, set[str]] = {}
+        for relation in relations:
+            predicate = relation["predicate"]
+            subject_id = str(relation["subject_id"])
+            object_id = str(relation["object_id"])
+            if predicate == "USES_OPERAND":
+                operands_by_check.setdefault(subject_id, []).append(relation)
+            elif predicate == "APPLIES_TO_REGION":
+                regions_by_check.setdefault(subject_id, []).append(relation)
+            elif predicate == "APPLIES_TO_FEATURE":
+                features_by_check.setdefault(subject_id, set()).add(object_id)
+            elif predicate == "HAS_REGION":
+                parent_features_by_region.setdefault(object_id, set()).add(subject_id)
+
+        for check_id, operands in operands_by_check.items():
+            aliases = [str(item["qualifiers"]["alias"]) for item in operands]
+            if len(set(aliases)) != len(aliases):
+                cls._invalid(
+                    "Operand aliases must be unique inside one Check.",
+                    {"check_id": check_id},
+                )
+            for operand in operands:
+                alias = str(operand["qualifiers"]["alias"])
+                metric = concepts[str(operand["object_id"])]
+                metric_properties = metric.get("properties", {})
+                if not str(metric_properties.get("worker_metric_id") or "") or not str(
+                    metric_properties.get("quantity_id") or ""
+                ):
+                    cls._invalid(
+                        "An operand Metric must declare worker_metric_id and quantity_id.",
+                        {"check_id": check_id, "operand_alias": alias},
+                    )
+                target_region = cls._select_region_relation_payload(
+                    check_id,
+                    alias,
+                    regions_by_check.get(check_id, []),
+                )
+                region_id = str(target_region["object_id"])
+                applicable_parents = parent_features_by_region.get(
+                    region_id, set()
+                ).intersection(features_by_check.get(check_id, set()))
+                if len(applicable_parents) != 1:
+                    cls._invalid(
+                        "An operand Region must belong to exactly one Feature applicable to its Check.",
+                        {
+                            "check_id": check_id,
+                            "operand_alias": alias,
+                            "region_type_id": region_id,
+                            "matching_feature_type_ids": sorted(applicable_parents),
+                        },
+                    )
+                feature_id = next(iter(applicable_parents))
+                feature_properties = concepts[feature_id].get("properties", {})
+                region_properties = concepts[region_id].get("properties", {})
+                if not str(feature_properties.get("worker_kind") or "") or not str(
+                    region_properties.get("worker_role") or ""
+                ):
+                    cls._invalid(
+                        "Executable Feature and Region concepts require worker_kind and worker_role.",
+                        {"check_id": check_id, "operand_alias": alias},
+                    )
+
+    @classmethod
+    def _select_region_relation_payload(
+        cls,
+        check_id: str,
+        alias: str,
+        relations: Sequence[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        specific = [
+            item
+            for item in relations
+            if alias in item.get("qualifiers", {}).get("operand_aliases", [])
+        ]
+        general = [
+            item
+            for item in relations
+            if "operand_aliases" not in item.get("qualifiers", {})
+        ]
+        matches = specific if specific else general
+        if len(matches) != 1:
+            cls._invalid(
+                "Each Check operand must resolve to exactly one APPLIES_TO_REGION relation.",
+                {
+                    "check_id": check_id,
+                    "operand_alias": alias,
+                    "matching_relation_ids": [item["relation_id"] for item in matches],
+                },
+            )
+        return matches[0]
 
     @classmethod
     def _rebuild(
@@ -1052,6 +1236,7 @@ class LocalOntologyStore:
     @classmethod
     def _compile_binding(
         cls,
+        connection: sqlite3.Connection,
         check_id: str,
         rule: sqlite3.Row,
         operand_rows: Sequence[sqlite3.Row],
@@ -1067,9 +1252,10 @@ class LocalOntologyStore:
         selectors: dict[str, dict[str, str]] = {}
         for row in operand_rows:
             qualifiers = _load_json(row["qualifiers_json"], {})
-            alias = str(qualifiers.get("alias") or "")
-            metric_id = str(qualifiers.get("worker_metric_id") or row["object_id"])
-            quantity_id = str(qualifiers.get("quantity_id") or "")
+            target = cls._resolve_operand_target(connection, check_id, row)
+            alias = target["alias"]
+            metric_id = target["metric_id"]
+            quantity_id = target["quantity_id"]
             operation = cls._operation_for_operand(
                 operations, metric_id, quantity_id, check_id=check_id, alias=alias
             )
@@ -1083,10 +1269,10 @@ class LocalOntologyStore:
             operand.validate()
             operands.append(operand)
             selectors[alias] = {
-                "feature_type_id": str(qualifiers.get("feature_type_id") or ""),
-                "region_type_id": str(qualifiers.get("region_type_id") or ""),
-                "feature_kind": str(qualifiers.get("feature_kind") or ""),
-                "region_role": str(qualifiers.get("region_role") or ""),
+                "feature_type_id": target["feature_type_id"],
+                "region_type_id": target["region_type_id"],
+                "feature_kind": target["feature_kind"],
+                "region_role": target["region_role"],
             }
         primary, *additional = operands
         conditions = _load_json(rule["conditions_json"], [])
@@ -1109,6 +1295,127 @@ class LocalOntologyStore:
         )
         binding.validate()
         return binding, selectors
+
+    @classmethod
+    def _resolve_operand_target(
+        cls,
+        connection: sqlite3.Connection,
+        check_id: str,
+        operand_row: sqlite3.Row,
+    ) -> dict[str, str]:
+        """Resolve an Operand through Metric and Check/Region/Feature relations."""
+
+        qualifiers = _load_json(operand_row["qualifiers_json"], {})
+        metric_properties = _load_json(operand_row["metric_properties_json"], {})
+        alias = str(qualifiers.get("alias") or "")
+        metric_id = str(
+            metric_properties.get("worker_metric_id")
+            or qualifiers.get("worker_metric_id")
+            or ""
+        )
+        quantity_id = str(
+            metric_properties.get("quantity_id") or qualifiers.get("quantity_id") or ""
+        )
+        if not alias or not metric_id or not quantity_id:
+            cls._invalid(
+                "An executable ontology operand lacks its alias or Metric capability mapping.",
+                {"check_id": check_id, "operand_alias": alias},
+            )
+
+        region_rows = connection.execute(
+            """
+            SELECT relation.relation_id, relation.object_id, relation.qualifiers_json,
+                   region.properties_json AS region_properties_json
+            FROM ontology_relation AS relation
+            JOIN ontology_concept AS region ON region.concept_id = relation.object_id
+            WHERE relation.subject_id = ?
+              AND relation.predicate = 'APPLIES_TO_REGION'
+              AND region.concept_type = 'region_type'
+              AND region.status = 'active'
+            ORDER BY relation.sort_order, relation.relation_id
+            """,
+            (check_id,),
+        ).fetchall()
+        if not region_rows:
+            # Compatibility for already-installed schema-1 publications. New
+            # publications are rejected if they duplicate these selectors.
+            legacy = {
+                "alias": alias,
+                "metric_id": metric_id,
+                "quantity_id": quantity_id,
+                "feature_type_id": str(qualifiers.get("feature_type_id") or ""),
+                "region_type_id": str(qualifiers.get("region_type_id") or ""),
+                "feature_kind": str(qualifiers.get("feature_kind") or ""),
+                "region_role": str(qualifiers.get("region_role") or ""),
+            }
+            if not legacy["feature_kind"] or not legacy["region_role"]:
+                cls._invalid(
+                    "An operand has neither an APPLIES_TO_REGION path nor legacy selectors.",
+                    {"check_id": check_id, "operand_alias": alias},
+                )
+            return legacy
+
+        relation_payloads = [
+            {
+                "relation_id": str(row["relation_id"]),
+                "object_id": str(row["object_id"]),
+                "qualifiers": _load_json(row["qualifiers_json"], {}),
+            }
+            for row in region_rows
+        ]
+        selected = cls._select_region_relation_payload(
+            check_id, alias, relation_payloads
+        )
+        region_id = str(selected["object_id"])
+        region_row = next(row for row in region_rows if row["object_id"] == region_id)
+        region_properties = _load_json(region_row["region_properties_json"], {})
+        feature_rows = connection.execute(
+            """
+            SELECT feature.concept_id, feature.properties_json
+            FROM ontology_relation AS parent
+            JOIN ontology_concept AS feature ON feature.concept_id = parent.subject_id
+            JOIN ontology_relation AS applies
+              ON applies.object_id = feature.concept_id
+             AND applies.subject_id = ?
+             AND applies.predicate = 'APPLIES_TO_FEATURE'
+            WHERE parent.predicate = 'HAS_REGION'
+              AND parent.object_id = ?
+              AND feature.concept_type = 'feature_type'
+              AND feature.status = 'active'
+            ORDER BY feature.concept_id
+            """,
+            (check_id, region_id),
+        ).fetchall()
+        if len(feature_rows) != 1:
+            cls._invalid(
+                "An operand Region must resolve to exactly one applicable Feature.",
+                {
+                    "check_id": check_id,
+                    "operand_alias": alias,
+                    "region_type_id": region_id,
+                    "matching_feature_type_ids": [
+                        str(row["concept_id"]) for row in feature_rows
+                    ],
+                },
+            )
+        feature = feature_rows[0]
+        feature_properties = _load_json(feature["properties_json"], {})
+        feature_kind = str(feature_properties.get("worker_kind") or "")
+        region_role = str(region_properties.get("worker_role") or "")
+        if not feature_kind or not region_role:
+            cls._invalid(
+                "Resolved Feature and Region concepts lack worker selectors.",
+                {"check_id": check_id, "operand_alias": alias},
+            )
+        return {
+            "alias": alias,
+            "metric_id": metric_id,
+            "quantity_id": quantity_id,
+            "feature_type_id": str(feature["concept_id"]),
+            "region_type_id": region_id,
+            "feature_kind": feature_kind,
+            "region_role": region_role,
+        }
 
     @classmethod
     def _operation_for_operand(

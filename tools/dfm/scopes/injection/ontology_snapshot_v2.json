@@ -1,12 +1,12 @@
 {
-  "schema_version": 1,
-  "snapshot_id": "ontology.injection.default@1.0.0",
-  "ontology_version": "1.0.0",
-  "published_at": "2026-08-24T00:00:00Z",
-  "content_sha256": "d807ca4137a3977112bc5b07ec29fc9979317c91989fab14d39ca024ee097294",
+  "schema_version": 2,
+  "snapshot_id": "ontology.injection.default@1.1.0",
+  "ontology_version": "1.1.0",
+  "published_at": "2026-08-25T00:00:00Z",
+  "content_sha256": "c6603a1170ee4d6fb3f57107257c6028a4d3f94e85387760d4ad3e3e5fd7d198",
   "rule_set": {
     "rule_set_code": "injection.default",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "process": "injection",
     "scope_type": "system",
     "scope_key": "default"
@@ -179,19 +179,21 @@
       "sort_order": 10
     },
     {
+      "relation_id": "rel.check.wall.region.ordinary",
+      "subject_id": "check.main_wall_minimum_thickness",
+      "predicate": "APPLIES_TO_REGION",
+      "object_id": "region.ordinary",
+      "qualifiers": {},
+      "sort_order": 15
+    },
+    {
       "relation_id": "rel.check.wall.operand.actual",
       "subject_id": "check.main_wall_minimum_thickness",
       "predicate": "USES_OPERAND",
       "object_id": "metric.injection.wall_thickness",
       "qualifiers": {
         "alias": "actual",
-        "worker_metric_id": "injection.geometry.wall_thickness",
-        "quantity_id": "thickness_mm",
         "aggregation": "minimum",
-        "feature_type_id": "feature.ordinary_part",
-        "region_type_id": "region.ordinary",
-        "feature_kind": "ordinary_part",
-        "region_role": "ordinary",
         "required": true
       },
       "sort_order": 20
@@ -220,19 +222,21 @@
       "sort_order": 10
     },
     {
+      "relation_id": "rel.check.draft.region.ordinary",
+      "subject_id": "check.main_wall_minimum_draft",
+      "predicate": "APPLIES_TO_REGION",
+      "object_id": "region.ordinary",
+      "qualifiers": {},
+      "sort_order": 15
+    },
+    {
       "relation_id": "rel.check.draft.operand.actual",
       "subject_id": "check.main_wall_minimum_draft",
       "predicate": "USES_OPERAND",
       "object_id": "metric.injection.draft_angle",
       "qualifiers": {
         "alias": "actual",
-        "worker_metric_id": "injection.geometry.draft",
-        "quantity_id": "draft_angle_deg",
         "aggregation": "minimum",
-        "feature_type_id": "feature.ordinary_part",
-        "region_type_id": "region.ordinary",
-        "feature_kind": "ordinary_part",
-        "region_role": "ordinary",
         "required": true
       },
       "sort_order": 20

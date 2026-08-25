@@ -49,7 +49,7 @@ Schema 2；注塑阈值已从静态 Scope 迁移到已发布本体/规则快照�
 ### M2.5-A：Agent 本体/规则运行时（基础已完成）
 
 - 冻结 Process、Feature Type、Region Type、Metric、Check、Factor 六类稳定 Concept；
-- 使用 Relation 表达 `HAS_CHECK/HAS_REGION/APPLIES_TO_FEATURE/USES_OPERAND/REQUIRES_FACTOR`；
+- 使用 Relation 表达 `HAS_CHECK/HAS_REGION/APPLIES_TO_FEATURE/APPLIES_TO_REGION/USES_OPERAND/REQUIRES_FACTOR`；
 - 冻结 `OntologyRuleSnapshot` Schema，发布物包含本体子图、Factor Option 和有效 Rule Version；
 - Agent 将发布包原子安装为 Profile-aware 本地 SQLite，只读执行；
 - 通过本体关系编译 `EffectiveRule/RuleBinding`，继续复用通用多 Measurement Evaluation Engine；

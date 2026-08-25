@@ -50,13 +50,13 @@ def test_injection_plan_uses_published_ontology_and_capability_provenance(contex
 
     assert plan.process == "injection"
     assert plan.scope_id == "injection.default"
-    assert plan.scope_version == "1.0.0"
+    assert plan.scope_version == "1.1.0"
     assert plan.adapter_version == "injection-ontology-runtime-v1"
-    assert plan.ontology_snapshot_id == "ontology.injection.default@1.0.0"
+    assert plan.ontology_snapshot_id == "ontology.injection.default@1.1.0"
     assert len(plan.ontology_snapshot_sha256) == 64
     assert plan.rules["R_INJ_MAIN_WALL_MIN_ABS"].value == 1.2
     assert plan.rules["R_INJ_MAIN_WALL_MIN_ABS"].source.startswith(
-        "ontology:ontology.injection.default@1.0.0/"
+        "ontology:ontology.injection.default@1.1.0/"
     )
     assert plan.rules["R_INJ_MAIN_WALL_DRAFT_DEFAULT"].value == 1.0
     assert plan.rules["R_INJ_MAIN_WALL_DRAFT_DEFAULT"].unit == "degree"

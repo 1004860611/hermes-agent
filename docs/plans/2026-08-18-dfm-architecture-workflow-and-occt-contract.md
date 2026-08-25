@@ -186,7 +186,9 @@ Hermes Evaluation Engine v2 必须：
 因为表达式只属于 Hermes 的 RuleBinding/Evaluation，不进入 OCCT 请求或结果协议。
 
 Check、Operand 和 Factor 不再由注塑适配器逐项硬编码。Agent 从本地本体关系
-`HAS_CHECK/APPLIES_TO_FEATURE/USES_OPERAND/REQUIRES_FACTOR` 编译现有契约。AI需要理解某个 Check
+`HAS_CHECK/APPLIES_TO_FEATURE/APPLIES_TO_REGION/HAS_REGION/USES_OPERAND/REQUIRES_FACTOR`
+编译现有契约。Feature/Region/Metric 的 Worker 标识从 Concept 属性取得，`USES_OPERAND` 不再
+重复保存这些标识。AI需要理解某个 Check
 时，通过 `dfm_analysis(action="context", check_id=...)` 获取该 Check 的有限语义子图和候选规则，
 不直接读取数据库或把完整本体放入 Prompt。
 
@@ -352,7 +354,7 @@ Result 原子发布；Artifact 下载后由 Hermes 再次校验大小和 SHA256�
   `topology_map.schema.json`、`evidence_*.schema.json`
 - 本体/规则发布契约：`tools/dfm/schemas/ontology_snapshot.schema.json`
 - Agent 本地本体运行时：`tools/dfm/ontology/store.py`
-- 当前注塑发布快照：`tools/dfm/scopes/injection/ontology_snapshot_v1.json`
+- 当前注塑发布快照：`tools/dfm/scopes/injection/ontology_snapshot_v2.json`
 - 当前几何能力声明：`tools/dfm/scopes/injection/geometry_capability_v1.json`
 - 特征目录：`tools/dfm/scopes/injection/feature_catalog.json`
 - OCCT C++ Provider 边界：`tools/dfm/feature_recognition/occt_cpp.py`

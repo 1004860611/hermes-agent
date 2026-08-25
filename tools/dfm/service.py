@@ -79,7 +79,7 @@ class DFMService:
             Path(__file__).resolve().parent
             / "scopes"
             / "injection"
-            / "ontology_snapshot_v1.json"
+            / "ontology_snapshot_v2.json"
         )
         self.process_registry = process_registry or build_default_process_registry(
             self.ontology_store

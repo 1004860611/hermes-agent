@@ -194,9 +194,9 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
     assert all(item["region_refs"] == discovery["snapshot"]["region_refs"] for item in measured)
     assert plan["plan"]["process"] == "injection"
     assert plan["plan"]["scope_id"] == "injection.default"
-    assert plan["plan"]["scope_version"] == "1.0.0"
+    assert plan["plan"]["scope_version"] == "1.1.0"
     assert plan["plan"]["ontology_snapshot_id"] == (
-        "ontology.injection.default@1.0.0"
+        "ontology.injection.default@1.1.0"
     )
     assert len(plan["plan"]["ontology_snapshot_sha256"]) == 64
     assert plan["plan"]["input_ids"] == [plan["plan"]["input_ids"][0]]
@@ -206,7 +206,7 @@ def test_plan_is_persisted_but_unavailable_production_start_fails_explicitly(ser
     assert draft_rule["unit"] == "degree"
     assert draft_rule["version"] == "1.0.0"
     assert draft_rule["source"].startswith(
-        "ontology:ontology.injection.default@1.0.0/"
+        "ontology:ontology.injection.default@1.1.0/"
     )
     assert plan["capability"]["status"] == "dependency_missing"
     with pytest.raises(DFMError) as exc_info:

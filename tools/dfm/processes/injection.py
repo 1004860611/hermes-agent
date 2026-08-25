@@ -41,7 +41,7 @@ class InjectionProcessAdapter:
             Path(__file__).resolve().parents[1]
             / "scopes"
             / "injection"
-            / "ontology_snapshot_v1.json"
+            / "ontology_snapshot_v2.json"
         )
 
     def capability(self, context: AnalyzerContext) -> Capability:
