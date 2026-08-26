@@ -54,6 +54,30 @@ def test_dfm_config_reads_nested_values():
     assert config.nx_poll_interval_seconds == 1
 
 
+def test_dfm_config_reads_ontology_sync_contract():
+    config = load_dfm_config(
+        {
+            "dfm": {
+                "ontology": {
+                    "sync_enabled": True,
+                    "endpoint": "https://dfm.example/",
+                    "process": "injection",
+                    "organization_id": "org-1",
+                    "sync_interval_seconds": 60,
+                    "request_timeout_seconds": 10,
+                    "pinned_snapshot_id": "ontology.injection@2",
+                }
+            }
+        }
+    )
+
+    assert config.ontology_sync_enabled is True
+    assert config.ontology_endpoint == "https://dfm.example"
+    assert config.ontology_organization_id == "org-1"
+    assert config.ontology_sync_interval_seconds == 60
+    assert config.ontology_pinned_snapshot_id == "ontology.injection@2"
+
+
 def test_dfm_config_normalizes_the_m0_process_name():
     config = load_dfm_config({"dfm": {"defaults": {"process": "injection_molding"}}})
 

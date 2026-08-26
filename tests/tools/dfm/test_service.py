@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +12,12 @@ from tools.dfm.analyzers.registry import AnalyzerRegistry
 from tools.dfm.analyzers.step import StepAnalyzer
 from tools.dfm.errors import DFMError
 from tools.dfm.service import DFMService
-from tools.dfm.contracts import FeatureRecord, GeometryRef, RegionRecord
+from tools.dfm.contracts import (
+    FeatureRecord,
+    GeometryRef,
+    ObservationRecord,
+    RegionRecord,
+)
 
 
 STEP_PAYLOAD = (
@@ -103,6 +109,70 @@ def test_analysis_context_exposes_bounded_ontology_to_the_agent(service):
     assert context["check"]["concept_id"] == "check.main_wall_minimum_thickness"
     assert context["rules"][0]["rule_id"] == "R_INJ_MAIN_WALL_MIN_ABS"
     assert any(item["predicate"] == "USES_OPERAND" for item in context["relations"])
+
+
+def test_factor_source_policy_auto_accepts_project_metadata_observation(service):
+    dfm, _temp = service
+    project_id = dfm.project("create", name="Factor resolver")["project_id"]
+    dfm._store(project_id).update(
+        lambda current: replace(
+            current,
+            observations=[
+                ObservationRecord(
+                    observation_id="observation.material.metadata",
+                    input_id="project-metadata",
+                    kind="material",
+                    value="ABS",
+                    source_refs=["project-metadata:material@1"],
+                    confidence=1.0,
+                    provenance={"source": "project_metadata"},
+                )
+            ],
+        )
+    )
+
+    dfm.analysis("discover", project_id=project_id)
+    project = dfm.project("status", project_id=project_id)["project"]
+
+    fact = next(item for item in project["facts"] if item["name"] == "material")
+    observation = project["observations"][0]
+    assert fact["status"] == "confirmed"
+    assert fact["source"] == "project_metadata"
+    assert fact["evidence_refs"] == ["project-metadata:material@1"]
+    assert observation["status"] == "accepted"
+
+
+def test_factor_source_policy_keeps_recognition_as_pending_observation(service):
+    dfm, _temp = service
+    project_id = dfm.project("create", name="Factor confirmation")["project_id"]
+    dfm._store(project_id).update(
+        lambda current: replace(
+            current,
+            observations=[
+                ObservationRecord(
+                    observation_id="observation.material.drawing",
+                    input_id="drawing-1",
+                    kind="material",
+                    value="ABS",
+                    source_refs=["drawing:drawing-1/annotation/7@1"],
+                    confidence=0.95,
+                    provenance={"source": "drawing_recognition"},
+                )
+            ],
+        )
+    )
+
+    dfm.analysis("discover", project_id=project_id)
+    project = dfm.project("status", project_id=project_id)["project"]
+
+    assert not any(item["name"] == "material" for item in project["facts"])
+    assert project["observations"][0]["status"] == "needs_confirmation"
+    clarification = next(
+        item
+        for item in project["clarifications"]
+        if item["clarification_id"] == "clarification_material"
+    )
+    assert clarification["status"] == "open"
 
 
 def test_analysis_context_requires_one_check_id(service):
