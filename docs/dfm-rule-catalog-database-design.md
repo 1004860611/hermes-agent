@@ -118,6 +118,67 @@ Web 使用字典/Context API，Agent 下载签名发布物，OCCT 只交换 Capa
 `concept_id` 发布后不得改名；改显示名称或定义不改变稳定 ID。确实发生语义不兼容时创建新 ID，旧 ID
 进入 `retired`。
 
+#### Factor 的 `source_policy`
+
+`source_policy` 保存于 `concept_type=factor` 的 `dfm_concept.properties_json`，用于声明影响因子的允许
+来源和采信策略。它不保存项目中的实际值；实际值仍保存为 Agent 项目 Manifest 中的 `FactRecord`，
+候选识别结果保存为 `ObservationRecord`。
+
+```json
+{
+  "runtime_key": "surface_texture",
+  "question": "产品表面采用什么皮纹？",
+  "source_policy": {
+    "allowed_sources": [
+      "user",
+      "project_metadata",
+      "drawing_recognition",
+      "geometry_recognition",
+      "derived_program"
+    ],
+    "auto_accept_sources": ["project_metadata", "derived_program"],
+    "confirmation_required_sources": [
+      "drawing_recognition",
+      "geometry_recognition"
+    ],
+    "min_confidence": 0.9,
+    "evidence_required": true,
+    "conflict_policy": "ask_user",
+    "missing_policy": "ask_user"
+  }
+}
+```
+
+字段约束：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `allowed_sources` | string[] | 该 Factor 允许使用的来源白名单 |
+| `auto_accept_sources` | string[] | 满足数据 Schema、置信度和证据要求后可自动转为 confirmed Fact 的来源 |
+| `confirmation_required_sources` | string[] | 只能先形成 Observation，必须经用户或工程师确认的来源 |
+| `min_confidence` | number nullable | 识别类来源进入确认流程的最低置信度，范围 `0..1` |
+| `evidence_required` | boolean | 非用户来源是否必须保存 `evidence_refs` |
+| `conflict_policy` | string | 多来源值冲突时的策略；第一期固定支持 `ask_user` |
+| `missing_policy` | string | 所有允许来源均无有效值时的策略；第一期固定支持 `ask_user` |
+
+第一期来源码固定为：
+
+| 来源码 | 含义 |
+| --- | --- |
+| `user` | 用户明确输入或确认 |
+| `project_metadata` | 项目表单、PLM/BOM 等结构化项目属性 |
+| `drawing_recognition` | 二维图纸 OCR、标注或符号识别结果 |
+| `geometry_recognition` | STEP/OCCT 特征识别推断结果 |
+| `derived_program` | 程序基于已确认事实进行的确定性推导 |
+
+`auto_accept_sources` 和 `confirmation_required_sources` 必须都是 `allowed_sources` 的子集，且不能重叠。
+识别结果先保存为带来源、置信度和证据的 Observation；只有通过 `source_policy` 后才能成为参与规则匹配
+的 confirmed Fact。规则条件默认只使用规范化后的 Factor 值，不因来源不同而改变工程阈值。
+
+几何连续量不应为了复用该机制而转成 Factor。例如螺钉柱壁厚、高度和直径属于
+`Measurement/Operand`；“识别出螺钉柱”属于 `Feature`；材料、皮纹和外观等级等用于选择工程规则的
+上下文才属于 `Factor/Fact`。
+
 ### 4.2 `dfm_relation`
 
 保存本体关系，也是 Agent 通用编译和 AI 上下文的核心。
@@ -350,6 +411,8 @@ Check ──APPLIES_TO_REGION──> Region <──HAS_REGION── Feature
 - Check 的每个 Operand 能在目标 OCCT Capability 中解析出唯一 Metric/Quantity；
 - 表达式只使用本 Check 声明的 Alias 和白名单运算；
 - Factor 条件满足其数据 Schema 或枚举选项；
+- Factor 的 `source_policy` 只使用受控来源码，自动采信与强制确认来源均为允许来源且互不重叠；
+- 自动采信的识别类来源声明了有效置信度门槛，要求证据时能够生成稳定 Evidence 引用；
 - 阈值与表达式结果单位兼容；
 - 同优先级、同具体度规则不存在冲突；
 - 每个关键工程阈值具有审核状态，要求引用时具有 Citation。
@@ -376,6 +439,8 @@ Agent 不复制管理库全部表，只安装一次发布后展开的运行投�
 ### 5.2 `ontology_concept`
 
 中心 `dfm_concept` 的已发布投影，只包含当前作用域可见、执行或解释所需的概念。
+Factor Concept 的 `properties_json.source_policy` 随快照发布，供 Agent 的 Fact Resolver 决定候选值是
+自动采信、请求确认还是因冲突转为用户澄清；本地库不保存项目实际 Fact。
 
 ### 5.3 `ontology_relation`
 
