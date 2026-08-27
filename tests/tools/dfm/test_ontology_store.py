@@ -97,6 +97,22 @@ def test_check_context_includes_process_factor_and_incoming_explanation():
     assert ("AFFECTS", "feature.ordinary_part") in related
 
 
+def test_optional_factor_relation_does_not_block_analysis():
+    payload = _package()
+    material_relation = next(
+        item
+        for item in payload["relations"]
+        if item["relation_id"] == "rel.check.wall.factor.material"
+    )
+    material_relation["qualifiers"]["required"] = False
+    _rehash(payload)
+    store = LocalOntologyStore.from_package(payload)
+
+    requirements = store.fact_requirements("injection")
+
+    assert "material" not in {item["name"] for item in requirements}
+
+
 def test_bundled_ontology_publication_matches_its_json_schema():
     schema_path = (
         Path(__file__).parents[3]

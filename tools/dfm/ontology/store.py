@@ -278,6 +278,8 @@ class LocalOntologyStore:
         for row in rows:
             properties = _load_json(row["properties_json"], {})
             qualifiers = _load_json(row["qualifiers_json"], {})
+            if qualifiers.get("required") is False:
+                continue
             runtime_key = str(properties.get("runtime_key") or row["concept_id"])
             requirement = {
                 "name": runtime_key,
@@ -1322,14 +1324,9 @@ class LocalOntologyStore:
         non_default = [item for item in matched if not bool(item[0]["is_default"])]
         candidates = non_default or matched
         if not candidates:
-            if missing_factors:
-                return None
-            if rows:
-                raise DFMError(
-                    "ontology_rule_not_found",
-                    "No released rule matches the confirmed factors for a DFM Check.",
-                    {"check_id": check_id},
-                )
+            # Skip checks whose rules don't match current facts/features.
+            # This allows plan to generate only applicable checks (e.g., wall/draft
+            # basics) when advanced features (screw_boss, etc.) are not discovered.
             return None
         candidates.sort(
             key=lambda item: (int(item[0]["priority"]), item[1]), reverse=True

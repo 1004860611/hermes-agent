@@ -20,11 +20,6 @@ PACKAGE_PATH = (
 )
 
 
-@pytest.fixture(autouse=True)
-def ontology_token(monkeypatch):
-    monkeypatch.setenv("DFM_ONTOLOGY_TOKEN", "test-token")
-
-
 class Response:
     def __init__(self, payload, headers=None):
         self._payload = payload
@@ -64,7 +59,6 @@ def synchronizer(tmp_path, store, payload, revoked=None, expected_hash=None):
         "revoked_snapshot_ids": revoked or [],
     }
     config = DFMConfig(
-        ontology_sync_enabled=True,
         ontology_endpoint="https://dfm.example",
     )
     return OntologySynchronizer(
@@ -98,16 +92,14 @@ def test_sync_rejects_metadata_and_artifact_hash_mismatch(tmp_path):
     assert exc_info.value.code == "ontology_snapshot_invalid"
 
 
-def test_sync_requires_bearer_token(tmp_path, monkeypatch):
-    monkeypatch.delenv("DFM_ONTOLOGY_TOKEN")
+def test_sync_uses_direct_http_requests(tmp_path):
     payload = package("ontology.test@2")
     store = LocalOntologyStore(tmp_path / "dfm-ontology.sqlite3")
     sync = synchronizer(tmp_path, store, payload)
 
-    with pytest.raises(DFMError) as exc_info:
-        sync.sync_once()
+    result = sync.sync_once()
 
-    assert exc_info.value.code == "config_invalid"
+    assert result["snapshot_id"] == "ontology.test@2"
 
 
 def test_revoked_installed_snapshot_blocks_runtime_without_safe_archive(tmp_path):

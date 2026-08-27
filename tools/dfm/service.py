@@ -61,7 +61,9 @@ class DFMService:
         "unit": "model_units",
         "units": "model_units",
         "model_unit": "model_units",
+        "model_length_unit": "model_units",
         "model_units": "model_units",
+        "tool_main_draw_dir": "pull_dir",
         "pull_direction": "pull_dir",
         "mold_pull_direction": "pull_dir",
         "pull_dir": "pull_dir",
@@ -85,7 +87,7 @@ class DFMService:
         )
         self.ontology_synchronizer: OntologySynchronizer | None = None
         self._ontology_background_sync: BackgroundOntologySync | None = None
-        if self.config.ontology_sync_enabled:
+        if self.config.ontology_endpoint:
             self.ontology_synchronizer = OntologySynchronizer(
                 store=self.ontology_store,
                 root=self.workspace.root / "ontology",
@@ -453,7 +455,8 @@ class DFMService:
                 required_in_phase = True
             if phase != "all" and not required_in_phase:
                 continue
-            name, question = requirement.name, requirement.question
+            name = self._canonical_fact_name(requirement.name)
+            question = requirement.question
             if name in confirmed:
                 continue
             clarification_id = f"clarification_{name}"
@@ -1131,8 +1134,14 @@ class DFMService:
             store.update(lambda current: replace(current, plans=[*current.plans, plan], updated_at=_utc_now()))
             return {"ok": True, "project_id": project_id, "plan": plan.to_dict(), "capability": capability.to_dict()}
         if action == "start":
+            plan_id = str(params.get("plan_id") or "").strip()
+            if not plan_id:
+                raise DFMError(
+                    "plan_id_required",
+                    "Starting DFM analysis requires the explicit plan_id returned by planning.",
+                    {"action": "start"},
+                )
             manifest = self._store(project_id).load()
-            plan_id = params.get("plan_id")
             plan = next((item for item in manifest.plans if item.plan_id == plan_id), None)
             if plan is None:
                 raise DFMError("plan_not_found", "DFM analysis plan was not found.", {"plan_id": plan_id})

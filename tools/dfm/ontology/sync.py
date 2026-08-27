@@ -1,4 +1,4 @@
-"""Authenticated background synchronization for immutable DFM publications."""
+"""Background synchronization for immutable DFM publications."""
 
 from __future__ import annotations
 
@@ -35,15 +35,6 @@ class OntologySynchronizer:
         self.packages_dir = self.root / "packages"
         self.revocations_path = self.root / "revocations.json"
 
-    def _headers(self) -> dict[str, str]:
-        token = os.environ.get("DFM_ONTOLOGY_TOKEN", "").strip()
-        if not token:
-            raise DFMError(
-                "config_invalid",
-                "Enabled ontology sync requires DFM_ONTOLOGY_TOKEN.",
-            )
-        return {"Authorization": f"Bearer {token}"}
-
     @staticmethod
     def _verify_hash(payload: Mapping[str, Any], expected_hash: str = "") -> None:
         """Require Artifact, metadata, and locally calculated SHA-256 to agree."""
@@ -77,7 +68,6 @@ class OntologySynchronizer:
         return value
 
     def _get_latest(self) -> dict[str, Any]:
-        headers = self._headers()
         try:
             response = self.http.get(
                 f"{self.config.ontology_endpoint}/v1/dfm/publications/latest",
@@ -85,7 +75,6 @@ class OntologySynchronizer:
                     "process": self.config.ontology_process,
                     "organization_id": self.config.ontology_organization_id,
                 },
-                headers=headers,
                 timeout=self.config.ontology_request_timeout_seconds,
             )
         except Exception as exc:
@@ -93,11 +82,9 @@ class OntologySynchronizer:
         return self._json_response(response)
 
     def _download(self, url: str) -> tuple[dict[str, Any], Mapping[str, str]]:
-        headers = self._headers()
         try:
             response = self.http.get(
                 url,
-                headers=headers,
                 timeout=self.config.ontology_request_timeout_seconds,
             )
             response.raise_for_status()

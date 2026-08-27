@@ -3304,13 +3304,7 @@ DEFAULT_CONFIG = {
 
     "dfm": {
         "ontology": {
-            "sync_enabled": False,
             "endpoint": "",
-            "process": "injection",
-            "organization_id": "",
-            "sync_interval_seconds": 300,
-            "request_timeout_seconds": 30,
-            "pinned_snapshot_id": "",
         },
     },
 
@@ -3341,14 +3335,6 @@ REQUIRED_ENV_VARS = {}
 
 # Optional environment variables that enhance functionality
 OPTIONAL_ENV_VARS = {
-    "DFM_ONTOLOGY_TOKEN": {
-        "description": "Bearer token used by Hermes to download authenticated DFM ontology publications",
-        "prompt": "DFM ontology service token",
-        "url": None,
-        "password": True,
-        "category": "dfm",
-        "advanced": True,
-    },
     # ── Provider (handled in provider selection, not shown in checklists) ──
     "NOUS_BASE_URL": {
         "description": "Nous Portal base URL override",

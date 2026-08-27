@@ -13,6 +13,7 @@ from tools.dfm.analyzers.step import StepAnalyzer
 from tools.dfm.errors import DFMError
 from tools.dfm.service import DFMService
 from tools.dfm.contracts import (
+    ClarificationRecord,
     FeatureRecord,
     GeometryRef,
     ObservationRecord,
@@ -211,6 +212,85 @@ def test_fact_alias_units_closes_model_units_clarification(service):
     assert row["status"] == "answered"
 
 
+def test_legacy_model_length_unit_clarification_is_reconciled(service):
+    dfm, temp = service
+    project_id = dfm.project("create", name="Legacy unit clarification")["project_id"]
+    source = temp / "part.step"
+    source.write_bytes(STEP_PAYLOAD)
+    dfm.project("add_input", project_id=project_id, path=str(source))
+    dfm._store(project_id).update(
+        lambda current: replace(
+            current,
+            clarifications=[
+                replace(
+                    item,
+                    clarification_id="clarification_model_length_unit",
+                )
+                if item.clarification_id == "clarification_model_units"
+                else item
+                for item in current.clarifications
+            ],
+        )
+    )
+
+    dfm.project(
+        "confirm_fact",
+        project_id=project_id,
+        fact_name="model_units",
+        fact_value="mm",
+    )
+    project = dfm.project("status", project_id=project_id)["project"]
+
+    row = next(
+        item
+        for item in project["clarifications"]
+        if item["clarification_id"] == "clarification_model_length_unit"
+    )
+    assert row["status"] == "answered"
+    assert row["answer"] == "mm"
+    assert "clarification_model_length_unit" not in {
+        item["clarification_id"] for item in project["open_clarifications"]
+    }
+
+
+def test_legacy_tool_main_draw_dir_clarification_uses_pull_dir(service):
+    dfm, temp = service
+    project_id = dfm.project("create", name="Legacy pull direction")["project_id"]
+    source = temp / "part.step"
+    source.write_bytes(STEP_PAYLOAD)
+    dfm.project("add_input", project_id=project_id, path=str(source))
+    dfm._store(project_id).update(
+        lambda current: replace(
+            current,
+            clarifications=[
+                *current.clarifications,
+                ClarificationRecord(
+                    "clarification_tool_main_draw_dir",
+                    "Confirm the main mold draw direction.",
+                    "open",
+                ),
+            ],
+        )
+    )
+
+    confirmed = dfm.project(
+        "confirm_fact",
+        project_id=project_id,
+        fact_name="pull_dir",
+        fact_value=[0, 0, 1],
+    )
+    project = dfm.project("status", project_id=project_id)["project"]
+
+    assert confirmed["fact"]["name"] == "pull_dir"
+    row = next(
+        item
+        for item in project["clarifications"]
+        if item["clarification_id"] == "clarification_tool_main_draw_dir"
+    )
+    assert row["status"] == "answered"
+    assert row["answer"] == [0, 0, 1]
+
+
 def test_missing_run_id_is_recovered_only_when_unambiguous():
     one = SimpleNamespace(run_id="run_only", status="running")
     manifest = SimpleNamespace(runs=[one])
@@ -305,6 +385,17 @@ def test_input_or_confirmed_fact_invalidates_prior_plan(service):
         dfm.analysis("start", project_id=project_id, plan_id=plan["plan_id"])
     assert exc_info.value.code == "plan_not_ready"
     assert exc_info.value.details["status"] == "invalidated"
+
+
+def test_start_requires_explicit_plan_id(service):
+    dfm, _temp = service
+    project_id = dfm.project("create", name="Missing plan id")["project_id"]
+
+    with pytest.raises(DFMError) as exc_info:
+        dfm.analysis("start", project_id=project_id)
+
+    assert exc_info.value.code == "plan_id_required"
+    assert exc_info.value.details == {"action": "start"}
 
 
 def test_new_input_version_supersedes_prior_input_and_replans_full_scope(service):

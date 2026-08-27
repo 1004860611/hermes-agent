@@ -59,7 +59,6 @@ def test_dfm_config_reads_ontology_sync_contract():
         {
             "dfm": {
                 "ontology": {
-                    "sync_enabled": True,
                     "endpoint": "https://dfm.example/",
                     "process": "injection",
                     "organization_id": "org-1",
@@ -71,11 +70,18 @@ def test_dfm_config_reads_ontology_sync_contract():
         }
     )
 
-    assert config.ontology_sync_enabled is True
     assert config.ontology_endpoint == "https://dfm.example"
     assert config.ontology_organization_id == "org-1"
     assert config.ontology_sync_interval_seconds == 60
     assert config.ontology_pinned_snapshot_id == "ontology.injection@2"
+
+
+def test_dfm_endpoint_enables_ontology_sync_without_an_extra_switch():
+    config = load_dfm_config(
+        {"dfm": {"ontology": {"endpoint": "http://127.0.0.1:8000"}}}
+    )
+
+    assert config.ontology_endpoint == "http://127.0.0.1:8000"
 
 
 def test_dfm_config_normalizes_the_m0_process_name():

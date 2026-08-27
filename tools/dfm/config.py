@@ -21,7 +21,6 @@ class DFMConfig:
     nx_endpoint: str = ""
     nx_request_timeout_seconds: int = 30
     nx_poll_interval_seconds: int = 2
-    ontology_sync_enabled: bool = False
     ontology_endpoint: str = ""
     ontology_process: str = "injection"
     ontology_organization_id: str = ""
@@ -59,11 +58,6 @@ def load_dfm_config(config: Mapping[str, Any] | None = None) -> DFMConfig:
     nx_endpoint = _nested(config, "dfm", "nx", "endpoint", default=defaults.nx_endpoint)
     if not isinstance(nx_endpoint, str):
         raise DFMError("config_invalid", "dfm.nx.endpoint must be a string.")
-    sync_enabled = _nested(
-        config, "dfm", "ontology", "sync_enabled", default=defaults.ontology_sync_enabled
-    )
-    if not isinstance(sync_enabled, bool):
-        raise DFMError("config_invalid", "dfm.ontology.sync_enabled must be boolean.")
     string_values = {
         "ontology_endpoint": _nested(
             config, "dfm", "ontology", "endpoint", default=defaults.ontology_endpoint
@@ -88,11 +82,6 @@ def load_dfm_config(config: Mapping[str, Any] | None = None) -> DFMConfig:
     }
     if any(not isinstance(value, str) for value in string_values.values()):
         raise DFMError("config_invalid", "dfm.ontology string settings must be strings.")
-    if sync_enabled and not string_values["ontology_endpoint"].strip():
-        raise DFMError(
-            "config_invalid",
-            "Enabled ontology sync requires dfm.ontology.endpoint.",
-        )
     if not isinstance(runtime_python, str) or not runtime_python.strip():
         raise DFMError("config_invalid", "dfm.runtime.python must be a non-empty string.")
     if not isinstance(default_process, str) or not default_process.strip():
@@ -141,7 +130,6 @@ def load_dfm_config(config: Mapping[str, Any] | None = None) -> DFMConfig:
             _nested(config, "dfm", "nx", "poll_interval_seconds", default=defaults.nx_poll_interval_seconds),
             "dfm.nx.poll_interval_seconds",
         ),
-        ontology_sync_enabled=sync_enabled,
         ontology_endpoint=string_values["ontology_endpoint"].strip().rstrip("/"),
         ontology_process=string_values["ontology_process"].strip(),
         ontology_organization_id=string_values["ontology_organization_id"].strip(),
